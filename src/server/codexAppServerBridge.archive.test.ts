@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  AppServerProcess,
   buildProjectlessFolderName,
   callRpcWithArchiveRecovery,
   canonicalizeThreadListResponseForRead,
@@ -198,6 +199,171 @@ describe('startThreadAndTurn', () => {
         },
       },
     ])
+  })
+
+  it('deletes an empty thread if the first turn fails to start', async () => {
+    const calls: Array<{ method: string; params: unknown }> = []
+    const appServer = {
+      async rpc(method: string, params: unknown): Promise<unknown> {
+        calls.push({ method, params })
+        if (method === 'thread/start') {
+          return { thread: { id: 'thread-empty' } }
+        }
+        if (method === 'turn/start') {
+          throw new Error('model is not supported')
+        }
+        if (method === 'thread/read') {
+          return { thread: { id: 'thread-empty', turns: [] } }
+        }
+        if (method === 'thread/delete') {
+          return { ok: true }
+        }
+        throw new Error(`unexpected method ${method}`)
+      },
+    }
+
+    await expect(startThreadAndTurn(appServer, {
+      thread: {
+        cwd: '/repo',
+        model: 'gpt-5.5',
+      },
+      turn: {
+        input: [{ type: 'text', text: 'hi' }],
+        model: 'gpt-5.5',
+      },
+    })).rejects.toThrow('model is not supported')
+
+    expect(calls).toEqual([
+      {
+        method: 'thread/start',
+        params: {
+          cwd: '/repo',
+          model: 'gpt-5.5',
+        },
+      },
+      {
+        method: 'turn/start',
+        params: {
+          input: [{ type: 'text', text: 'hi' }],
+          model: 'gpt-5.5',
+          threadId: 'thread-empty',
+        },
+      },
+      {
+        method: 'thread/read',
+        params: {
+          threadId: 'thread-empty',
+          includeTurns: true,
+        },
+      },
+      {
+        method: 'thread/delete',
+        params: {
+          threadId: 'thread-empty',
+        },
+      },
+    ])
+  })
+
+  it('keeps the started thread if turn/start failed after a turn was recorded', async () => {
+    const calls: Array<{ method: string; params: unknown }> = []
+    const appServer = {
+      async rpc(method: string, params: unknown): Promise<unknown> {
+        calls.push({ method, params })
+        if (method === 'thread/start') {
+          return { thread: { id: 'thread-with-turn' } }
+        }
+        if (method === 'turn/start') {
+          throw new Error('codex app-server exited unexpectedly')
+        }
+        if (method === 'thread/read') {
+          return {
+            thread: {
+              id: 'thread-with-turn',
+              turns: [{ id: 'turn-started', status: 'inProgress' }],
+            },
+          }
+        }
+        throw new Error(`unexpected method ${method}`)
+      },
+    }
+
+    await expect(startThreadAndTurn(appServer, {
+      thread: {
+        cwd: '/repo',
+        model: 'gpt-5.5',
+      },
+      turn: {
+        input: [{ type: 'text', text: 'hi' }],
+        model: 'gpt-5.5',
+      },
+    })).rejects.toThrow('codex app-server exited unexpectedly')
+
+    expect(calls).toEqual([
+      {
+        method: 'thread/start',
+        params: {
+          cwd: '/repo',
+          model: 'gpt-5.5',
+        },
+      },
+      {
+        method: 'turn/start',
+        params: {
+          input: [{ type: 'text', text: 'hi' }],
+          model: 'gpt-5.5',
+          threadId: 'thread-with-turn',
+        },
+      },
+      {
+        method: 'thread/read',
+        params: {
+          threadId: 'thread-with-turn',
+          includeTurns: true,
+        },
+      },
+    ])
+  })
+})
+
+describe('AppServerProcess runtime config restart', () => {
+  it('defers restarting the app-server until the active turn completes', () => {
+    const appServer = new AppServerProcess()
+    const fakeProcess = {
+      killed: false,
+      stdin: {
+        end: vi.fn(),
+      },
+      kill: vi.fn((signal?: string) => {
+        fakeProcess.killed = true
+        return true
+      }),
+    }
+    ;(appServer as unknown as { process: unknown }).process = fakeProcess
+
+    ;(appServer as unknown as { emitNotification: (notification: { method: string; params: unknown }) => void })
+      .emitNotification({
+        method: 'turn/started',
+        params: {
+          threadId: 'thread-active',
+          turn: { id: 'turn-active' },
+        },
+      })
+
+    expect(appServer.requestConfigRestartWhenIdle()).toBe(false)
+    expect(fakeProcess.kill).not.toHaveBeenCalled()
+
+    ;(appServer as unknown as { emitNotification: (notification: { method: string; params: unknown }) => void })
+      .emitNotification({
+        method: 'turn/completed',
+        params: {
+          threadId: 'thread-active',
+          turn: { id: 'turn-active' },
+        },
+      })
+
+    expect(fakeProcess.stdin.end).toHaveBeenCalledTimes(1)
+    expect(fakeProcess.kill).toHaveBeenCalledWith('SIGTERM')
   })
 })
 

@@ -2600,15 +2600,49 @@ export async function startThreadAndTurn(appServer: RpcExecutor, payload: unknow
     throw new Error('thread/start did not return thread id')
   }
 
-  const startedTurn = await callRpcWithArchiveRecovery(appServer, 'turn/start', {
-    ...turnParams,
-    threadId,
-  })
+  let startedTurn: unknown
+  try {
+    startedTurn = await callRpcWithArchiveRecovery(appServer, 'turn/start', {
+      ...turnParams,
+      threadId,
+    })
+  } catch (error) {
+    await cleanupEmptyStartedThread(appServer, threadId)
+    throw error
+  }
   const startedThreadRecord = asRecord(startedThread) ?? {}
   const startedTurnRecord = asRecord(startedTurn)
   return {
     ...startedThreadRecord,
     turn: startedTurnRecord?.turn ?? null,
+  }
+}
+
+async function cleanupEmptyStartedThread(appServer: RpcExecutor, threadId: string): Promise<void> {
+  let shouldDelete = false
+
+  try {
+    const result = asRecord(await appServer.rpc('thread/read', { threadId, includeTurns: true }))
+    const thread = asRecord(result?.thread)
+    const turns = Array.isArray(thread?.turns) ? thread.turns : []
+    shouldDelete = turns.length === 0
+  } catch (error) {
+    const message = getErrorMessage(error, '')
+    shouldDelete = isEmptyThreadReadError(error)
+      || isThreadMaterializationPendingError(error)
+      || message.includes('no rollout found')
+  }
+
+  if (!shouldDelete) return
+
+  try {
+    await appServer.rpc('thread/delete', { threadId })
+  } catch {
+    try {
+      await appServer.rpc('thread/archive', { threadId })
+    } catch {
+      // Best-effort cleanup only; preserve the original turn/start failure.
+    }
   }
 }
 
@@ -6432,13 +6466,14 @@ const MERGEABLE_ITEM_TYPES = new Set([
   'fileChange',
 ])
 
-class AppServerProcess {
+export class AppServerProcess {
   private process: ChildProcessWithoutNullStreams | null = null
   private initialized = false
   private initializePromise: Promise<void> | null = null
   private readBuffer = ''
   private nextId = 1
   private stopping = false
+  private pendingConfigRestart = false
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
   private readonly notificationListeners = new Set<(value: { method: string; params: unknown }) => void>()
   private readonly pendingServerRequests = new Map<number, PendingServerRequest>()
@@ -6448,6 +6483,7 @@ class AppServerProcess {
   private readonly threadTurnPageReadPromiseByThreadId = new Map<string, Promise<unknown>>()
   private readonly capturedItemsByThreadId = new Map<string, Map<string, CapturedItem>>()
   private readonly liveStateCache = new Map<string, { data: unknown; turnCount: number; sessionSize: number }>()
+  private readonly activeTurnThreadIds = new Set<string>()
   private chatgptAuthRefreshPromise: Promise<ChatgptAuthTokensRefreshResponse> | null = null
   private activeConfigSignature = ''
 
@@ -6492,7 +6528,27 @@ class AppServerProcess {
     const config = this.buildAppServerConfig()
     const nextSignature = this.getAppServerConfigSignature(config)
     if (this.activeConfigSignature === nextSignature) return
+    this.requestConfigRestartWhenIdle()
+  }
+
+  private shouldDeferConfigRestart(): boolean {
+    return this.activeTurnThreadIds.size > 0 ||
+      this.pending.size > 0 ||
+      this.pendingServerRequests.size > 0
+  }
+
+  private applyPendingConfigRestartIfIdle(): boolean {
+    if (!this.pendingConfigRestart) return false
+    if (this.shouldDeferConfigRestart()) return false
+
+    this.pendingConfigRestart = false
     this.dispose()
+    return true
+  }
+
+  requestConfigRestartWhenIdle(): boolean {
+    this.pendingConfigRestart = true
+    return this.applyPendingConfigRestartIfIdle()
   }
 
   private start(): void {
@@ -6576,6 +6632,7 @@ class AppServerProcess {
       } else {
         pendingRequest.resolve(message.result)
       }
+      this.applyPendingConfigRestartIfIdle()
       return
     }
 
@@ -6594,6 +6651,7 @@ class AppServerProcess {
   }
 
   private emitNotification(notification: { method: string; params: unknown }): void {
+    this.updateActiveTurnState(notification)
     this.recordStreamEvent(notification)
     this.captureItemFromNotification(notification)
     const nThreadId = this.extractThreadIdFromParams(notification.params)
@@ -6604,6 +6662,18 @@ class AppServerProcess {
     for (const listener of this.notificationListeners) {
       listener(notification)
     }
+    this.applyPendingConfigRestartIfIdle()
+  }
+
+  private updateActiveTurnState(notification: { method: string; params: unknown }): void {
+    if (notification.method !== 'turn/started' && notification.method !== 'turn/completed') return
+    const threadId = this.extractThreadIdFromParams(notification.params)
+    if (!threadId) return
+    if (notification.method === 'turn/started') {
+      this.activeTurnThreadIds.add(threadId)
+      return
+    }
+    this.activeTurnThreadIds.delete(threadId)
   }
 
   private extractThreadIdFromParams(params: unknown): string {
@@ -6822,6 +6892,7 @@ class AppServerProcess {
         resolvedAtIso: new Date().toISOString(),
       },
     })
+    this.applyPendingConfigRestartIfIdle()
   }
 
   private async refreshChatgptAuthTokens(params: ChatgptAuthTokensRefreshParams): Promise<ChatgptAuthTokensRefreshResponse> {
@@ -6991,6 +7062,7 @@ class AppServerProcess {
     }
     this.pending.clear()
     this.pendingServerRequests.clear()
+    this.activeTurnThreadIds.clear()
 
     try {
       proc.stdin.end()
@@ -8009,7 +8081,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }
 
           const nextConfig = updateAppServerRuntimeConfig({ sandboxMode, approvalPolicy })
-          appServer.dispose()
+          appServer.requestConfigRestartWhenIdle()
           setJson(res, 200, nextConfig)
           return
         }

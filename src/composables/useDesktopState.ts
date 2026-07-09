@@ -1144,18 +1144,28 @@ function mergeIncomingWithLocalInProgressThreads(
   return merged
 }
 
-function mergeIncomingInProgressState(
+function syncIncomingInProgressState(
   current: Record<string, boolean>,
   groups: UiProjectGroup[],
 ): Record<string, boolean> {
   let next = current
 
   for (const thread of flattenThreads(groups)) {
-    if (thread.inProgress !== true || next[thread.id] === true) continue
+    const currentValue = next[thread.id] === true
+    if (thread.inProgress === true) {
+      if (currentValue) continue
+      if (next === current) {
+        next = { ...current }
+      }
+      next[thread.id] = true
+      continue
+    }
+
+    if (!currentValue) continue
     if (next === current) {
       next = { ...current }
     }
-    next[thread.id] = true
+    delete next[thread.id]
   }
 
   return next
@@ -4310,7 +4320,7 @@ export function useDesktopState() {
 
     const orderedGroups = orderGroupsByProjectOrder(visibleGroups, projectOrder.value)
     markServerListedThreads(new Set(flattenThreads(orderedGroups).map((thread) => thread.id)))
-    inProgressById.value = mergeIncomingInProgressState(inProgressById.value, orderedGroups)
+    inProgressById.value = syncIncomingInProgressState(inProgressById.value, orderedGroups)
     const mergedWithInProgress = mergeIncomingWithLocalInProgressThreads(
       sourceGroups.value,
       orderedGroups,
@@ -5794,9 +5804,8 @@ export function useDesktopState() {
     interruptBlockedUntilPersistedByThreadId.value = {}
     threadListedByServerById.value = {}
     persistedUserMessageByThreadId.value = {}
-    queuedMessagesByThreadId.value = {}
+    hasLoadedPersistedQueueState = false
     queueProcessingByThreadId.value = {}
-    persistQueueState()
     codexRateLimit.value = null
     threadTokenUsageByThreadId.value = {}
   }

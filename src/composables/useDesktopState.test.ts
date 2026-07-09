@@ -83,6 +83,7 @@ function installTestWindow(initialStorage: Record<string, string> = {}) {
 beforeEach(() => {
   vi.clearAllMocks()
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
+  gatewayMocks.setThreadQueueState.mockResolvedValue(undefined)
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
   gatewayMocks.getWorkspaceRootsState.mockRejectedValue(new Error('no workspace roots state'))
 })
@@ -499,6 +500,47 @@ describe('startup request deduplication', () => {
     await state.refreshAll({ includeSelectedThreadMessages: false })
 
     expect(state.projectGroups.value[0]?.threads[0]?.inProgress).toBe(true)
+  })
+
+  it('clears a preserved in-progress state when the server reports the thread is idle', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage
+      .mockResolvedValueOnce({
+        groups: [{ projectName: 'Project', threads: [thread('thread-running', '/tmp/project', { inProgress: true })] }],
+        nextCursor: null,
+      })
+      .mockResolvedValueOnce({
+        groups: [{ projectName: 'Project', threads: [thread('thread-running', '/tmp/project', { inProgress: false })] }],
+        nextCursor: null,
+      })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    expect(state.projectGroups.value[0]?.threads[0]?.inProgress).toBe(true)
+
+    await state.refreshAll({ includeSelectedThreadMessages: false, forceThreadRefresh: true })
+
+    expect(state.projectGroups.value[0]?.threads[0]?.inProgress).toBe(false)
+  })
+
+  it('does not erase persisted queued messages when polling stops', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-running', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    state.primeSelectedThread('thread-running')
+    await state.sendMessageToSelectedThread('queued follow-up', [], [], 'queue')
+    expect(state.selectedThreadQueuedMessages.value).toHaveLength(1)
+
+    gatewayMocks.setThreadQueueState.mockClear()
+    state.stopPolling()
+
+    expect(gatewayMocks.setThreadQueueState).not.toHaveBeenCalled()
+    expect(state.selectedThreadQueuedMessages.value).toHaveLength(1)
   })
 
   it('reuses a just-loaded thread list during startup refresh bursts', async () => {
