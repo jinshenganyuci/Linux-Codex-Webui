@@ -14,7 +14,10 @@
       ref="conversationListRef"
       class="conversation-list"
       @click="onConversationClick"
+      @pointerdown.passive="onConversationUserScrollIntent"
       @scroll="onConversationScroll"
+      @touchstart.passive="onConversationUserScrollIntent"
+      @wheel.passive="onConversationUserScrollIntent"
     >
       <li v-if="hasMoreAbove" class="conversation-load-more">
         <button
@@ -1351,6 +1354,7 @@ const toolQuestionOtherAnswers = ref<Record<string, string>>({})
 const mcpElicitationAnswers = ref<Record<string, string | number | boolean | string[]>>({})
 const autoFollowOutput = ref(true)
 const BOTTOM_THRESHOLD_PX = 16
+const USER_SCROLL_INTENT_WINDOW_MS = 700
 const CODE_LANGUAGE_ALIASES: Record<string, string> = {
   js: 'javascript',
   jsx: 'jsx',
@@ -4213,6 +4217,16 @@ function isAtBottom(container: HTMLElement): boolean {
   return distance <= BOTTOM_THRESHOLD_PX
 }
 
+let lastUserScrollIntentAt = 0
+
+function onConversationUserScrollIntent(): void {
+  lastUserScrollIntentAt = Date.now()
+}
+
+function hasRecentUserScrollIntent(): boolean {
+  return Date.now() - lastUserScrollIntentAt <= USER_SCROLL_INTENT_WINDOW_MS
+}
+
 function applyConversationScrollState(): void {
   const container = conversationListRef.value
   if (!container) return
@@ -4450,8 +4464,18 @@ watch(
 function onConversationScroll(): void {
   const container = conversationListRef.value
   if (!container || props.isLoading) return
-  autoFollowOutput.value = isAtBottom(container)
-  if (hasMoreAbove.value && !isLoadingMore.value && container.scrollTop < LOAD_MORE_SCROLL_THRESHOLD_PX) {
+  const atBottom = isAtBottom(container)
+  const userScrollIntent = hasRecentUserScrollIntent()
+
+  if (atBottom) {
+    autoFollowOutput.value = true
+  } else if (!autoFollowOutput.value || userScrollIntent) {
+    autoFollowOutput.value = false
+  } else {
+    scheduleBottomLock(2)
+  }
+
+  if (userScrollIntent && hasMoreAbove.value && !isLoadingMore.value && container.scrollTop < LOAD_MORE_SCROLL_THRESHOLD_PX) {
     void loadMoreAbove()
   }
 }
