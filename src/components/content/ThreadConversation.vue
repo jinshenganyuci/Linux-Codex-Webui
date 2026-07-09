@@ -9,7 +9,13 @@
       {{ t('No messages in this thread yet.') }}
     </p>
 
-    <ul v-else ref="conversationListRef" class="conversation-list" @scroll="onConversationScroll">
+    <ul
+      v-else
+      ref="conversationListRef"
+      class="conversation-list"
+      @click="onConversationClick"
+      @scroll="onConversationScroll"
+    >
       <li v-if="hasMoreAbove" class="conversation-load-more">
         <button
           type="button"
@@ -222,7 +228,12 @@
                 :data-role="message.role"
               >
                 <li v-for="imageUrl in message.images" :key="imageUrl" class="message-image-item">
-                  <button class="message-image-button" type="button" @click="openImageModal(imageUrl)">
+                  <button
+                    class="message-image-button"
+                    type="button"
+                    :aria-label="t('Open image preview')"
+                    @click.stop="openImageModal(imageUrl)"
+                  >
                     <img
                       class="message-image-preview"
                       :class="{ 'message-generated-image-preview': message.messageType === 'imageView' }"
@@ -579,7 +590,8 @@
                       v-else
                       class="message-image-button"
                       type="button"
-                      @click="openImageModal(block.url)"
+                      :aria-label="t('Open image preview')"
+                      @click.stop="openImageModal(block.url)"
                     >
                       <img
                         class="message-image-preview message-markdown-image"
@@ -3745,7 +3757,18 @@ function renderMessageBlockAsHtml(block: MessageBlock): string {
   if (block.kind === 'thematicBreak') {
     return '<hr class="message-divider">'
   }
-  return `<img class="message-image-preview message-markdown-image" src="${escapeHtml(block.url)}" alt="${escapeHtml(block.alt || 'Embedded message image')}" loading="lazy">`
+  const imageUrl = escapeHtml(block.url)
+  const imageAlt = escapeHtml(block.alt || 'Embedded message image')
+  return [
+    '<button',
+    ' class="message-image-button message-image-button-html"',
+    ' type="button"',
+    ' aria-label="Open image preview"',
+    ` data-image-src="${imageUrl}"`,
+    '>',
+    `<img class="message-image-preview message-markdown-image" src="${imageUrl}" alt="${imageAlt}" loading="lazy">`,
+    '</button>',
+  ].join('')
 }
 
 function renderMarkdownBlocksAsHtml(text: string): string {
@@ -4451,11 +4474,31 @@ function onMarkdownImageError(messageId: string, blockIndex: number): void {
 }
 
 function openImageModal(imageUrl: string): void {
-  modalImageUrl.value = imageUrl
+  const normalized = imageUrl.trim()
+  if (!normalized) return
+  modalImageUrl.value = normalized
 }
 
 function closeImageModal(): void {
   modalImageUrl.value = ''
+}
+
+function onConversationClick(event: MouseEvent): void {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const container = conversationListRef.value
+  if (!container) return
+
+  const image = target.closest('img.message-image-preview') as HTMLImageElement | null
+  const button = target.closest('button.message-image-button') as HTMLButtonElement | null
+  const source = image?.currentSrc || image?.getAttribute('src') || button?.dataset.imageSrc || ''
+  if (!source) return
+  if (image && !container.contains(image)) return
+  if (!image && button && !container.contains(button)) return
+
+  event.preventDefault()
+  event.stopPropagation()
+  openImageModal(source)
 }
 
 onMounted(() => {
@@ -4725,10 +4768,12 @@ onBeforeUnmount(() => {
 
 .message-image-button {
   @apply block rounded-xl overflow-hidden border border-slate-300 bg-white p-0 transition hover:border-slate-400;
+  cursor: zoom-in;
 }
 
 .message-image-preview {
   @apply block w-16 h-16 object-cover;
+  cursor: zoom-in;
 }
 
 .message-generated-image-preview {
@@ -4899,6 +4944,16 @@ onBeforeUnmount(() => {
 
 .plan-card-markdown :deep(.message-file-link) {
   @apply text-sky-700 underline decoration-sky-300 underline-offset-2;
+}
+
+.plan-card-markdown :deep(.message-image-button-html) {
+  @apply block rounded-xl overflow-hidden border border-slate-300 bg-white p-0 transition hover:border-slate-400;
+  cursor: zoom-in;
+}
+
+.plan-card-markdown :deep(.message-image-preview) {
+  @apply block w-auto h-auto max-w-[min(560px,85vw)] max-h-[min(460px,62vh)] object-contain bg-white;
+  cursor: zoom-in;
 }
 
 .plan-card-markdown :deep(.message-table) {
@@ -5185,10 +5240,12 @@ onBeforeUnmount(() => {
 
 .image-modal-backdrop {
   @apply fixed inset-0 z-50 bg-black/40 p-6 flex items-center justify-center;
+  cursor: zoom-out;
 }
 
 .image-modal-content {
   @apply relative max-w-[min(92vw,1100px)] max-h-[92vh];
+  cursor: default;
 }
 
 .image-modal-close {
