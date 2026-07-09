@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getAvailableModelIds, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startThread, startThreadTurn } from './codexGateway'
+import { getAvailableModelIds, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startThread, startThreadTurn, startThreadWithTurn } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -84,6 +84,58 @@ describe('startThreadTurn collaboration mode payloads', () => {
     })
     expect(requests[1].params.serviceTier).toBe('fast')
     expect(requests[2].params.serviceTier).toBeNull()
+  })
+
+  it('starts a new thread and first turn through one backend request', async () => {
+    const requests: Array<{ url: string, body: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : {},
+      })
+      return new Response(JSON.stringify({
+        data: {
+          thread: { id: 'thread-atomic' },
+          model: 'gpt-5.5',
+          modelProvider: 'openai',
+          turn: { id: 'turn-atomic' },
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    const started = await startThreadWithTurn('/repo', 'hello', [], 'gpt-5.5', 'medium', undefined, [], 'default', 'fast')
+
+    expect(started).toEqual({
+      threadId: 'thread-atomic',
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      turnId: 'turn-atomic',
+    })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].url).toBe('/codex-api/thread/start-turn')
+    expect(requests[0].body).toMatchObject({
+      thread: {
+        cwd: '/repo',
+        model: 'gpt-5.5',
+        serviceTier: 'fast',
+      },
+      turn: {
+        model: 'gpt-5.5',
+        effort: 'medium',
+        serviceTier: 'fast',
+        collaborationMode: {
+          mode: 'default',
+          settings: {
+            model: 'gpt-5.5',
+            reasoning_effort: 'medium',
+            developer_instructions: null,
+          },
+        },
+      },
+    })
   })
 })
 

@@ -1733,6 +1733,10 @@ export type StartedThread = {
   modelProvider: string
 }
 
+export type StartedThreadTurn = StartedThread & {
+  turnId: string
+}
+
 export type ForkedThread = {
   threadId: string
   cwd: string
@@ -1747,19 +1751,24 @@ function normalizeServiceTierParam(serviceTier: string | null | undefined): stri
   return normalized.length > 0 ? normalized : undefined
 }
 
+function buildThreadStartParams(cwd?: string, model?: string, serviceTier?: string | null): Record<string, unknown> {
+  const params: Record<string, unknown> = {}
+  if (typeof cwd === 'string' && cwd.trim().length > 0) {
+    params.cwd = cwd.trim()
+  }
+  if (typeof model === 'string' && model.trim().length > 0) {
+    params.model = model.trim()
+  }
+  const normalizedServiceTier = normalizeServiceTierParam(serviceTier)
+  if (normalizedServiceTier !== undefined) {
+    params.serviceTier = normalizedServiceTier
+  }
+  return params
+}
+
 export async function startThread(cwd?: string, model?: string, serviceTier?: string | null): Promise<StartedThread> {
   try {
-    const params: Record<string, unknown> = {}
-    if (typeof cwd === 'string' && cwd.trim().length > 0) {
-      params.cwd = cwd.trim()
-    }
-    if (typeof model === 'string' && model.trim().length > 0) {
-      params.model = model.trim()
-    }
-    const normalizedServiceTier = normalizeServiceTierParam(serviceTier)
-    if (normalizedServiceTier !== undefined) {
-      params.serviceTier = normalizedServiceTier
-    }
+    const params = buildThreadStartParams(cwd, model, serviceTier)
     const payload = await callRpc<ThreadStartResponse>('thread/start', params)
     const threadId = normalizeThreadIdFromPayload(payload)
     if (!threadId) {
@@ -1916,6 +1925,87 @@ async function resolveCollaborationModeSettings(
   throw new Error(`${mode === 'plan' ? 'Plan' : 'Default'} mode requires an available model. Wait for models to load and try again.`)
 }
 
+async function buildTurnStartParams(
+  threadId: string | undefined,
+  text: string,
+  imageUrls: string[] = [],
+  model?: string,
+  effort?: ReasoningEffort,
+  skills?: Array<{ name: string; path: string }>,
+  fileAttachments: FileAttachmentParam[] = [],
+  collaborationMode?: CollaborationModeKind,
+  serviceTier?: string | null,
+): Promise<Record<string, unknown>> {
+  const normalizedModel = model?.trim() ?? ''
+  const localImageAttachments: FileAttachmentParam[] = []
+  for (const imageUrl of imageUrls) {
+    const localImagePath = extractLocalImagePathFromUrl(imageUrl.trim())
+    if (!localImagePath) continue
+    localImageAttachments.push({
+      label: fileNameFromPath(localImagePath),
+      path: localImagePath,
+      fsPath: localImagePath,
+    })
+  }
+  const allFileAttachments = [...fileAttachments, ...localImageAttachments]
+  const dedupedFileAttachments = allFileAttachments.filter((entry, index) =>
+    allFileAttachments.findIndex((candidate) => candidate.fsPath === entry.fsPath) === index)
+  const finalText = buildTextWithAttachments(text, dedupedFileAttachments)
+  const input: Array<Record<string, unknown>> = [{ type: 'text', text: finalText }]
+  for (const imageUrl of imageUrls) {
+    const normalizedUrl = imageUrl.trim()
+    if (!normalizedUrl) continue
+    const localImagePath = extractLocalImagePathFromUrl(normalizedUrl)
+    if (localImagePath) {
+      input.push({
+        type: 'localImage',
+        path: localImagePath,
+      })
+      continue
+    }
+    input.push({
+      type: 'image',
+      url: normalizedUrl,
+      image_url: normalizedUrl,
+    })
+  }
+  if (skills) {
+    for (const skill of skills) {
+      input.push({ type: 'skill', name: skill.name, path: skill.path })
+    }
+  }
+  const attachments = dedupedFileAttachments.map((f) => ({ label: f.label, path: f.path, fsPath: f.fsPath }))
+  const params: Record<string, unknown> = {
+    input,
+  }
+  if (typeof threadId === 'string' && threadId.trim().length > 0) {
+    params.threadId = threadId.trim()
+  }
+  if (attachments.length > 0) params.attachments = attachments
+  if (normalizedModel) {
+    params.model = normalizedModel
+  }
+  if (typeof effort === 'string' && effort.length > 0) {
+    params.effort = effort
+  }
+  const normalizedServiceTier = normalizeServiceTierParam(serviceTier)
+  if (normalizedServiceTier !== undefined) {
+    params.serviceTier = normalizedServiceTier
+  }
+  if (collaborationMode) {
+    const collaborationModeSettings = await resolveCollaborationModeSettings(collaborationMode, normalizedModel, effort)
+    params.collaborationMode = {
+      mode: collaborationMode,
+      settings: {
+        model: collaborationModeSettings.model,
+        reasoning_effort: collaborationModeSettings.reasoningEffort,
+        developer_instructions: null,
+      },
+    }
+  }
+  return params
+}
+
 export async function startThreadTurn(
   threadId: string,
   text: string,
@@ -1928,75 +2018,72 @@ export async function startThreadTurn(
   serviceTier?: string | null,
 ): Promise<string> {
   try {
-    const normalizedModel = model?.trim() ?? ''
-    const localImageAttachments: FileAttachmentParam[] = []
-    for (const imageUrl of imageUrls) {
-      const localImagePath = extractLocalImagePathFromUrl(imageUrl.trim())
-      if (!localImagePath) continue
-      localImageAttachments.push({
-        label: fileNameFromPath(localImagePath),
-        path: localImagePath,
-        fsPath: localImagePath,
-      })
-    }
-    const allFileAttachments = [...fileAttachments, ...localImageAttachments]
-    const dedupedFileAttachments = allFileAttachments.filter((entry, index) =>
-      allFileAttachments.findIndex((candidate) => candidate.fsPath === entry.fsPath) === index)
-    const finalText = buildTextWithAttachments(text, dedupedFileAttachments)
-    const input: Array<Record<string, unknown>> = [{ type: 'text', text: finalText }]
-    for (const imageUrl of imageUrls) {
-      const normalizedUrl = imageUrl.trim()
-      if (!normalizedUrl) continue
-      const localImagePath = extractLocalImagePathFromUrl(normalizedUrl)
-      if (localImagePath) {
-        input.push({
-          type: 'localImage',
-          path: localImagePath,
-        })
-        continue
-      }
-      input.push({
-        type: 'image',
-        url: normalizedUrl,
-        image_url: normalizedUrl,
-      })
-    }
-    if (skills) {
-      for (const skill of skills) {
-        input.push({ type: 'skill', name: skill.name, path: skill.path })
-      }
-    }
-    const attachments = dedupedFileAttachments.map((f) => ({ label: f.label, path: f.path, fsPath: f.fsPath }))
-    const params: Record<string, unknown> = {
+    const params = await buildTurnStartParams(
       threadId,
-      input,
-    }
-    if (attachments.length > 0) params.attachments = attachments
-    if (normalizedModel) {
-      params.model = normalizedModel
-    }
-    if (typeof effort === 'string' && effort.length > 0) {
-      params.effort = effort
-    }
-    const normalizedServiceTier = normalizeServiceTierParam(serviceTier)
-    if (normalizedServiceTier !== undefined) {
-      params.serviceTier = normalizedServiceTier
-    }
-    if (collaborationMode) {
-      const collaborationModeSettings = await resolveCollaborationModeSettings(collaborationMode, normalizedModel, effort)
-      params.collaborationMode = {
-        mode: collaborationMode,
-        settings: {
-          model: collaborationModeSettings.model,
-          reasoning_effort: collaborationModeSettings.reasoningEffort,
-          developer_instructions: null,
-        },
-      }
-    }
+      text,
+      imageUrls,
+      model,
+      effort,
+      skills,
+      fileAttachments,
+      collaborationMode,
+      serviceTier,
+    )
     const payload = await callRpc<{ turn?: Turn }>('turn/start', params)
     return typeof payload?.turn?.id === 'string' ? payload.turn.id.trim() : ''
   } catch (error) {
     throw normalizeCodexApiError(error, `Failed to start turn for thread ${threadId}`, 'turn/start')
+  }
+}
+
+export async function startThreadWithTurn(
+  cwd: string | undefined,
+  text: string,
+  imageUrls: string[] = [],
+  model?: string,
+  effort?: ReasoningEffort,
+  skills?: Array<{ name: string; path: string }>,
+  fileAttachments: FileAttachmentParam[] = [],
+  collaborationMode?: CollaborationModeKind,
+  serviceTier?: string | null,
+): Promise<StartedThreadTurn> {
+  try {
+    const thread = buildThreadStartParams(cwd, model, serviceTier)
+    const turn = await buildTurnStartParams(
+      undefined,
+      text,
+      imageUrls,
+      model,
+      effort,
+      skills,
+      fileAttachments,
+      collaborationMode,
+      serviceTier,
+    )
+    const response = await fetch('/codex-api/thread/start-turn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ thread, turn }),
+    })
+    const payload = (await response.json().catch(() => null)) as unknown
+    if (!response.ok) {
+      throw new Error(getErrorMessageFromPayload(payload, `Failed to start thread turn (${response.status})`))
+    }
+
+    const data = asRecord(asRecord(payload)?.data)
+    const threadId = normalizeThreadIdFromPayload(data)
+    if (!threadId) {
+      throw new Error('thread/start-turn did not return a thread id')
+    }
+    const turnRecord = asRecord(data?.turn)
+    return {
+      threadId,
+      model: normalizeThreadModelFromPayload(data),
+      modelProvider: normalizeThreadModelProviderFromPayload(data),
+      turnId: typeof turnRecord?.id === 'string' ? turnRecord.id.trim() : '',
+    }
+  } catch (error) {
+    throw normalizeCodexApiError(error, 'Failed to start a new thread turn', 'thread/start-turn')
   }
 }
 

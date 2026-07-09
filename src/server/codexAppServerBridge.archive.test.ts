@@ -13,6 +13,7 @@ import {
   isThreadMaterializationPendingError,
   isThreadNotFoundError,
   isUnauthenticatedRateLimitError,
+  startThreadAndTurn,
   writeFreeModeStateFile,
   writeWorkspaceRootsState,
 } from './codexAppServerBridge'
@@ -134,6 +135,67 @@ describe('callRpcWithArchiveRecovery', () => {
       {
         method: 'turn/start',
         params: { threadId: 'test-thread', input: [{ type: 'text', text: 'hi' }] },
+      },
+    ])
+  })
+})
+
+describe('startThreadAndTurn', () => {
+  it('creates a thread and starts the first turn on the server side', async () => {
+    const calls: Array<{ method: string; params: unknown }> = []
+    const appServer = {
+      async rpc(method: string, params: unknown): Promise<unknown> {
+        calls.push({ method, params })
+        if (method === 'thread/start') {
+          return {
+            thread: { id: 'thread-atomic' },
+            model: 'gpt-5.5',
+            modelProvider: 'openai',
+          }
+        }
+        if (method === 'turn/start') {
+          return { turn: { id: 'turn-atomic' } }
+        }
+        throw new Error(`unexpected method ${method}`)
+      },
+    }
+
+    await expect(startThreadAndTurn(appServer, {
+      thread: {
+        cwd: '/repo',
+        model: 'gpt-5.5',
+        serviceTier: 'fast',
+      },
+      turn: {
+        input: [{ type: 'text', text: 'hi' }],
+        model: 'gpt-5.5',
+        serviceTier: 'fast',
+        threadId: 'client-supplied-thread-id',
+      },
+    })).resolves.toEqual({
+      thread: { id: 'thread-atomic' },
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      turn: { id: 'turn-atomic' },
+    })
+
+    expect(calls).toEqual([
+      {
+        method: 'thread/start',
+        params: {
+          cwd: '/repo',
+          model: 'gpt-5.5',
+          serviceTier: 'fast',
+        },
+      },
+      {
+        method: 'turn/start',
+        params: {
+          input: [{ type: 'text', text: 'hi' }],
+          model: 'gpt-5.5',
+          serviceTier: 'fast',
+          threadId: 'thread-atomic',
+        },
       },
     ])
   })

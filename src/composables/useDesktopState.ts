@@ -31,7 +31,7 @@ import {
   generateThreadTitle,
   resumeThread,
 
-  startThread,
+  startThreadWithTurn,
   subscribeCodexNotifications,
   startThreadTurn,
   type CodexRuntimeConfig,
@@ -5119,17 +5119,40 @@ export function useDesktopState() {
     let threadId = ''
 
     try {
+      let startedTurnId = ''
       try {
-        const startedThread = await startThread(targetCwd || undefined, selectedModel || undefined, serviceTierForSpeedMode(speedMode))
+        const startedThread = await startThreadWithTurn(
+          targetCwd || undefined,
+          nextText,
+          imageUrls,
+          selectedModel || undefined,
+          selectedReasoningEffort.value || undefined,
+          skills.length > 0 ? skills : undefined,
+          fileAttachments,
+          selectedMode,
+          serviceTierForSpeedMode(speedMode),
+        )
         threadId = startedThread.threadId
+        startedTurnId = startedThread.turnId
         setThreadModelId(threadId, startedThread.model)
         setThreadModelProviderId(threadId, startedThread.modelProvider || activeProviderId.value)
         setSelectedCollaborationModeForThread(threadId, selectedMode)
       } catch (unknownError) {
         if (selectedModel && selectedModel !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
           await applyFallbackModelSelection()
-          const fallbackThread = await startThread(targetCwd || undefined, MODEL_FALLBACK_ID, serviceTierForSpeedMode(speedMode))
+          const fallbackThread = await startThreadWithTurn(
+            targetCwd || undefined,
+            nextText,
+            imageUrls,
+            MODEL_FALLBACK_ID,
+            selectedReasoningEffort.value || undefined,
+            skills.length > 0 ? skills : undefined,
+            fileAttachments,
+            selectedMode,
+            serviceTierForSpeedMode(speedMode),
+          )
           threadId = fallbackThread.threadId
+          startedTurnId = fallbackThread.turnId
           setThreadModelId(threadId, fallbackThread.model)
           setThreadModelProviderId(threadId, fallbackThread.modelProvider || activeProviderId.value)
           setSelectedCollaborationModeForThread(threadId, selectedMode)
@@ -5141,6 +5164,16 @@ export function useDesktopState() {
 
       insertOptimisticThread(threadId, targetCwd, nextText || '[Image]')
       appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments)
+      setPendingTurnRequest(threadId, {
+        text: nextText,
+        imageUrls: [...imageUrls],
+        skills: skills.map((skill) => ({ name: skill.name, path: skill.path })),
+        fileAttachments: fileAttachments.map((file) => ({ ...file })),
+        effort: selectedReasoningEffort.value,
+        collaborationMode: selectedMode,
+        speedMode,
+        fallbackRetried: false,
+      })
       blockInterruptUntilThreadIsPersisted(threadId)
       resumedThreadById.value = {
         ...resumedThreadById.value,
@@ -5162,22 +5195,21 @@ export function useDesktopState() {
       )
       setTurnErrorForThread(threadId, null)
       setThreadInProgress(threadId, true)
+      if (startedTurnId) {
+        activeTurnIdByThreadId.value = {
+          ...activeTurnIdByThreadId.value,
+          [threadId]: startedTurnId,
+        }
+        maybeUnblockInterruptForActiveTurn(threadId, startedTurnId)
+      }
       const capturedThreadId = threadId
       const capturedCwd = targetCwd || null
       const capturedPrompt = nextText
-      void startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, selectedMode, speedMode)
-        .catch((unknownError) => {
-          shouldAutoScrollOnNextAgentEvent = false
-          setThreadInProgress(threadId, false)
-          setTurnActivityForThread(threadId, null)
-          const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
-          setTurnErrorForThread(threadId, errorMessage)
-          error.value = errorMessage
-        })
-        .finally(() => {
-          isSendingMessage.value = false
-        })
+      pendingThreadMessageRefresh.add(threadId)
+      void syncFromNotifications()
+      scheduleDelayedTurnSync(threadId)
       void requestThreadTitleGeneration(capturedThreadId, capturedPrompt, capturedCwd)
+      isSendingMessage.value = false
       return threadId
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false

@@ -2558,6 +2558,60 @@ export async function callRpcWithArchiveRecovery(
   }
 }
 
+function readThreadIdFromThreadStartResult(result: unknown): string {
+  const record = asRecord(result)
+  const thread = asRecord(record?.thread)
+  return readNonEmptyString(thread?.id)
+}
+
+function normalizeThreadStartTurnPayload(payload: unknown): { threadParams: Record<string, unknown>; turnParams: Record<string, unknown> } {
+  const record = asRecord(payload)
+  if (!record) {
+    throw new Error('Invalid body: expected { thread, turn }')
+  }
+
+  const threadRecord = asRecord(record.thread) ?? {}
+  const turnRecord = asRecord(record.turn)
+  if (!turnRecord) {
+    throw new Error('Invalid body: missing turn payload')
+  }
+
+  const threadParams: Record<string, unknown> = {}
+  for (const key of ['cwd', 'model', 'modelProvider', 'serviceTier']) {
+    if (Object.prototype.hasOwnProperty.call(threadRecord, key)) {
+      threadParams[key] = threadRecord[key]
+    }
+  }
+
+  const turnParams: Record<string, unknown> = { ...turnRecord }
+  delete turnParams.threadId
+  if (!Array.isArray(turnParams.input)) {
+    throw new Error('Invalid body: turn.input is required')
+  }
+
+  return { threadParams, turnParams }
+}
+
+export async function startThreadAndTurn(appServer: RpcExecutor, payload: unknown): Promise<unknown> {
+  const { threadParams, turnParams } = normalizeThreadStartTurnPayload(payload)
+  const startedThread = await callRpcWithArchiveRecovery(appServer, 'thread/start', threadParams)
+  const threadId = readThreadIdFromThreadStartResult(startedThread)
+  if (!threadId) {
+    throw new Error('thread/start did not return thread id')
+  }
+
+  const startedTurn = await callRpcWithArchiveRecovery(appServer, 'turn/start', {
+    ...turnParams,
+    threadId,
+  })
+  const startedThreadRecord = asRecord(startedThread) ?? {}
+  const startedTurnRecord = asRecord(startedTurn)
+  return {
+    ...startedThreadRecord,
+    turn: startedTurnRecord?.turn ?? null,
+  }
+}
+
 type TerminalQuickCommand = {
   label: string
   value: string
@@ -7964,6 +8018,19 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
+      if (req.method === 'POST' && url.pathname === '/codex-api/thread/start-turn') {
+        const payload = await readJsonBody(req)
+        const result = await startThreadAndTurn(appServer, payload)
+        const resultRecord = asRecord(result)
+        const thread = asRecord(resultRecord?.thread)
+        const threadId = readNonEmptyString(thread?.id)
+        if (threadId) {
+          appServer.storeThreadReadSnapshot(threadId, result)
+        }
+        setJson(res, 200, { data: result })
+        return
+      }
+
       if (req.method === 'POST' && url.pathname === '/codex-api/rpc') {
         const payload = await readJsonBody(req)
         const body = asRecord(payload) as RpcProxyRequest | null
@@ -7972,38 +8039,38 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
         rpcMethod = body?.method && typeof body.method === 'string' ? body.method : null
 
-	        if (!body || typeof body.method !== 'string' || body.method.length === 0) {
-	          setJson(res, 400, { error: 'Invalid body: expected { method, params? }' })
-	          return
-	        }
+        if (!body || typeof body.method !== 'string' || body.method.length === 0) {
+          setJson(res, 400, { error: 'Invalid body: expected { method, params? }' })
+          return
+        }
 
-	        if (body.method === 'generate-thread-title') {
-	          setJson(res, 200, { result: { title: '' } })
-	          return
-	        }
+        if (body.method === 'generate-thread-title') {
+          setJson(res, 200, { result: { title: '' } })
+          return
+        }
 
-	        if (body.method === 'account/rateLimits/read' && !(await hasUsableCodexAuth())) {
-	          setJson(res, 200, { result: null })
-	          return
-	        }
+        if (body.method === 'account/rateLimits/read' && !(await hasUsableCodexAuth())) {
+          setJson(res, 200, { result: null })
+          return
+        }
 
         let rpcResult: unknown
         try {
           rpcResult = await callRpcWithArchiveRecovery(appServer, body.method, body.params ?? null)
         } catch (error) {
-	          if (body.method === 'account/rateLimits/read' && isUnauthenticatedRateLimitError(error)) {
-	            setJson(res, 200, { result: null })
-	            return
-	          }
-		          if (body.method === 'thread/read' && isEmptyThreadReadError(error)) {
-		            const params = asRecord(body.params)
-		            const threadId = typeof params?.threadId === 'string' ? params.threadId.trim() : ''
-		            const snapshot = threadId ? appServer.getLastThreadReadSnapshot(threadId) : null
-		            if (snapshot) {
-		              setJson(res, 200, { result: snapshot })
-		              return
-		            }
-		          }
+          if (body.method === 'account/rateLimits/read' && isUnauthenticatedRateLimitError(error)) {
+            setJson(res, 200, { result: null })
+            return
+          }
+          if (body.method === 'thread/read' && isEmptyThreadReadError(error)) {
+            const params = asRecord(body.params)
+            const threadId = typeof params?.threadId === 'string' ? params.threadId.trim() : ''
+            const snapshot = threadId ? appServer.getLastThreadReadSnapshot(threadId) : null
+            if (snapshot) {
+              setJson(res, 200, { result: snapshot })
+              return
+            }
+          }
           if (body.method === 'thread/read' && isThreadMaterializationPendingError(error)) {
             const params = asRecord(body.params)
             const threadId = typeof params?.threadId === 'string' ? params.threadId.trim() : ''
@@ -8020,8 +8087,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
               return
             }
           }
-		          throw error
-		        }
+          throw error
+        }
         const trimmedResult = trimThreadTurnsInRpcResult(body.method, rpcResult)
         const errorMergedResult = THREAD_METHODS_WITH_TURNS.has(body.method)
           ? mergeStreamTurnErrorsIntoThreadResult(appServer, trimmedResult)
@@ -8034,10 +8101,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           ? await mergeSessionSkillInputsIntoThreadResult(sanitizedResult)
           : sanitizedResult
 
-	        if (THREAD_METHODS_WITH_THREAD_SNAPSHOT.has(body.method)) {
-	          const rpcRecord = asRecord(result)
-	          const rpcThread = asRecord(rpcRecord?.thread)
-	          const rpcThreadId = typeof rpcThread?.id === 'string' ? rpcThread.id : ''
+        if (THREAD_METHODS_WITH_THREAD_SNAPSHOT.has(body.method)) {
+          const rpcRecord = asRecord(result)
+          const rpcThread = asRecord(rpcRecord?.thread)
+          const rpcThreadId = typeof rpcThread?.id === 'string' ? rpcThread.id : ''
           if (rpcThreadId) {
             appServer.storeThreadReadSnapshot(rpcThreadId, result)
           }

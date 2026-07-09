@@ -37,6 +37,7 @@ const gatewayMocks = vi.hoisted(() => ({
   setThreadQueueState: vi.fn(),
   setWorkspaceRootsState: vi.fn(),
   startThread: vi.fn(),
+  startThreadWithTurn: vi.fn(),
   startThreadTurn: vi.fn(),
   subscribeCodexNotifications: vi.fn(),
 }))
@@ -1018,12 +1019,12 @@ describe('provider model selection', () => {
       speedMode: 'standard',
     })
     gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5', 'gpt-5.4-mini'])
-    gatewayMocks.startThread.mockResolvedValue({
+    gatewayMocks.startThreadWithTurn.mockResolvedValue({
       threadId: 'codex-thread',
       model: 'gpt-5.5',
       modelProvider: 'openai',
+      turnId: 'turn-1',
     })
-    gatewayMocks.startThreadTurn.mockResolvedValue('turn-1')
     gatewayMocks.getThreadDetail.mockResolvedValue({
       model: 'gpt-5.5',
       modelProvider: 'openai',
@@ -1045,9 +1046,8 @@ describe('provider model selection', () => {
     await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
     await state.sendMessageToNewThread('hi', '/tmp/project')
 
-    expect(gatewayMocks.startThread).toHaveBeenCalledWith('/tmp/project', 'gpt-5.5', null)
-    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledWith(
-      'codex-thread',
+    expect(gatewayMocks.startThreadWithTurn).toHaveBeenCalledWith(
+      '/tmp/project',
       'hi',
       [],
       'gpt-5.5',
@@ -1057,6 +1057,8 @@ describe('provider model selection', () => {
       'default',
       null,
     )
+    expect(gatewayMocks.startThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
     expect(state.readModelIdForThread('codex-thread')).toBe('gpt-5.5')
     expect(state.messages.value.some((message) => (
       message.role === 'user' &&
@@ -1099,12 +1101,12 @@ describe('provider model selection', () => {
       speedMode: 'standard',
     })
     gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5', 'gpt-5.4-mini'])
-    gatewayMocks.startThread.mockResolvedValue({
+    gatewayMocks.startThreadWithTurn.mockResolvedValue({
       threadId: 'mini-thread',
       model: 'gpt-5.4-mini',
       modelProvider: 'openai',
+      turnId: 'turn-1',
     })
-    gatewayMocks.startThreadTurn.mockResolvedValue('turn-1')
     gatewayMocks.getThreadDetail.mockResolvedValue({
       model: 'gpt-5.4-mini',
       modelProvider: 'openai',
