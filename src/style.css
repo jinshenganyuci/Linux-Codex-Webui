@@ -61,26 +61,6 @@
   @apply border-zinc-700;
 }
 
-:root.dark .sidebar-settings-context-value {
-  @apply text-zinc-300;
-}
-
-:root.dark .sidebar-settings-context-value[data-state='ok'] {
-  @apply text-emerald-300;
-}
-
-:root.dark .sidebar-settings-context-value[data-state='warning'] {
-  @apply text-amber-300;
-}
-
-:root.dark .sidebar-settings-context-value[data-state='danger'] {
-  @apply text-rose-300;
-}
-
-:root.dark .sidebar-settings-context-meta {
-  @apply text-zinc-400;
-}
-
 :root.dark .sidebar-settings-rate-limits {
   @apply border-zinc-700;
 }

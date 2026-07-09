@@ -7,13 +7,13 @@
 
     <div v-if="isOpen" class="account-menu-panel">
       <div class="account-menu-header">
-        <p class="account-menu-title">Accounts</p>
+        <p class="account-menu-title">{{ t('Accounts') }}</p>
       </div>
 
       <p v-if="error" class="account-menu-error">{{ error }}</p>
 
       <p v-if="accounts.length === 0" class="account-menu-empty">
-        No saved accounts yet. Run `codex login`, then click reload.
+        {{ t('No saved accounts yet. Run `codex login`, then click reload.') }}
       </p>
 
       <div v-else class="account-menu-list">
@@ -24,7 +24,7 @@
           :class="{ 'is-active': account.isActive }"
         >
           <div class="account-menu-item-main">
-            <p class="account-menu-item-email">{{ account.email || 'Account' }}</p>
+            <p class="account-menu-item-email">{{ account.email || t('Account') }}</p>
             <p class="account-menu-item-meta">
               {{ formatMeta(account) }}
             </p>
@@ -35,7 +35,7 @@
             :disabled="isSwitching || account.isActive"
             @click="emit('switch', account.storageId)"
           >
-            {{ account.isActive ? 'Active' : isSwitching ? 'Switching…' : 'Switch' }}
+            {{ account.isActive ? t('Active') : isSwitching ? t('Switching…') : t('Switch') }}
           </button>
         </article>
       </div>
@@ -46,6 +46,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { UiAccountEntry } from '../../types/codex'
+import { useUiLanguage } from '../../composables/useUiLanguage'
 
 const props = defineProps<{
   accounts: UiAccountEntry[]
@@ -60,10 +61,11 @@ const emit = defineEmits<{
 
 const rootRef = ref<HTMLElement | null>(null)
 const isOpen = ref(false)
+const { t } = useUiLanguage()
 
 const activeLabel = computed(() => {
   const active = props.accounts.find((account) => account.isActive) ?? null
-  if (!active) return 'Accounts'
+  if (!active) return t('Accounts')
   return active.email || shortAccountId(active.accountId)
 })
 
@@ -72,7 +74,7 @@ function shortAccountId(accountId: string): string {
 }
 
 function formatMeta(account: UiAccountEntry): string {
-  const segments = [account.planType || 'unknown', shortAccountId(account.accountId)]
+  const segments = [account.planType || t('unknown'), shortAccountId(account.accountId)]
   if (account.authMode) {
     segments.unshift(account.authMode)
   }

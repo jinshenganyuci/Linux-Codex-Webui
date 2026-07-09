@@ -26,7 +26,7 @@ import { createServer as createApp } from '../server/httpServer.js'
 import { generatePassword } from '../server/password.js'
 import { spawnSyncCommand } from '../utils/commandInvocation.js'
 
-const program = new Command().name('codexui').description('Web interface for Codex app-server')
+const program = new Command().name('linux-codex-webui').description('Linux-focused web interface for Codex app-server')
 const __dirname = dirname(fileURLToPath(import.meta.url))
 let hasPromptedCloudflaredInstall = false
 
@@ -268,7 +268,7 @@ function resolvePassword(input: string | boolean): PasswordResolution {
 }
 
 function getGeneratedPasswordPath(): string {
-  return join(getCodexHomePath(), 'codexui-password')
+  return join(getCodexHomePath(), 'linux-codex-webui-password')
 }
 
 async function persistGeneratedPassword(password: string): Promise<string> {
@@ -526,7 +526,7 @@ async function startServer(options: {
   }
   const runtimeConfig = resolveAppServerRuntimeConfig()
   if (options.login && !hasCodexAuth()) {
-    console.log('\nCodex is not logged in. You can log in later via settings or run `codexui login`.\n')
+    console.log('\nCodex is not logged in. You can log in later via settings or run `linux-codex-webui login`.\n')
   }
   const requestedPort = parseInt(options.port, 10)
   const passwordResolution = resolvePassword(options.password)
@@ -559,9 +559,9 @@ async function startServer(options: {
 
   const lines = [
     '',
-    'Codex Web Local is running!',
+    'Linux-Codex-Webui is running!',
     `  Version:  ${version}`,
-    '  GitHub:   https://github.com/friuns2/codexui',
+    '  Project:  Linux-Codex-Webui',
     '',
     `  Bind:     http://0.0.0.0:${String(port)}`,
     `  Codex sandbox: ${runtimeConfig.sandboxMode}`,
@@ -706,12 +706,12 @@ program
 
 program.command('login').description('Install/check Codex CLI and run `codex login`').action(runLogin)
 
-program.command('help').description('Show codexui command help').action(() => {
+program.command('help').description('Show Linux-Codex-Webui command help').action(() => {
   program.outputHelp()
 })
 
 program.parseAsync(process.argv).catch((error) => {
   const message = error instanceof Error ? error.message : String(error)
-  console.error(`\nFailed to run codexui: ${message}`)
+  console.error(`\nFailed to run Linux-Codex-Webui: ${message}`)
   process.exit(1)
 })

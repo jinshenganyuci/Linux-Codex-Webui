@@ -1,6 +1,6 @@
 # Provider Proxy Spec
 
-This document describes the local provider proxy used by Codex Web Local for OpenRouter, OpenCode Zen, and custom OpenAI-compatible endpoints.
+This document describes the local provider proxy used by Linux-Codex-Webui for OpenRouter, OpenCode Zen, and custom OpenAI-compatible endpoints.
 
 ## Goal
 

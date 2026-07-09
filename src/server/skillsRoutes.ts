@@ -375,7 +375,7 @@ async function fetchTextWithTimeout(url: string, timeoutMs: number): Promise<str
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const resp = await fetch(url, {
-      headers: { 'User-Agent': 'codex-web-local' },
+      headers: { 'User-Agent': 'linux-codex-webui' },
       signal: controller.signal,
     })
     if (!resp.ok) return ''
@@ -671,7 +671,7 @@ async function getGithubJson<T>(url: string, token: string, method = 'GET', body
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
       'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'codex-web-local',
+      'User-Agent': 'linux-codex-webui',
     },
     body: body ? JSON.stringify(body) : undefined,
   })
@@ -688,7 +688,7 @@ async function startGithubDeviceLogin(): Promise<GithubDeviceCodeResponse> {
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': 'codex-web-local',
+      'User-Agent': 'linux-codex-webui',
     },
     body: new URLSearchParams({
       client_id: GITHUB_DEVICE_CLIENT_ID,
@@ -707,7 +707,7 @@ async function completeGithubDeviceLogin(deviceCode: string): Promise<{ token: s
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': 'codex-web-local',
+      'User-Agent': 'linux-codex-webui',
     },
     body: new URLSearchParams({
       client_id: GITHUB_DEVICE_CLIENT_ID,
@@ -755,7 +755,7 @@ async function ensurePrivateForkFromUpstream(token: string, username: string, re
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${token}`,
       'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'codex-web-local',
+      'User-Agent': 'linux-codex-webui',
     },
   })
   if (existing.ok) {
@@ -783,7 +783,7 @@ async function ensurePrivateForkFromUpstream(token: string, username: string, re
         Accept: 'application/vnd.github+json',
         Authorization: `Bearer ${token}`,
         'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': 'codex-web-local',
+        'User-Agent': 'linux-codex-webui',
       },
     })
     if (check.ok) {
@@ -820,7 +820,7 @@ async function readRemoteSkillsManifest(token: string, repoOwner: string, repoNa
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${token}`,
       'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'codex-web-local',
+          'User-Agent': 'linux-codex-webui',
     },
   })
   if (resp.status === 404) return []
@@ -849,7 +849,7 @@ async function writeRemoteSkillsManifest(token: string, repoOwner: string, repoN
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${token}`,
       'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'codex-web-local',
+      'User-Agent': 'linux-codex-webui',
     },
   })
   if (existing.ok) {

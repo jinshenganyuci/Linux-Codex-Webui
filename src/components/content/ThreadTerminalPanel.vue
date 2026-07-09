@@ -16,8 +16,8 @@
         </button>
       </div>
       <div class="thread-terminal-actions">
-        <button class="thread-terminal-action" type="button" title="New" @click="onNewTerminal">
-          New
+        <button class="thread-terminal-action" type="button" :title="t('New terminal')" @click="onNewTerminal">
+          {{ t('New') }}
         </button>
         <button class="thread-terminal-action" type="button" :title="t('Hide terminal')" @click="$emit('hide')">
           {{ t('Hide') }}
@@ -267,14 +267,14 @@ function handleNotification(notification: RpcNotification): void {
     saveTabsState()
     if (notificationSessionId !== activeSessionId.value) return
     terminal.writeln('')
-    terminal.writeln('[terminal exited]')
+    terminal.writeln(`[${t('terminal exited')}]`)
     return
   }
   if (notification.method === 'terminal-error') {
     patchTab(notificationSessionId, { status: 'error' })
     saveTabsState()
     if (notificationSessionId !== activeSessionId.value) return
-    errorMessage.value = readString(params?.message) || 'Terminal error'
+    errorMessage.value = readString(params?.message) || t('Terminal error')
   }
 }
 
@@ -307,7 +307,7 @@ function onCloseTerminal(): void {
   const nextTab = nextTabs[Math.max(0, Math.min(currentIndex, nextTabs.length - 1))]
   if (currentSessionId) {
     void closeThreadTerminal(currentSessionId).catch((error: unknown) => {
-      errorMessage.value = error instanceof Error ? error.message : 'Terminal close failed'
+      errorMessage.value = error instanceof Error ? error.message : t('Terminal close failed')
     })
   }
   if (nextTab) {
@@ -378,7 +378,7 @@ function renderSessionBuffer(buffer: string): void {
 }
 
 function terminalTabTitle(tab: TerminalTab, index: number): string {
-  const shell = tab.shell && tab.shell !== 'terminal' ? tab.shell : 'Terminal'
+  const shell = tab.shell && tab.shell !== 'terminal' ? tab.shell : t('Terminal')
   return tabs.value.length > 1 ? `${shell} ${index + 1}` : shell
 }
 
@@ -477,14 +477,14 @@ async function runQuickCommand(command: string, custom = false): Promise<void> {
     await attachToThread(false)
   }
   if (!activeSessionId.value) {
-    throw new Error('Terminal is not connected')
+    throw new Error(t('Terminal is not connected'))
   }
   terminal?.focus()
   recordQuickCommandUse(value, custom)
   try {
     await sendThreadTerminalInput(activeSessionId.value, `${value}\r`)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Quick command failed'
+    errorMessage.value = error instanceof Error ? error.message : t('Quick command failed')
     throw error
   }
 }
@@ -494,7 +494,7 @@ async function waitForTerminalReady(): Promise<void> {
     if (terminal) return
     await new Promise((resolve) => window.setTimeout(resolve, 25))
   }
-  throw new Error('Terminal is not ready')
+  throw new Error(t('Terminal is not ready'))
 }
 
 defineExpose<ThreadTerminalPanelExposed>({

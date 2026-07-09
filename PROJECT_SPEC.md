@@ -1,12 +1,12 @@
-# codex-web-local — Project Specification
+# Linux-Codex-Webui — Project Specification
 
 ## Overview
 
-**codex-web-local** is a lightweight, browser-based web UI for [OpenAI Codex](https://github.com/openai/codex). It mirrors the Codex Desktop experience and runs on top of the Codex `app-server`, allowing remote access to a local Codex instance from any browser.
+**Linux-Codex-Webui** is a lightweight, browser-based web UI for [OpenAI Codex](https://github.com/openai/codex). It mirrors the Codex Desktop experience and runs on top of the Codex `app-server`, allowing remote access to a local Codex instance from any browser.
 
 - **Author:** Pavel Voronin
 - **License:** MIT
-- **Repository:** https://github.com/pavel-voronin/codex-web-local
+- **Repository:** Linux-Codex-Webui
 
 ## Architecture
 
@@ -61,7 +61,7 @@
 ## Project Structure
 
 ```
-codex-web-local/
+Linux-Codex-Webui/
 ├── src/
 │   ├── api/                          # Backend communication layer
 │   │   ├── codexGateway.ts           # High-level API (threads, turns, models)
@@ -272,13 +272,13 @@ All frontend state is managed by `useDesktopState()` — a single Vue composable
 
 | Key | Data |
 |---|---|
-| `codex-web-local.thread-read-state.v1` | Per-thread read timestamps |
-| `codex-web-local.thread-scroll-state.v1` | Per-thread scroll positions |
-| `codex-web-local.selected-thread-id.v1` | Last selected thread |
-| `codex-web-local.project-order.v1` | Custom project ordering |
-| `codex-web-local.project-display-name.v1` | Custom project names |
-| `codex-web-local.auto-refresh-enabled.v1` | Auto-refresh preference |
-| `codex-web-local.sidebar-collapsed.v1` | Sidebar collapse state |
+| `codex-web-local.thread-read-state.v1` | Per-thread read timestamps; legacy-compatible storage namespace |
+| `codex-web-local.thread-scroll-state.v1` | Per-thread scroll positions; legacy-compatible storage namespace |
+| `codex-web-local.selected-thread-id.v1` | Last selected thread; legacy-compatible storage namespace |
+| `codex-web-local.project-order.v1` | Custom project ordering; legacy-compatible storage namespace |
+| `codex-web-local.project-display-name.v1` | Custom project names; legacy-compatible storage namespace |
+| `codex-web-local.auto-refresh-enabled.v1` | Auto-refresh preference; legacy-compatible storage namespace |
+| `codex-web-local.sidebar-collapsed.v1` | Sidebar collapse state; legacy-compatible storage namespace |
 
 ### Event Processing Pipeline
 
@@ -322,14 +322,14 @@ Bidirectional sync between `selectedThreadId` state and URL is handled via Vue `
 ### Production Mode
 
 ```bash
-npx codex-web-local [--port 5999] [--password mypass] [--no-password]
+npx linux-codex-webui [--port 5999] [--password mypass] [--no-password]
 ```
 
-The CLI starts an Express server that serves the built frontend from `dist/` and uses the same bridge middleware. Password authentication is enabled by default. When a password is auto-generated, it is written to `$CODEX_HOME/codexui-password` with `0600` permissions and startup output prints only that file path.
+The CLI starts an Express server that serves the built frontend from `dist/` and uses the same bridge middleware. Password authentication is enabled by default. When a password is auto-generated, it is written to `$CODEX_HOME/linux-codex-webui-password` with `0600` permissions and startup output prints only that file path.
 
 ### Auth (Production)
 
-- Default: auto-generated password saved to `$CODEX_HOME/codexui-password` on startup
+- Default: auto-generated password saved to `$CODEX_HOME/linux-codex-webui-password` on startup
 - Login: POST `/auth/login` with `{ password }` body
 - Session: HttpOnly cookie `codex_web_local_token`
 - Uses constant-time comparison to prevent timing attacks

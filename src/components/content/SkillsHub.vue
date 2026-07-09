@@ -73,7 +73,7 @@
           class="skills-search-input"
           type="search"
           :placeholder="t('Search skills...')"
-          aria-label="Search skills"
+          :aria-label="t('Search skills')"
         />
         <button class="skills-hub-sort" type="submit" :disabled="isSearchingSkills || skillSearchQuery.trim().length < 2">
           {{ isSearchingSkills ? t('Searching...') : t('Search') }}

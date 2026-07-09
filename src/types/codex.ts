@@ -5,6 +5,7 @@ export type RpcEnvelope<T> = {
 export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
 export type SpeedMode = 'standard' | 'fast'
 export type CollaborationModeKind = 'default' | 'plan'
+export type CodexPermissionMode = 'request-approval' | 'auto-approve' | 'full-access'
 
 export type RpcMethodCatalog = {
   data: string[]

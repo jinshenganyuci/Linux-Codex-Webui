@@ -1,16 +1,16 @@
 <template>
   <div ref="menuRootRef" class="thread-type-menu-wrap">
-    <button class="thread-type-menu-trigger" type="button" title="thread_display_settings" @click="toggleOpen">
+    <button class="thread-type-menu-trigger" type="button" :title="t('Thread display settings')" @click="toggleOpen">
       <IconTablerSettings class="thread-type-menu-icon" />
     </button>
 
     <div v-if="isOpen" class="thread-type-menu-panel" @click.stop>
       <div class="thread-type-menu-actions">
-        <button class="thread-type-menu-action-button" type="button" @click="emit('show-all')">Show all</button>
-        <button class="thread-type-menu-action-button" type="button" @click="emit('hide-all')">Hide all</button>
+        <button class="thread-type-menu-action-button" type="button" @click="emit('show-all')">{{ t('Show all') }}</button>
+        <button class="thread-type-menu-action-button" type="button" @click="emit('hide-all')">{{ t('Hide all') }}</button>
       </div>
 
-      <p v-if="types.length === 0" class="thread-type-menu-empty">No types yet</p>
+      <p v-if="types.length === 0" class="thread-type-menu-empty">{{ t('No types yet') }}</p>
 
       <label v-for="type in types" :key="type" class="thread-type-menu-option">
         <input
@@ -28,6 +28,7 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from 'vue'
+import { useUiLanguage } from '../../composables/useUiLanguage'
 import IconTablerSettings from '../icons/IconTablerSettings.vue'
 
 defineProps<{
@@ -44,6 +45,7 @@ const emit = defineEmits<{
 
 const isOpen = ref(false)
 const menuRootRef = ref<HTMLElement | null>(null)
+const { t } = useUiLanguage()
 
 function closeMenu(): void {
   isOpen.value = false

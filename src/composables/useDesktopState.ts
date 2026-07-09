@@ -5,6 +5,7 @@ import {
   forkThread,
   getAvailableCollaborationModes,
   getAccountRateLimits,
+  getCodexRuntimeConfig,
   renameThread,
   getAvailableModelIds,
   getCurrentModelConfig,
@@ -21,6 +22,7 @@ import {
   getThreadGroupsPage,
   getThreadQueueState,
   getWorkspaceRootsState,
+  setCodexRuntimeConfig,
   setCodexSpeedMode,
   setThreadQueueState,
   setWorkspaceRootsState,
@@ -32,6 +34,7 @@ import {
   startThread,
   subscribeCodexNotifications,
   startThreadTurn,
+  type CodexRuntimeConfig,
   type RpcNotification,
   type SkillInfo,
   type ThreadQueueState,
@@ -42,6 +45,7 @@ import { normalizeFileChangeStatus, toUiFileChanges } from '../api/normalizers/v
 import type {
   CollaborationModeKind,
   CollaborationModeOption,
+  CodexPermissionMode,
   CommandExecutionData,
   UiPendingRequestState,
   ReasoningEffort,
@@ -82,6 +86,7 @@ const PROJECT_ORDER_STORAGE_KEY = 'codex-web-local.project-order.v1'
 const PROJECT_DISPLAY_NAME_STORAGE_KEY = 'codex-web-local.project-display-name.v1'
 const COLLABORATION_MODE_STORAGE_KEY = 'codex-web-local.collaboration-mode-by-context.v1'
 const LEGACY_COLLABORATION_MODE_STORAGE_KEY = 'codex-web-local.collaboration-mode.v1'
+const CODEX_PERMISSION_MODE_STORAGE_KEY = 'codex-web-local.codex-permission-mode.v1'
 const NEW_THREAD_COLLABORATION_MODE_CONTEXT = '__new-thread__'
 const NEW_THREAD_PROVIDER_MODEL_CONTEXT_PREFIX = '__new-thread-provider__::'
 const EVENT_SYNC_DEBOUNCE_MS = 220
@@ -164,6 +169,73 @@ export function isThreadUnreadByLastRead(
 
 function normalizeCollaborationMode(value: unknown): CollaborationModeKind {
   return value === 'plan' ? 'plan' : 'default'
+}
+
+function normalizeCodexPermissionMode(value: unknown): CodexPermissionMode | null {
+  if (value === 'request-approval' || value === 'auto-approve' || value === 'full-access') {
+    return value
+  }
+  return null
+}
+
+function loadSelectedCodexPermissionMode(): CodexPermissionMode {
+  if (typeof window === 'undefined') return 'full-access'
+  try {
+    return normalizeCodexPermissionMode(window.localStorage.getItem(CODEX_PERMISSION_MODE_STORAGE_KEY)) ?? 'full-access'
+  } catch {
+    return 'full-access'
+  }
+}
+
+function hasStoredCodexPermissionMode(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return normalizeCodexPermissionMode(window.localStorage.getItem(CODEX_PERMISSION_MODE_STORAGE_KEY)) !== null
+  } catch {
+    return false
+  }
+}
+
+function saveSelectedCodexPermissionMode(mode: CodexPermissionMode): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(CODEX_PERMISSION_MODE_STORAGE_KEY, mode)
+  } catch {
+    // Keep in-memory mode selection working even if localStorage writes fail.
+  }
+}
+
+function clearSelectedCodexPermissionMode(): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(CODEX_PERMISSION_MODE_STORAGE_KEY)
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function codexPermissionModeToRuntimeConfig(
+  mode: CodexPermissionMode,
+): Pick<CodexRuntimeConfig, 'sandboxMode' | 'approvalPolicy'> {
+  if (mode === 'request-approval') {
+    return { sandboxMode: 'workspace-write', approvalPolicy: 'on-request' }
+  }
+  if (mode === 'auto-approve') {
+    return { sandboxMode: 'workspace-write', approvalPolicy: 'on-failure' }
+  }
+  return { sandboxMode: 'danger-full-access', approvalPolicy: 'never' }
+}
+
+function codexRuntimeConfigToPermissionMode(config: CodexRuntimeConfig): CodexPermissionMode {
+  if (config.approvalPolicy === 'on-request') return 'request-approval'
+  if (config.approvalPolicy === 'on-failure' || config.approvalPolicy === 'untrusted') return 'auto-approve'
+  if (config.sandboxMode === 'danger-full-access' && config.approvalPolicy === 'never') return 'full-access'
+  return 'auto-approve'
+}
+
+function runtimeConfigMatchesPermissionMode(config: CodexRuntimeConfig, mode: CodexPermissionMode): boolean {
+  const expected = codexPermissionModeToRuntimeConfig(mode)
+  return config.sandboxMode === expected.sandboxMode && config.approvalPolicy === expected.approvalPolicy
 }
 
 function normalizeStoredModelId(value: unknown): string {
@@ -1408,6 +1480,7 @@ export function useDesktopState() {
     skills: Array<{ name: string; path: string }>
     fileAttachments: FileAttachment[]
     collaborationMode: CollaborationModeKind
+    speedMode?: SpeedMode
   }
   type PendingTurnRequest = {
     text: string
@@ -1416,6 +1489,7 @@ export function useDesktopState() {
     fileAttachments: FileAttachment[]
     effort: ReasoningEffort | ''
     collaborationMode: CollaborationModeKind
+    speedMode: SpeedMode
     fallbackRetried: boolean
   }
   const queuedMessagesByThreadId = ref<Record<string, QueuedMessage[]>>({})
@@ -1437,6 +1511,7 @@ export function useDesktopState() {
   const selectedModelId = ref(readSelectedModel(selectedModelIdByContext.value, selectedThreadId.value))
   const selectedReasoningEffort = ref<ReasoningEffort | ''>('medium')
   const selectedSpeedMode = ref<SpeedMode>('standard')
+  const selectedCodexPermissionMode = ref<CodexPermissionMode>(loadSelectedCodexPermissionMode())
   const activeProviderId = ref('')
   const codexCliMissingError = ref('')
   const readStateByThreadId = ref<Record<string, string>>(loadReadStateMap())
@@ -1445,6 +1520,12 @@ export function useDesktopState() {
   const projectDisplayNameById = ref<Record<string, string>>(loadProjectDisplayNames())
   const loadedVersionByThreadId = ref<Record<string, string>>({})
   const loadedMessagesByThreadId = ref<Record<string, boolean>>({})
+
+  function serviceTierForSpeedMode(speedMode: SpeedMode | undefined): string | null | undefined {
+    if (speedMode === 'fast') return 'fast'
+    if (speedMode === 'standard') return null
+    return undefined
+  }
   const hasMoreOlderMessagesByThreadId = ref<Record<string, boolean>>({})
   const loadingOlderMessagesByThreadId = ref<Record<string, boolean>>({})
   const resumedThreadById = ref<Record<string, boolean>>({})
@@ -1474,6 +1555,7 @@ export function useDesktopState() {
   const isSendingMessage = ref(false)
   const isInterruptingTurn = ref(false)
   const isUpdatingSpeedMode = ref(false)
+  const isUpdatingPermissionMode = ref(false)
   const isRollingBack = ref(false)
 
   const error = ref('')
@@ -1537,6 +1619,7 @@ export function useDesktopState() {
   let shouldAutoScrollOnNextAgentEvent = false
   const pendingTurnStartsById = new Map<string, TurnStartedInfo>()
   const fallbackRetryInFlightThreadIds = new Set<string>()
+  let hasPersistedCodexPermissionMode = hasStoredCodexPermissionMode()
 
 
   const allThreads = computed(() => flattenThreads(projectGroups.value))
@@ -1909,6 +1992,7 @@ export function useDesktopState() {
         pending.skills.length > 0 ? pending.skills : undefined,
         pending.fileAttachments,
         pending.collaborationMode,
+        serviceTierForSpeedMode(pending.speedMode),
       )
 
       scheduleRateLimitRefresh()
@@ -1950,6 +2034,52 @@ export function useDesktopState() {
       error.value = unknownError instanceof Error ? unknownError.message : 'Failed to update Fast mode'
     } finally {
       isUpdatingSpeedMode.value = false
+    }
+  }
+
+  async function refreshCodexRuntimeConfig(): Promise<void> {
+    try {
+      const currentConfig = await getCodexRuntimeConfig()
+      if (!hasPersistedCodexPermissionMode) {
+        selectedCodexPermissionMode.value = codexRuntimeConfigToPermissionMode(currentConfig)
+        return
+      }
+
+      if (!runtimeConfigMatchesPermissionMode(currentConfig, selectedCodexPermissionMode.value)) {
+        await setCodexRuntimeConfig(codexPermissionModeToRuntimeConfig(selectedCodexPermissionMode.value))
+      }
+    } catch {
+      // Runtime config is best-effort; chat can still work with the server's current defaults.
+    }
+  }
+
+  async function updateSelectedCodexPermissionMode(mode: CodexPermissionMode): Promise<void> {
+    const nextMode = normalizeCodexPermissionMode(mode) ?? 'full-access'
+    if (isUpdatingPermissionMode.value || selectedCodexPermissionMode.value === nextMode) {
+      return
+    }
+
+    const previousMode = selectedCodexPermissionMode.value
+    const previousHadPersistedMode = hasPersistedCodexPermissionMode
+    selectedCodexPermissionMode.value = nextMode
+    saveSelectedCodexPermissionMode(nextMode)
+    hasPersistedCodexPermissionMode = true
+    isUpdatingPermissionMode.value = true
+    error.value = ''
+
+    try {
+      await setCodexRuntimeConfig(codexPermissionModeToRuntimeConfig(nextMode))
+    } catch (unknownError) {
+      selectedCodexPermissionMode.value = previousMode
+      hasPersistedCodexPermissionMode = previousHadPersistedMode
+      if (previousHadPersistedMode) {
+        saveSelectedCodexPermissionMode(previousMode)
+      } else {
+        clearSelectedCodexPermissionMode()
+      }
+      error.value = unknownError instanceof Error ? unknownError.message : 'Failed to update Codex permissions'
+    } finally {
+      isUpdatingPermissionMode.value = false
     }
   }
 
@@ -4192,6 +4322,7 @@ export function useDesktopState() {
           fsPath: attachment.fsPath,
         })),
         collaborationMode: message.collaborationMode,
+        ...(message.speedMode ? { speedMode: message.speedMode } : {}),
       }))
     }
     return next
@@ -4611,6 +4742,7 @@ export function useDesktopState() {
     const awaitAncillaryRefreshes = options.awaitAncillaryRefreshes === true
 
     try {
+      await refreshCodexRuntimeConfig()
       await loadPersistedQueueStateIfNeeded()
       await loadThreads({ force: options.forceThreadRefresh === true })
       if (includeSelectedThreadMessages) {
@@ -4845,12 +4977,14 @@ export function useDesktopState() {
     fileAttachments: FileAttachment[] = [],
     queueInsertIndex?: number,
     collaborationModeOverride?: CollaborationModeKind,
+    speedModeOverride?: SpeedMode,
   ): Promise<void> {
     if (isUpdatingSpeedMode.value) return
 
     const threadId = selectedThreadId.value
     const nextText = text.trim()
     if (!threadId || (!nextText && imageUrls.length === 0 && fileAttachments.length === 0)) return
+    const speedMode = speedModeOverride ?? selectedSpeedMode.value
 
     if (await maybeReplyToPendingUserInputRequest(threadId, nextText, imageUrls, skills, fileAttachments)) {
       return
@@ -4876,6 +5010,7 @@ export function useDesktopState() {
           : collaborationModeOverride === 'default'
             ? 'default'
             : selectedCollaborationMode.value,
+        speedMode,
       })
       queuedMessagesByThreadId.value = {
         ...queuedMessagesByThreadId.value,
@@ -4894,6 +5029,7 @@ export function useDesktopState() {
         skills,
         fileAttachments,
         collaborationModeOverride,
+        speedMode,
       ).catch((unknownError) => {
         const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
         setTurnErrorForThread(threadId, errorMessage)
@@ -4931,6 +5067,7 @@ export function useDesktopState() {
         skills,
         fileAttachments,
         collaborationModeOverride,
+        speedMode,
       )
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false
@@ -4956,6 +5093,7 @@ export function useDesktopState() {
     const targetCwd = cwd.trim()
     const selectedModel = readModelIdForThread(NEW_THREAD_COLLABORATION_MODE_CONTEXT).trim()
     const selectedMode = selectedCollaborationMode.value
+    const speedMode = selectedSpeedMode.value
     if (!nextText && imageUrls.length === 0 && fileAttachments.length === 0) return ''
 
     isSendingMessage.value = true
@@ -4964,7 +5102,7 @@ export function useDesktopState() {
 
     try {
       try {
-        const startedThread = await startThread(targetCwd || undefined, selectedModel || undefined)
+        const startedThread = await startThread(targetCwd || undefined, selectedModel || undefined, serviceTierForSpeedMode(speedMode))
         threadId = startedThread.threadId
         setThreadModelId(threadId, startedThread.model)
         setThreadModelProviderId(threadId, startedThread.modelProvider || activeProviderId.value)
@@ -4972,7 +5110,7 @@ export function useDesktopState() {
       } catch (unknownError) {
         if (selectedModel && selectedModel !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
           await applyFallbackModelSelection()
-          const fallbackThread = await startThread(targetCwd || undefined, MODEL_FALLBACK_ID)
+          const fallbackThread = await startThread(targetCwd || undefined, MODEL_FALLBACK_ID, serviceTierForSpeedMode(speedMode))
           threadId = fallbackThread.threadId
           setThreadModelId(threadId, fallbackThread.model)
           setThreadModelProviderId(threadId, fallbackThread.modelProvider || activeProviderId.value)
@@ -5009,7 +5147,7 @@ export function useDesktopState() {
       const capturedThreadId = threadId
       const capturedCwd = targetCwd || null
       const capturedPrompt = nextText
-      void startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, selectedMode)
+      void startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, selectedMode, speedMode)
         .catch((unknownError) => {
           shouldAutoScrollOnNextAgentEvent = false
           setThreadInProgress(threadId, false)
@@ -5046,8 +5184,10 @@ export function useDesktopState() {
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
     collaborationModeOverride?: CollaborationModeKind,
+    speedModeOverride?: SpeedMode,
   ): Promise<void> {
     const reasoningEffort = selectedReasoningEffort.value
+    const speedMode = speedModeOverride ?? selectedSpeedMode.value
     const collaborationMode = collaborationModeOverride === 'plan' ? 'plan' : collaborationModeOverride === 'default'
       ? 'default'
       : selectedCollaborationMode.value
@@ -5072,6 +5212,7 @@ export function useDesktopState() {
       fileAttachments: normalizedFileAttachments,
       effort: reasoningEffort,
       collaborationMode,
+      speedMode,
       fallbackRetried: false,
     })
 
@@ -5102,6 +5243,7 @@ export function useDesktopState() {
           skills.length > 0 ? skills : undefined,
           fileAttachments,
           collaborationMode,
+          serviceTierForSpeedMode(speedMode),
         )
       } catch (unknownError) {
         if (modelId && modelId !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
@@ -5113,6 +5255,7 @@ export function useDesktopState() {
             fileAttachments: normalizedFileAttachments,
             effort: reasoningEffort,
             collaborationMode,
+            speedMode,
             fallbackRetried: true,
           })
           startedTurnId = await startThreadTurn(
@@ -5124,6 +5267,7 @@ export function useDesktopState() {
             skills.length > 0 ? skills : undefined,
             fileAttachments,
             collaborationMode,
+            serviceTierForSpeedMode(speedMode),
           )
         } else {
           throw unknownError
@@ -5654,7 +5798,7 @@ export function useDesktopState() {
     if (!msg) return
     removeQueuedMessage(messageId)
     setSelectedCollaborationMode(msg.collaborationMode)
-    void sendMessageToSelectedThread(msg.text, msg.imageUrls, msg.skills, 'steer', msg.fileAttachments)
+    void sendMessageToSelectedThread(msg.text, msg.imageUrls, msg.skills, 'steer', msg.fileAttachments, undefined, msg.collaborationMode, msg.speedMode)
   }
 
   function primeSelectedThread(threadId: string, options: { persist?: boolean } = {}): void {
@@ -5678,6 +5822,7 @@ export function useDesktopState() {
     selectedModelId,
     selectedReasoningEffort,
     selectedSpeedMode,
+    selectedCodexPermissionMode,
     codexCliMissingError,
     installedSkills,
     accountRateLimitSnapshots,
@@ -5690,6 +5835,7 @@ export function useDesktopState() {
     isSendingMessage,
     isInterruptingTurn,
     isUpdatingSpeedMode,
+    isUpdatingPermissionMode,
     isRollingBack,
 
     error,
@@ -5721,6 +5867,7 @@ export function useDesktopState() {
 
     setSelectedReasoningEffort,
     updateSelectedSpeedMode,
+    updateSelectedCodexPermissionMode,
     respondToPendingServerRequest,
     renameProject,
     removeProject,

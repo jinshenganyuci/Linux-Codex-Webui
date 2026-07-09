@@ -12,7 +12,13 @@ import { createInterface } from 'node:readline'
 import { once } from 'node:events'
 import { writeFile } from 'node:fs/promises'
 import { handleAccountRoutes } from './accountRoutes.js'
-import { buildAppServerArgs } from './appServerRuntimeConfig.js'
+import {
+  buildAppServerArgs,
+  parseApprovalPolicy,
+  parseSandboxMode,
+  resolveAppServerRuntimeConfig,
+  updateAppServerRuntimeConfig,
+} from './appServerRuntimeConfig.js'
 import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js'
 import { handleReviewRoutes } from './reviewGit.js'
 import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoutes.js'
@@ -5532,6 +5538,7 @@ type StoredQueuedMessage = {
   skills: Array<{ name: string; path: string }>
   fileAttachments: Array<{ label: string; path: string; fsPath: string }>
   collaborationMode: 'default' | 'plan'
+  speedMode?: 'standard' | 'fast'
 }
 
 type ThreadQueueState = Record<string, StoredQueuedMessage[]>
@@ -5588,6 +5595,7 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
     skills: normalizeNamedPathItems(record.skills),
     fileAttachments: normalizeFileAttachments(record.fileAttachments),
     collaborationMode: record.collaborationMode === 'plan' ? 'plan' : 'default',
+    ...(record.speedMode === 'fast' || record.speedMode === 'standard' ? { speedMode: record.speedMode } : {}),
   }
 }
 
@@ -6844,7 +6852,7 @@ class AppServerProcess {
 
     this.initializePromise = this.call('initialize', {
       clientInfo: {
-        name: 'codex-web-local',
+        name: 'linux-codex-webui',
         version: '0.1.0',
       },
       capabilities: {
@@ -7171,6 +7179,11 @@ export class BackendQueueProcessor {
       threadId: turn.threadId,
       input,
     }
+    if (turn.message.speedMode === 'fast') {
+      params.serviceTier = 'fast'
+    } else if (turn.message.speedMode === 'standard') {
+      params.serviceTier = null
+    }
     if (dedupedFileAttachments.length > 0) {
       params.attachments = dedupedFileAttachments.map((f) => ({ label: f.label, path: f.path, fsPath: f.fsPath }))
     }
@@ -7281,7 +7294,7 @@ class MethodCatalog {
       return this.methodCache
     }
 
-    const outDir = await mkdtemp(join(tmpdir(), 'codex-web-local-schema-'))
+    const outDir = await mkdtemp(join(tmpdir(), 'linux-codex-webui-schema-'))
     await this.runGenerateSchemaCommand(outDir)
 
     const clientRequestPath = join(outDir, 'ClientRequest.json')
@@ -7298,7 +7311,7 @@ class MethodCatalog {
       return this.notificationCache
     }
 
-    const outDir = await mkdtemp(join(tmpdir(), 'codex-web-local-schema-'))
+    const outDir = await mkdtemp(join(tmpdir(), 'linux-codex-webui-schema-'))
     await this.runGenerateSchemaCommand(outDir)
 
     const serverNotificationPath = join(outDir, 'ServerNotification.json')
@@ -7916,6 +7929,38 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'POST' && url.pathname === '/codex-api/upload-file') {
         handleFileUpload(req, res)
+        return
+      }
+
+      if (url.pathname === '/codex-api/runtime-config') {
+        if (req.method === 'GET') {
+          setJson(res, 200, resolveAppServerRuntimeConfig())
+          return
+        }
+
+        if (req.method === 'PUT') {
+          const body = asRecord(await readJsonBody(req))
+          const sandboxModeInput = readNonEmptyString(body?.sandboxMode)
+          const approvalPolicyInput = readNonEmptyString(body?.approvalPolicy)
+          const sandboxMode = sandboxModeInput ? parseSandboxMode(sandboxModeInput) : null
+          const approvalPolicy = approvalPolicyInput ? parseApprovalPolicy(approvalPolicyInput) : null
+
+          if (!body || !sandboxModeInput || !sandboxMode) {
+            setJson(res, 400, { error: 'Invalid sandboxMode' })
+            return
+          }
+          if (!approvalPolicyInput || !approvalPolicy) {
+            setJson(res, 400, { error: 'Invalid approvalPolicy' })
+            return
+          }
+
+          const nextConfig = updateAppServerRuntimeConfig({ sandboxMode, approvalPolicy })
+          appServer.dispose()
+          setJson(res, 200, nextConfig)
+          return
+        }
+
+        setJson(res, 405, { error: 'Method not allowed' })
         return
       }
 

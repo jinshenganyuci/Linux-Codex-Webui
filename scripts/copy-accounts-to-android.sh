@@ -3,7 +3,7 @@ set -euo pipefail
 
 LOCAL_CODEX_HOME="${LOCAL_CODEX_HOME:-$HOME/.codex}"
 REMOTE_CODEX_HOME="${REMOTE_CODEX_HOME:-~/.codex}"
-SSH_HELPER="${SSH_HELPER:-/Users/igor/Git-projects/codex-web-local-android/andclaw/ssh.sh}"
+SSH_HELPER="${SSH_HELPER:-/Users/igor/Git-projects/linux-codex-webui-android/andclaw/ssh.sh}"
 SSH_MODE_VALUE="${SSH_MODE:-auto}"
 
 usage() {

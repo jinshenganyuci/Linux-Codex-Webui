@@ -192,7 +192,7 @@
                         {{ formatAccountQuota(account) }}
                       </p>
                       <p class="sidebar-settings-account-id">
-                        Workspace {{ shortAccountId(account.accountId) }}
+                        {{ t('Workspace') }} {{ shortAccountId(account.accountId) }}
                       </p>
                     </div>
                     <div class="sidebar-settings-account-actions">
@@ -475,18 +475,6 @@
                   </button>
                 </div>
               </div>
-              <div
-                v-if="showThreadContextBadge"
-                class="sidebar-settings-row sidebar-settings-context-row"
-                :data-state="threadContextBadgeState"
-                :title="threadContextTooltip"
-              >
-                <span class="sidebar-settings-label">{{ t('Context') }}</span>
-                <span class="sidebar-settings-context-value" :data-state="threadContextBadgeState">
-                  {{ threadContextPrimaryText }}
-                  <span class="sidebar-settings-context-meta">{{ threadContextSecondaryText }}</span>
-                </span>
-              </div>
               <div class="sidebar-settings-rate-limits">
                 <RateLimitStatus :snapshots="accountRateLimitSnapshots" />
               </div>
@@ -638,7 +626,7 @@
                     @change="onDirectProjectImportFileChange"
                   />
                 </div>
-                <section v-if="showFirstLaunchPluginsCard" class="new-thread-launch-card" aria-label="Plugins and Apps announcement">
+                <section v-if="showFirstLaunchPluginsCard" class="new-thread-launch-card" :aria-label="t('Plugins and Apps announcement')">
                   <div class="new-thread-launch-card-copy">
                     <div class="new-thread-launch-card-topline">
                       <span class="new-thread-launch-card-badge" aria-hidden="true">
@@ -650,7 +638,7 @@
                     <p class="new-thread-launch-card-text">
                       {{ t('Hook Codex up to Gmail, Calendar, GitHub, Slack, Browser Use, and more so it can actually help with real work right away.') }}
                     </p>
-                    <div class="new-thread-launch-card-pills" aria-label="Example integrations">
+                    <div class="new-thread-launch-card-pills" :aria-label="t('Example integrations')">
                       <span class="new-thread-launch-card-pill">Gmail</span>
                       <span class="new-thread-launch-card-pill">Calendar</span>
                       <span class="new-thread-launch-card-pill">GitHub</span>
@@ -947,7 +935,9 @@
                   :models="availableModelIds" :selected-model="composerSelectedModelId"
                   :selected-reasoning-effort="selectedReasoningEffort"
                   :selected-speed-mode="selectedSpeedMode"
+                  :selected-codex-permission-mode="selectedCodexPermissionMode"
                   :is-updating-speed-mode="isUpdatingSpeedMode"
+                  :is-updating-permission-mode="isUpdatingPermissionMode"
                   :skills="installedSkills"
                   :thread-token-usage="selectedThreadTokenUsage"
                   :codex-quota="codexQuota"
@@ -960,7 +950,8 @@
                   @update:selected-collaboration-mode="onSelectCollaborationMode"
                   @update:selected-model="onSelectModel"
                   @update:selected-reasoning-effort="onSelectReasoningEffort"
-                  @update:selected-speed-mode="onSelectSpeedMode" />
+                  @update:selected-speed-mode="onSelectSpeedMode"
+                  @update:selected-codex-permission-mode="onSelectCodexPermissionMode" />
               </div>
             </div>
           </template>
@@ -1020,7 +1011,6 @@
                     @respond-server-request="onRespondServerRequest"
                   />
                   <ThreadComposer
-                    v-else
                     ref="threadComposerRef"
                     :active-thread-id="composerThreadContextId"
                     :cwd="composerCwd"
@@ -1030,14 +1020,16 @@
                     :selected-model="composerSelectedModelId"
                     :selected-reasoning-effort="selectedReasoningEffort"
                     :selected-speed-mode="selectedSpeedMode"
+                    :selected-codex-permission-mode="selectedCodexPermissionMode"
                     :is-updating-speed-mode="isUpdatingSpeedMode"
+                    :is-updating-permission-mode="isUpdatingPermissionMode"
                     :skills="installedSkills"
                     :thread-token-usage="selectedThreadTokenUsage"
                     :codex-quota="codexQuota"
                     :is-turn-in-progress="isSelectedThreadInProgress"
                     :is-stop-pending="isSelectedThreadInterruptPending"
                     :is-interrupting-turn="isInterruptingTurn"
-                    :has-queue-above="selectedThreadQueuedMessages.length > 0"
+                    :has-queue-above="selectedThreadQueuedMessages.length > 0 || Boolean(selectedThreadPendingRequest)"
                     :send-with-enter="sendWithEnter" :in-progress-submit-mode="inProgressSendMode"
                     :dictation-click-to-toggle="dictationClickToToggle" :dictation-auto-send="dictationAutoSend"
                     :dictation-language="dictationLanguage"
@@ -1045,6 +1037,7 @@
                     @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
                     @update:selected-reasoning-effort="onSelectReasoningEffort"
                     @update:selected-speed-mode="onSelectSpeedMode"
+                    @update:selected-codex-permission-mode="onSelectCodexPermissionMode"
                     @interrupt="onInterruptTurn" />
                 </div>
               </template>
@@ -1225,7 +1218,7 @@ import {
   searchThreads,
   switchAccount,
 } from './api/codexGateway'
-import type { ReasoningEffort, SpeedMode, UiAccountEntry, UiRateLimitWindow, UiServerRequest, UiServerRequestReply, UiThreadAutomation, UiThreadTokenUsage } from './types/codex'
+import type { CodexPermissionMode, ReasoningEffort, SpeedMode, UiAccountEntry, UiRateLimitWindow, UiServerRequest, UiServerRequestReply, UiThreadAutomation } from './types/codex'
 import type { ComposerDraftPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
 import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, TelegramStatus, ThreadTerminalQuickCommand, WorktreeBranchOption } from './api/codexGateway'
 import { getFreeModeStatus, setFreeMode, setFreeModeCustomKey, setCustomProvider } from './api/codexGateway'
@@ -1422,6 +1415,7 @@ const {
   selectedModelId,
   selectedReasoningEffort,
   selectedSpeedMode,
+  selectedCodexPermissionMode,
   codexCliMissingError,
   installedSkills,
   accountRateLimitSnapshots,
@@ -1435,6 +1429,7 @@ const {
   isInterruptingTurn,
   isSelectedThreadInterruptPending,
   isUpdatingSpeedMode,
+  isUpdatingPermissionMode,
   error: desktopError,
   refreshAll,
   refreshSkills,
@@ -1460,6 +1455,7 @@ const {
 
   setSelectedReasoningEffort,
   updateSelectedSpeedMode,
+  updateSelectedCodexPermissionMode,
   respondToPendingServerRequest,
   renameProject,
   removeProject,
@@ -1743,8 +1739,8 @@ const contentTitle = computed(() => {
 })
 const browserHostName =
   typeof window !== 'undefined'
-    ? (window.location.hostname || window.location.host || 'codexui')
-    : 'codexui'
+    ? (window.location.hostname || window.location.host || 'Linux-Codex-Webui')
+    : 'Linux-Codex-Webui'
 const pageTitle = computed(() => {
   const threadTitle = selectedThread.value?.title?.trim() ?? ''
   return threadTitle || browserHostName
@@ -1801,41 +1797,12 @@ const isTerminalKeyboardLayoutActive = computed(() => (
 ))
 const directoryCwd = computed(() => selectedThread.value?.cwd?.trim() ?? newThreadCwd.value.trim())
 const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThread.value?.inProgress === true)
-const showThreadContextBadge = computed(() => !isHomeRoute.value && !isSkillsRoute.value && !isAutomationsRoute.value && selectedThreadId.value.trim().length > 0)
 const isAccountSwitchBlocked = computed(() =>
   isSendingMessage.value ||
   isInterruptingTurn.value ||
   isSelectedThreadInProgress.value ||
   selectedThreadServerRequests.value.length > 0,
 )
-
-function formatCompactTokenCount(value: number): string {
-  if (!Number.isFinite(value)) return '0'
-  return new Intl.NumberFormat('en-US', {
-    notation: value >= 1000 ? 'compact' : 'standard',
-    maximumFractionDigits: value >= 100000 ? 0 : 1,
-  }).format(Math.max(0, Math.trunc(value)))
-}
-
-function buildThreadContextTooltip(usage: UiThreadTokenUsage | null): string {
-  if (!usage) {
-    return t('Waiting for Codex thread/tokenUsage/updated events for this thread.')
-  }
-
-  const lines = [
-    `${t('Current context usage')}: ${usage.currentContextTokens.toLocaleString()} ${t('tokens')}`,
-    `${t('Cumulative thread usage')}: ${usage.total.totalTokens.toLocaleString()} ${t('tokens')}`,
-  ]
-
-  if (typeof usage.modelContextWindow === 'number') {
-    lines.unshift(`${t('Model context window')}: ${usage.modelContextWindow.toLocaleString()} ${t('tokens')}`)
-    lines.push(`${t('Remaining context')}: ${(usage.remainingContextTokens ?? 0).toLocaleString()} ${t('tokens')}`)
-  } else {
-    lines.push(t('Model context window is unavailable in the latest usage event.'))
-  }
-
-  return lines.join('\n')
-}
 
 function dismissFirstLaunchPluginsCard(): void {
   if (!showFirstLaunchPluginsCard.value) return
@@ -1847,34 +1814,6 @@ function onOpenPluginsHomeCard(): void {
   dismissFirstLaunchPluginsCard()
   void router.push({ name: 'skills', query: { tab: 'plugins' } })
 }
-
-const threadContextBadgeState = computed(() => {
-  const remainingPercent = selectedThreadTokenUsage.value?.remainingContextPercent
-  if (remainingPercent === null || typeof remainingPercent !== 'number') return 'pending'
-  if (remainingPercent <= 10) return 'danger'
-  if (remainingPercent <= 25) return 'warning'
-  return 'ok'
-})
-
-const threadContextPrimaryText = computed(() => {
-  const usage = selectedThreadTokenUsage.value
-  if (!usage) return t('Awaiting data')
-  if (typeof usage.remainingContextTokens === 'number') {
-    return `${formatCompactTokenCount(usage.remainingContextTokens)} ${t('left')}`
-  }
-  return `${formatCompactTokenCount(usage.currentContextTokens)} ${t('used')}`
-})
-
-const threadContextSecondaryText = computed(() => {
-  const usage = selectedThreadTokenUsage.value
-  if (!usage) return t('Updates after the next token usage event')
-  if (typeof usage.modelContextWindow === 'number') {
-    return `${formatCompactTokenCount(usage.currentContextTokens)} ${t('used')} / ${formatCompactTokenCount(usage.modelContextWindow)}`
-  }
-  return t('Window size unavailable')
-})
-
-const threadContextTooltip = computed(() => buildThreadContextTooltip(selectedThreadTokenUsage.value))
 
 function hasDuplicateFolderLeaf(path: string, knownPaths: string[]): boolean {
   const normalizedPath = normalizePathForUi(path).trim()
@@ -4170,6 +4109,10 @@ function onSelectSpeedMode(mode: SpeedMode): void {
   void updateSelectedSpeedMode(mode)
 }
 
+function onSelectCodexPermissionMode(mode: CodexPermissionMode): void {
+  void updateSelectedCodexPermissionMode(mode)
+}
+
 function onInterruptTurn(): void {
   void interruptSelectedThreadTurn()
 }
@@ -6085,30 +6028,6 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 
 :root.dark .project-zip-progress-fill {
   @apply bg-emerald-500;
-}
-
-.sidebar-settings-context-row {
-  @apply cursor-default;
-}
-
-.sidebar-settings-context-value {
-  @apply text-xs font-semibold text-zinc-700 text-right;
-}
-
-.sidebar-settings-context-value[data-state='ok'] {
-  @apply text-emerald-700;
-}
-
-.sidebar-settings-context-value[data-state='warning'] {
-  @apply text-amber-700;
-}
-
-.sidebar-settings-context-value[data-state='danger'] {
-  @apply text-rose-700;
-}
-
-.sidebar-settings-context-meta {
-  @apply block text-[11px] font-normal text-zinc-500;
 }
 
 .sidebar-settings-rate-limits {

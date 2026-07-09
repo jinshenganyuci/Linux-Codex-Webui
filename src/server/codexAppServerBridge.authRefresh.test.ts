@@ -29,7 +29,7 @@ function unsignedJwt(payload: unknown): string {
 }
 
 async function createCodexHome(auth: unknown): Promise<string> {
-  const codexHome = await mkdtemp(join(tmpdir(), 'codexui-auth-refresh-'))
+  const codexHome = await mkdtemp(join(tmpdir(), 'linux-codex-webui-auth-refresh-'))
   tempDirs.push(codexHome)
   await writeFile(join(codexHome, 'auth.json'), JSON.stringify(auth, null, 2), 'utf8')
   process.env.CODEX_HOME = codexHome

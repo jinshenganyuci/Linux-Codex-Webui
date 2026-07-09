@@ -855,7 +855,7 @@ async function buildReviewSummary(cwd: string, workspaceView: ReviewWorkspaceVie
 }
 
 async function writePatchFile(patch: string): Promise<string> {
-  const dir = await mkdir(join(tmpdir(), 'codexui-review-patches'), { recursive: true }).then(() => join(tmpdir(), 'codexui-review-patches'))
+  const dir = await mkdir(join(tmpdir(), 'linux-codex-webui-review-patches'), { recursive: true }).then(() => join(tmpdir(), 'linux-codex-webui-review-patches'))
   const filePath = join(dir, `${Date.now()}-${Math.random().toString(16).slice(2)}.patch`)
   const normalizedPatch = patch.endsWith('\n') ? patch : `${patch}\n`
   await writeFile(filePath, normalizedPatch, 'utf8')

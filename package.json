@@ -1,18 +1,10 @@
 {
-  "name": "codexapp",
+  "name": "linux-codex-webui",
   "version": "0.1.87",
-  "description": "A lightweight web interface for Codex that runs on top of the Codex app-server, allowing remote access from any browser",
+  "description": "Linux-focused Chinese web interface for Codex app-server workflows",
   "type": "module",
   "license": "MIT",
   "author": "Pavel Voronin, Igor Levochkin",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/friuns2/codexui.git"
-  },
-  "homepage": "https://github.com/friuns2/codexui#readme",
-  "bugs": {
-    "url": "https://github.com/friuns2/codexui/issues"
-  },
   "publishConfig": {
     "access": "public"
   },
@@ -27,8 +19,7 @@
     "node": ">=18"
   },
   "bin": {
-    "codexapp": "dist-cli/index.js",
-    "codexui": "dist-cli/index.js"
+    "linux-codex-webui": "dist-cli/index.js"
   },
   "files": [
     "dist/",

@@ -14,7 +14,7 @@ const APPROVAL_POLICIES = new Set([
 export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
 export type CodexApprovalPolicy = 'untrusted' | 'on-failure' | 'on-request' | 'never'
 
-type AppServerRuntimeConfig = {
+export type AppServerRuntimeConfig = {
   sandboxMode: CodexSandboxMode
   approvalPolicy: CodexApprovalPolicy
   memories: boolean
@@ -86,4 +86,16 @@ export function parseSandboxMode(value: string): CodexSandboxMode | null {
 export function parseApprovalPolicy(value: string): CodexApprovalPolicy | null {
   const candidate = value.trim().toLowerCase()
   return APPROVAL_POLICIES.has(candidate as CodexApprovalPolicy) ? candidate as CodexApprovalPolicy : null
+}
+
+export function updateAppServerRuntimeConfig(
+  nextConfig: Partial<Pick<AppServerRuntimeConfig, 'sandboxMode' | 'approvalPolicy'>>,
+): AppServerRuntimeConfig {
+  if (nextConfig.sandboxMode !== undefined) {
+    process.env.CODEXUI_SANDBOX_MODE = nextConfig.sandboxMode
+  }
+  if (nextConfig.approvalPolicy !== undefined) {
+    process.env.CODEXUI_APPROVAL_POLICY = nextConfig.approvalPolicy
+  }
+  return resolveAppServerRuntimeConfig()
 }

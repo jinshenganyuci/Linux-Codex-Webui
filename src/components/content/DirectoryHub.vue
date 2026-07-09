@@ -2,17 +2,17 @@
   <div class="directory-hub">
     <div class="directory-header">
       <div>
-        <h2 class="directory-title">Skills & Apps</h2>
-        <p class="directory-subtitle">{{ activeCopy.subtitle }}</p>
+        <h2 class="directory-title">{{ t('Skills & Apps') }}</h2>
+        <p class="directory-subtitle">{{ t(activeCopy.subtitle) }}</p>
       </div>
       <div class="directory-header-actions">
         <button class="directory-refresh" type="button" :disabled="isManualRefreshInFlight" @click="manualRefreshActiveTab">
-          {{ isManualRefreshInFlight ? 'Refreshing...' : 'Refresh' }}
+          {{ isManualRefreshInFlight ? t('Refreshing...') : t('Refresh') }}
         </button>
       </div>
     </div>
 
-    <div class="directory-tabs" role="tablist" aria-label="Directory sections">
+    <div class="directory-tabs" role="tablist" :aria-label="t('Directory sections')">
       <button
         v-for="tab in tabs"
         :key="tab.id"
@@ -23,7 +23,7 @@
         :aria-selected="activeTab === tab.id"
         @click="activeTab = tab.id"
       >
-        {{ tab.label }}
+        {{ t(tab.label) }}
       </button>
     </div>
 
@@ -35,17 +35,17 @@
           v-model="pluginSearchQuery"
           class="directory-search"
           type="search"
-          placeholder="Search plugins..."
-          aria-label="Search plugins"
+          :placeholder="t('Search plugins...')"
+          :aria-label="t('Search plugins')"
         />
-        <div class="directory-sort-group" role="group" aria-label="Sort plugins">
+        <div class="directory-sort-group" role="group" :aria-label="t('Sort plugins')">
           <button
             class="directory-sort-button"
             :class="{ 'is-active': pluginSortMode === 'popular' }"
             type="button"
             @click="pluginSortMode = 'popular'"
           >
-            Popular
+            {{ t('Popular') }}
           </button>
           <button
             class="directory-sort-button"
@@ -53,7 +53,7 @@
             type="button"
             @click="pluginSortMode = 'name'"
           >
-            A-Z
+            {{ t('A-Z') }}
           </button>
           <button
             class="directory-sort-button"
@@ -61,16 +61,16 @@
             type="button"
             @click="pluginSortMode = 'date'"
           >
-            Date
+            {{ t('Date') }}
           </button>
         </div>
       </div>
       <div v-if="!supportsPlugins" class="directory-empty">
-        Plugin APIs unavailable in this Codex CLI. Update Codex CLI to use plugin catalog features.
+        {{ t('Plugin APIs unavailable in this Codex CLI. Update Codex CLI to use plugin catalog features.') }}
       </div>
       <div v-else-if="pluginError" class="directory-error">{{ pluginError }}</div>
-      <div v-else-if="isLoadingPlugins" class="directory-loading">Loading plugins...</div>
-      <div v-else-if="visiblePlugins.length === 0" class="directory-empty">No plugins found.</div>
+      <div v-else-if="isLoadingPlugins" class="directory-loading">{{ t('Loading plugins...') }}</div>
+      <div v-else-if="visiblePlugins.length === 0" class="directory-empty">{{ t('No plugins found.') }}</div>
       <div v-else class="directory-grid">
         <button
           v-for="plugin in visiblePlugins"
@@ -94,10 +94,10 @@
             <div class="directory-card-main">
               <div class="directory-card-title-row">
                 <span class="directory-card-title">{{ plugin.displayName }}</span>
-                <span v-if="plugin.installed && !plugin.enabled" class="directory-badge is-muted">Disabled</span>
-                <span v-else-if="plugin.installed" class="directory-badge">Installed</span>
+                <span v-if="plugin.installed && !plugin.enabled" class="directory-badge is-muted">{{ t('Disabled') }}</span>
+                <span v-else-if="plugin.installed" class="directory-badge">{{ t('Installed') }}</span>
               </div>
-              <span class="directory-card-meta">{{ plugin.developerName || plugin.marketplaceDisplayName || plugin.marketplaceName || 'Plugin' }}</span>
+              <span class="directory-card-meta">{{ plugin.developerName || plugin.marketplaceDisplayName || plugin.marketplaceName || t('Plugin') }}</span>
             </div>
           </div>
           <p v-if="plugin.description" class="directory-card-description">{{ plugin.description }}</p>
@@ -115,17 +115,17 @@
           v-model="appSearchQuery"
           class="directory-search"
           type="search"
-          placeholder="Search apps..."
-          aria-label="Search apps"
+          :placeholder="t('Search apps...')"
+          :aria-label="t('Search apps')"
         />
-        <div class="directory-sort-group" role="group" aria-label="Sort apps">
+        <div class="directory-sort-group" role="group" :aria-label="t('Sort apps')">
           <button
             class="directory-sort-button"
             :class="{ 'is-active': appSortMode === 'popular' }"
             type="button"
             @click="appSortMode = 'popular'"
           >
-            Popular
+            {{ t('Popular') }}
           </button>
           <button
             class="directory-sort-button"
@@ -133,7 +133,7 @@
             type="button"
             @click="appSortMode = 'name'"
           >
-            A-Z
+            {{ t('A-Z') }}
           </button>
           <button
             class="directory-sort-button"
@@ -141,16 +141,16 @@
             type="button"
             @click="appSortMode = 'date'"
           >
-            Date
+            {{ t('Date') }}
           </button>
         </div>
       </div>
       <div v-if="!supportsApps" class="directory-empty">
-        Apps APIs unavailable in this Codex CLI. Update Codex CLI to manage apps.
+        {{ t('Apps APIs unavailable in this Codex CLI. Update Codex CLI to manage apps.') }}
       </div>
       <div v-else-if="appError" class="directory-error">{{ appError }}</div>
-      <div v-else-if="isLoadingApps" class="directory-loading">Loading apps...</div>
-      <div v-else-if="visibleApps.length === 0" class="directory-empty">No apps found.</div>
+      <div v-else-if="isLoadingApps" class="directory-loading">{{ t('Loading apps...') }}</div>
+      <div v-else-if="visibleApps.length === 0" class="directory-empty">{{ t('No apps found.') }}</div>
       <div v-else class="directory-grid">
         <article v-for="app in visibleApps" :key="app.id" class="directory-card">
           <div class="directory-card-top">
@@ -159,8 +159,8 @@
             <div class="directory-card-main">
               <div class="directory-card-title-row">
                 <span class="directory-card-title">{{ app.name }}</span>
-                <span v-if="!app.isEnabled" class="directory-badge is-muted">Disabled</span>
-                <span v-else-if="app.isAccessible" class="directory-badge">Connected</span>
+                <span v-if="!app.isEnabled" class="directory-badge is-muted">{{ t('Disabled') }}</span>
+                <span v-else-if="app.isAccessible" class="directory-badge">{{ t('Connected') }}</span>
               </div>
               <span class="directory-card-meta">{{ appMetaLabel(app) }}</span>
             </div>
@@ -172,10 +172,10 @@
           </div>
           <div class="directory-card-actions">
             <button class="directory-action" type="button" :disabled="appActionId === app.id" @click="toggleApp(app)">
-              {{ app.isEnabled ? 'Disable' : 'Enable' }}
+              {{ app.isEnabled ? t('Disable') : t('Enable') }}
             </button>
             <button v-if="app.installUrl" class="directory-action-link" type="button" @click="openExternalUrl(app.installUrl)">
-              {{ app.isAccessible ? 'Manage' : 'Login' }}
+              {{ app.isAccessible ? t('Manage') : t('Login') }}
             </button>
             <button
               v-if="app.isAccessible && app.isEnabled"
@@ -184,7 +184,7 @@
               :disabled="isTryActionInFlight"
               @click="tryApp(app)"
             >
-              {{ props.tryInFlightKey === appTryKey(app) ? 'Starting...' : 'Try it!' }}
+              {{ props.tryInFlightKey === appTryKey(app) ? t('Starting...') : t('Try it!') }}
             </button>
           </div>
         </article>
@@ -197,17 +197,17 @@
           v-model="composioSearchQuery"
           class="directory-search"
           type="search"
-          placeholder="Search Composio connectors..."
-          aria-label="Search Composio connectors"
+          :placeholder="t('Search Composio connectors...')"
+          :aria-label="t('Search Composio connectors')"
         />
-        <div class="directory-sort-group" role="group" aria-label="Sort Composio connectors">
+        <div class="directory-sort-group" role="group" :aria-label="t('Sort Composio connectors')">
           <button
             class="directory-sort-button"
             :class="{ 'is-active': composioSortMode === 'popular' }"
             type="button"
             @click="composioSortMode = 'popular'"
           >
-            Popular
+            {{ t('Popular') }}
           </button>
           <button
             class="directory-sort-button"
@@ -215,7 +215,7 @@
             type="button"
             @click="composioSortMode = 'name'"
           >
-            A-Z
+            {{ t('A-Z') }}
           </button>
           <button
             class="directory-sort-button"
@@ -223,18 +223,18 @@
             type="button"
             @click="composioSortMode = 'date'"
           >
-            Date
+            {{ t('Date') }}
           </button>
         </div>
       </div>
       <div v-if="composioError" class="directory-error">{{ composioError }}</div>
-      <div v-else-if="isLoadingComposio" class="directory-loading">Loading Composio connectors...</div>
+      <div v-else-if="isLoadingComposio" class="directory-loading">{{ t('Loading Composio connectors...') }}</div>
       <div v-else-if="!composioStatus?.available" class="directory-empty">
         <div class="directory-empty-copy">
-          <p class="directory-empty-text">Composio CLI is not installed in this environment.</p>
+          <p class="directory-empty-text">{{ t('Composio CLI is not installed in this environment.') }}</p>
           <div class="directory-card-actions">
             <button class="directory-action primary" type="button" :disabled="isInstallingComposio" @click="installComposioCli">
-              {{ isInstallingComposio ? 'Installing...' : 'Install Composio' }}
+              {{ isInstallingComposio ? t('Installing...') : t('Install Composio') }}
             </button>
           </div>
         </div>
@@ -244,19 +244,19 @@
           <div class="composio-preview-copy">
             <div class="directory-card-fallback composio-fallback">C</div>
             <div>
-              <p class="composio-preview-kicker">Connector catalog preview</p>
-              <h3 class="composio-preview-title">Connect everyday apps like Gmail, Calendar, Reddit, YouTube, and Drive.</h3>
+              <p class="composio-preview-kicker">{{ t('Connector catalog preview') }}</p>
+              <h3 class="composio-preview-title">{{ t('Connect everyday apps like Gmail, Calendar, Reddit, YouTube, and Drive.') }}</h3>
               <p class="composio-preview-text">
-                Composio is installed locally. Login to browse the live catalog, connect your accounts, and try simple actions from this machine.
+                {{ t('Composio is installed locally. Login to browse the live catalog, connect your accounts, and try simple actions from this machine.') }}
               </p>
             </div>
           </div>
           <div class="composio-preview-actions">
             <button class="directory-action primary" type="button" :disabled="isStartingComposioLogin" @click="startComposioCliLogin">
-              {{ isStartingComposioLogin ? 'Opening...' : 'Login to Composio' }}
+              {{ isStartingComposioLogin ? t('Opening...') : t('Login to Composio') }}
             </button>
             <button class="directory-action-link" type="button" @click="openExternalUrl(composioStatus.webUrl || 'https://dashboard.composio.dev/')">
-              Open dashboard
+              {{ t('Open dashboard') }}
             </button>
           </div>
         </article>
@@ -267,7 +267,7 @@
               <div class="directory-card-main">
                 <div class="directory-card-title-row">
                   <span class="directory-card-title">{{ connector.name }}</span>
-                  <span class="directory-badge is-muted">Preview</span>
+                  <span class="directory-badge is-muted">{{ t('Preview') }}</span>
                 </div>
                 <span class="directory-card-meta">{{ connector.meta }}</span>
               </div>
@@ -285,10 +285,10 @@
             <div class="directory-card-fallback composio-fallback">C</div>
             <div class="directory-card-main">
               <div class="directory-card-title-row">
-                <span class="directory-card-title">Composio workspace</span>
-                <span class="directory-badge">Connected</span>
+                <span class="directory-card-title">{{ t('Composio workspace') }}</span>
+                <span class="directory-badge">{{ t('Connected') }}</span>
               </div>
-              <span class="directory-card-meta">{{ composioStatus.email || composioStatus.defaultOrgName || 'Authenticated' }}</span>
+              <span class="directory-card-meta">{{ composioStatus.email || composioStatus.defaultOrgName || t('Authenticated') }}</span>
             </div>
           </div>
           <p class="directory-card-description">
@@ -298,17 +298,17 @@
               <span v-if="composioStatus.defaultOrgName" class="directory-chip">{{ composioStatus.defaultOrgName }}</span>
               <span v-if="composioStatus.cliVersion" class="directory-chip">CLI {{ composioStatus.cliVersion }}</span>
               <span v-if="composioConnectors.length" class="directory-chip">
-                Showing {{ composioConnectors.length }}{{ composioTotal ? ` / ${composioTotal}` : '' }} connectors
+                {{ t('Showing {count}{total} connectors', { count: composioConnectors.length, total: composioTotal ? ` / ${composioTotal}` : '' }) }}
               </span>
             </div>
           <div class="directory-card-actions">
             <button class="directory-action-link" type="button" @click="openExternalUrl(composioStatus.webUrl)">
-              Open dashboard
+              {{ t('Open dashboard') }}
             </button>
           </div>
         </article>
 
-        <div v-if="visibleComposioConnectors.length === 0" class="directory-empty">No Composio connectors found.</div>
+        <div v-if="visibleComposioConnectors.length === 0" class="directory-empty">{{ t('No Composio connectors found.') }}</div>
         <div v-else class="directory-grid">
           <article v-for="connector in visibleComposioConnectors" :key="connector.slug" class="directory-card">
             <div class="directory-card-top">
@@ -317,21 +317,21 @@
               <div class="directory-card-main">
                 <div class="directory-card-title-row">
                   <span class="directory-card-title">{{ connector.name }}</span>
-                  <span v-if="connector.activeCount > 0" class="directory-badge">Connected</span>
-                  <span v-else-if="connector.isNoAuth" class="directory-badge">No auth</span>
+                  <span v-if="connector.activeCount > 0" class="directory-badge">{{ t('Connected') }}</span>
+                  <span v-else-if="connector.isNoAuth" class="directory-badge">{{ t('No auth') }}</span>
                 </div>
                 <span class="directory-card-meta">{{ composioMetaLabel(connector) }}</span>
               </div>
             </div>
             <p v-if="connector.description" class="directory-card-description">{{ connector.description }}</p>
             <div class="directory-chip-row">
-              <span class="directory-chip">{{ connector.toolsCount }} tools</span>
-              <span v-if="connector.triggersCount > 0" class="directory-chip">{{ connector.triggersCount }} triggers</span>
+              <span class="directory-chip">{{ connector.toolsCount }} {{ t(connector.toolsCount === 1 ? 'tool' : 'tools') }}</span>
+              <span v-if="connector.triggersCount > 0" class="directory-chip">{{ connector.triggersCount }} {{ t(connector.triggersCount === 1 ? 'trigger' : 'triggers') }}</span>
               <span v-if="connector.authModes.length > 0" class="directory-chip">{{ connector.authModes.join(', ') }}</span>
             </div>
             <div class="directory-card-actions">
               <button class="directory-action" type="button" @click="openComposioDetail(connector.slug)">
-                Details
+                {{ t('Details') }}
               </button>
               <button
                 v-if="composioPrimaryActionLabel(connector)"
@@ -340,7 +340,7 @@
                 :disabled="composioActionSlug === connector.slug"
                 @click="runComposioPrimaryAction(connector)"
               >
-                {{ composioActionSlug === connector.slug ? 'Opening...' : composioPrimaryActionLabel(connector) }}
+                {{ composioActionSlug === connector.slug ? t('Opening...') : composioPrimaryActionLabel(connector) }}
               </button>
               <button
                 v-if="canTryComposio(connector)"
@@ -349,7 +349,7 @@
                 :disabled="isTryActionInFlight"
                 @click="tryComposio(connector)"
               >
-                {{ props.tryInFlightKey === composioTryKey(connector.slug) ? 'Starting...' : 'Try it!' }}
+                {{ props.tryInFlightKey === composioTryKey(connector.slug) ? t('Starting...') : t('Try it!') }}
               </button>
             </div>
           </article>
@@ -361,7 +361,7 @@
             :disabled="isLoadingComposio"
             @click="loadMoreComposio"
           >
-            {{ isLoadingComposio ? 'Loading...' : 'Load more' }}
+            {{ isLoadingComposio ? t('Loading...') : t('Load more') }}
           </button>
         </div>
       </div>
@@ -376,16 +376,16 @@
         <template #before-installed>
           <div class="skills-embedded-section">
             <button class="skills-embedded-toggle" type="button" @click="isMcpSectionOpen = !isMcpSectionOpen">
-              <span class="skills-embedded-title">MCPs({{ visibleMcpServers.length }})</span>
+              <span class="skills-embedded-title">{{ t('MCPs') }}({{ visibleMcpServers.length }})</span>
               <span class="skills-embedded-chevron" :class="{ 'is-open': isMcpSectionOpen }">›</span>
             </button>
             <div v-if="isMcpSectionOpen" class="skills-embedded-body">
               <div v-if="!supportsMcps" class="directory-empty">
-                MCP status APIs unavailable in this Codex CLI. Update Codex CLI to inspect MCP servers.
+                {{ t('MCP status APIs unavailable in this Codex CLI. Update Codex CLI to inspect MCP servers.') }}
               </div>
               <div v-else-if="mcpError" class="directory-error">{{ mcpError }}</div>
-              <div v-else-if="isLoadingMcps" class="directory-loading">Loading MCP servers...</div>
-              <div v-else-if="visibleMcpServers.length === 0" class="directory-empty">No MCP servers configured.</div>
+              <div v-else-if="isLoadingMcps" class="directory-loading">{{ t('Loading MCP servers...') }}</div>
+              <div v-else-if="visibleMcpServers.length === 0" class="directory-empty">{{ t('No MCP servers configured.') }}</div>
               <div v-else class="mcp-skill-grid">
                 <article v-for="server in visibleMcpServers" :key="server.name">
                   <button class="mcp-skill-card skill-card" type="button" @click="toggleMcpExpanded(server.name)">
@@ -400,14 +400,17 @@
                       </div>
                       <span class="mcp-skill-chevron" :class="{ 'is-open': expandedMcpNames.has(server.name) }">›</span>
                     </div>
-                    <p class="mcp-skill-meta">{{ server.tools.length }} tools · {{ server.resources.length + server.resourceTemplates.length }} resources</p>
+                    <p class="mcp-skill-meta">
+                      {{ server.tools.length }} {{ t(server.tools.length === 1 ? 'tool' : 'tools') }} ·
+                      {{ server.resources.length + server.resourceTemplates.length }} {{ t(server.resources.length + server.resourceTemplates.length === 1 ? 'resource' : 'resources') }}
+                    </p>
                     <div v-if="expandedMcpNames.has(server.name)" class="directory-mcp-detail">
                       <div v-if="server.tools.length > 0">
-                        <h3 class="directory-mini-heading">Tools</h3>
+                        <h3 class="directory-mini-heading">{{ t('Tools') }}</h3>
                         <p class="directory-mini-list">{{ server.tools.map((tool) => tool.title || tool.name).join(', ') }}</p>
                       </div>
                       <div v-if="server.resources.length > 0 || server.resourceTemplates.length > 0">
-                        <h3 class="directory-mini-heading">Resources</h3>
+                        <h3 class="directory-mini-heading">{{ t('Resources') }}</h3>
                         <p class="directory-mini-list">
                           {{ [...server.resources.map((r) => r.title || r.name || r.uri), ...server.resourceTemplates.map((r) => r.title || r.name || r.uriTemplate)].join(', ') }}
                         </p>
@@ -436,21 +439,21 @@
               />
               <div v-else class="directory-card-fallback">{{ selectedPlugin?.displayName.charAt(0) }}</div>
               <div class="directory-card-main">
-                <h3 class="directory-modal-title">{{ selectedPlugin?.displayName || 'Plugin' }}</h3>
+                <h3 class="directory-modal-title">{{ selectedPlugin?.displayName || t('Plugin') }}</h3>
                 <span class="directory-card-meta">{{ selectedPlugin?.developerName || selectedPlugin?.marketplaceDisplayName || selectedPlugin?.marketplaceName }}</span>
               </div>
             </div>
-            <button class="directory-modal-close" type="button" aria-label="Close plugin detail" @click="closePluginDetail">Close</button>
+            <button class="directory-modal-close" type="button" :aria-label="t('Close plugin detail')" @click="closePluginDetail">{{ t('Close') }}</button>
           </div>
 
           <div class="directory-modal-body">
             <div v-if="pluginDetailError" class="directory-error">{{ pluginDetailError }}</div>
-            <div v-else-if="isLoadingPluginDetail" class="directory-loading">Loading plugin...</div>
+            <div v-else-if="isLoadingPluginDetail" class="directory-loading">{{ t('Loading plugin...') }}</div>
             <template v-else-if="selectedPluginDetail">
               <p v-if="selectedPluginDescription" class="directory-detail-description">{{ selectedPluginDescription }}</p>
 
               <div v-if="selectedPluginDetail.summary.capabilities.length > 0" class="directory-detail-block">
-                <h4 class="directory-detail-heading">Capabilities</h4>
+                <h4 class="directory-detail-heading">{{ t('Capabilities') }}</h4>
                 <div class="directory-chip-row">
                   <span v-for="capability in selectedPluginDetail.summary.capabilities" :key="capability" class="directory-chip">{{ capability }}</span>
                 </div>
@@ -458,19 +461,19 @@
 
               <div class="directory-detail-grid">
                 <div v-if="selectedPluginDetail.apps.length > 0" class="directory-detail-block">
-                  <h4 class="directory-detail-heading">Apps</h4>
+                  <h4 class="directory-detail-heading">{{ t('Apps') }}</h4>
                   <div v-for="app in selectedPluginDetail.apps" :key="app.id" class="directory-include-row">
                     <span>{{ app.name }}</span>
-                    <span v-if="isPluginDetailAppUnavailable(app)" class="directory-auth-status is-warning">GPT Plus account required</span>
-                    <button v-else-if="app.installUrl" type="button" @click="openExternalUrl(app.installUrl)">{{ app.needsAuth ? 'Login' : 'Manage' }}</button>
+                    <span v-if="isPluginDetailAppUnavailable(app)" class="directory-auth-status is-warning">{{ t('GPT Plus account required') }}</span>
+                    <button v-else-if="app.installUrl" type="button" @click="openExternalUrl(app.installUrl)">{{ app.needsAuth ? t('Login') : t('Manage') }}</button>
                   </div>
                 </div>
                 <div v-if="selectedPluginDetail.skills.length > 0" class="directory-detail-block">
-                  <h4 class="directory-detail-heading">Skills</h4>
+                  <h4 class="directory-detail-heading">{{ t('Skills') }}</h4>
                   <p class="directory-mini-list">{{ selectedPluginDetail.skills.map((skill) => skill.displayName || skill.name).join(', ') }}</p>
                 </div>
                 <div v-if="selectedPluginDetail.mcpServers.length > 0" class="directory-detail-block">
-                  <h4 class="directory-detail-heading">MCP servers</h4>
+                  <h4 class="directory-detail-heading">{{ t('MCP servers') }}</h4>
                   <div v-for="serverName in selectedPluginDetail.mcpServers" :key="serverName" class="directory-include-row">
                     <span>
                       {{ serverName }}
@@ -484,7 +487,7 @@
                       :disabled="mcpLoginServerName === serverName"
                       @click="loginMcpServer(serverName)"
                     >
-                      {{ mcpLoginServerName === serverName ? 'Opening...' : 'Authenticate' }}
+                      {{ mcpLoginServerName === serverName ? t('Opening...') : t('Authenticate') }}
                     </button>
                   </div>
                 </div>
@@ -495,10 +498,10 @@
               </div>
 
               <div v-if="installAuthApps.length > 0" class="directory-auth-panel">
-                <strong>Apps needing auth</strong>
+                <strong>{{ t('Apps needing auth') }}</strong>
                 <div v-for="app in installAuthApps" :key="app.id" class="directory-include-row">
                   <span>{{ app.name }}</span>
-                  <button v-if="app.installUrl" type="button" @click="openExternalUrl(app.installUrl)">Login</button>
+                  <button v-if="app.installUrl" type="button" @click="openExternalUrl(app.installUrl)">{{ t('Login') }}</button>
                 </div>
               </div>
             </template>
@@ -512,7 +515,7 @@
               :disabled="isPluginActionInFlight"
               @click="uninstallSelectedPlugin"
             >
-              {{ isPluginActionInFlight ? 'Uninstalling...' : 'Uninstall' }}
+              {{ isPluginActionInFlight ? t('Uninstalling...') : t('Uninstall') }}
             </button>
             <button
               v-else-if="selectedPlugin && !selectedPluginInstallUnavailable"
@@ -521,7 +524,7 @@
               :disabled="isPluginActionInFlight || selectedPlugin.installPolicy === 'NOT_AVAILABLE' || selectedPluginRequiresMissingApp"
               @click="installSelectedPlugin"
             >
-              {{ selectedPluginRequiresMissingApp ? 'ChatGPT Plus' : isPluginActionInFlight ? 'Installing...' : 'Install' }}
+              {{ selectedPluginRequiresMissingApp ? t('ChatGPT Plus') : isPluginActionInFlight ? t('Installing...') : t('Install') }}
             </button>
             <button
               v-else-if="selectedPlugin"
@@ -529,7 +532,7 @@
               type="button"
               disabled
             >
-              GPT Plus account required
+              {{ t('GPT Plus account required') }}
             </button>
             <button
               v-if="selectedPlugin && selectedPlugin.installed"
@@ -538,7 +541,7 @@
               :disabled="isPluginActionInFlight"
               @click="toggleSelectedPlugin"
             >
-              {{ selectedPlugin.enabled ? 'Disable' : 'Enable' }}
+              {{ selectedPlugin.enabled ? t('Disable') : t('Enable') }}
             </button>
             <button
               v-if="selectedPlugin && selectedPlugin.installed && selectedPlugin.enabled"
@@ -547,7 +550,7 @@
               :disabled="isPluginActionInFlight || isTryActionInFlight"
               @click="tryPlugin(selectedPlugin)"
             >
-              {{ props.tryInFlightKey === pluginTryKey(selectedPlugin) ? 'Starting...' : 'Try it!' }}
+              {{ props.tryInFlightKey === pluginTryKey(selectedPlugin) ? t('Starting...') : t('Try it!') }}
             </button>
           </div>
         </article>
@@ -569,15 +572,15 @@
               <div v-else class="directory-card-fallback composio-fallback">{{ selectedComposioDetail?.connector.name.charAt(0) }}</div>
               <div class="directory-card-main">
                 <h3 class="directory-modal-title">{{ selectedComposioDetail?.connector.name || 'Composio' }}</h3>
-                <span class="directory-card-meta">{{ selectedComposioDetail ? composioMetaLabel(selectedComposioDetail.connector) : 'Connector' }}</span>
+                <span class="directory-card-meta">{{ selectedComposioDetail ? composioMetaLabel(selectedComposioDetail.connector) : t('Connector') }}</span>
               </div>
             </div>
-            <button class="directory-modal-close" type="button" aria-label="Close Composio detail" @click="closeComposioDetail">Close</button>
+            <button class="directory-modal-close" type="button" :aria-label="t('Close Composio detail')" @click="closeComposioDetail">{{ t('Close') }}</button>
           </div>
 
           <div class="directory-modal-body">
             <div v-if="composioDetailError" class="directory-error">{{ composioDetailError }}</div>
-            <div v-else-if="isLoadingComposioDetail" class="directory-loading">Loading connector...</div>
+            <div v-else-if="isLoadingComposioDetail" class="directory-loading">{{ t('Loading connector...') }}</div>
             <template v-else-if="selectedComposioDetail">
               <p v-if="selectedComposioDetail.connector.description" class="directory-detail-description">
                 {{ selectedComposioDetail.connector.description }}
@@ -585,19 +588,19 @@
 
               <div class="directory-detail-grid">
                 <div class="directory-detail-block">
-                  <h4 class="directory-detail-heading">Overview</h4>
+                  <h4 class="directory-detail-heading">{{ t('Overview') }}</h4>
                   <div class="directory-chip-row">
-                    <span class="directory-chip">{{ selectedComposioDetail.connector.toolsCount }} tools</span>
-                    <span v-if="selectedComposioDetail.connector.triggersCount > 0" class="directory-chip">{{ selectedComposioDetail.connector.triggersCount }} triggers</span>
+                    <span class="directory-chip">{{ selectedComposioDetail.connector.toolsCount }} {{ t(selectedComposioDetail.connector.toolsCount === 1 ? 'tool' : 'tools') }}</span>
+                    <span v-if="selectedComposioDetail.connector.triggersCount > 0" class="directory-chip">{{ selectedComposioDetail.connector.triggersCount }} {{ t(selectedComposioDetail.connector.triggersCount === 1 ? 'trigger' : 'triggers') }}</span>
                     <span v-if="selectedComposioDetail.connector.latestVersion" class="directory-chip">v{{ selectedComposioDetail.connector.latestVersion }}</span>
                     <span v-if="selectedComposioDetail.connector.authModes.length > 0" class="directory-chip">{{ selectedComposioDetail.connector.authModes.join(', ') }}</span>
                   </div>
                 </div>
 
                 <div class="directory-detail-block">
-                  <h4 class="directory-detail-heading">Connections</h4>
+                  <h4 class="directory-detail-heading">{{ t('Connections') }}</h4>
                   <div v-if="selectedComposioDetail.connections.length === 0" class="directory-mini-list">
-                    No linked accounts yet.
+                    {{ t('No linked accounts yet.') }}
                   </div>
                   <div v-else>
                     <div v-for="connection in selectedComposioDetail.connections" :key="connection.id" class="directory-include-row">
@@ -607,14 +610,14 @@
                           {{ composioConnectionStatusLabel(connection.status) }}
                         </span>
                       </span>
-                      <span class="directory-card-meta">{{ connection.authScheme || 'Auth' }}</span>
+                      <span class="directory-card-meta">{{ connection.authScheme || t('Auth') }}</span>
                     </div>
                   </div>
                 </div>
               </div>
 
               <div v-if="selectedComposioDetail.tools.length > 0" class="directory-detail-block">
-                <h4 class="directory-detail-heading">Useful tools</h4>
+                <h4 class="directory-detail-heading">{{ t('Useful tools') }}</h4>
                 <div v-for="tool in selectedComposioDetail.tools.slice(0, 8)" :key="tool.slug" class="directory-include-row">
                   <span>{{ tool.name || tool.slug }}</span>
                   <span class="directory-card-meta">{{ tool.slug }}</span>
@@ -630,7 +633,7 @@
               type="button"
               @click="openExternalUrl(selectedComposioDetail.dashboardUrl)"
             >
-              Open dashboard
+              {{ t('Open dashboard') }}
             </button>
             <button
               v-if="selectedComposioDetail && composioPrimaryActionLabel(selectedComposioDetail.connector)"
@@ -639,7 +642,7 @@
               :disabled="composioActionSlug === selectedComposioDetail.connector.slug"
               @click="runComposioPrimaryAction(selectedComposioDetail.connector)"
             >
-              {{ composioActionSlug === selectedComposioDetail?.connector.slug ? 'Opening...' : composioPrimaryActionLabel(selectedComposioDetail.connector) }}
+              {{ composioActionSlug === selectedComposioDetail?.connector.slug ? t('Opening...') : composioPrimaryActionLabel(selectedComposioDetail.connector) }}
             </button>
             <button
               v-if="selectedComposioDetail && canTryComposio(selectedComposioDetail.connector)"
@@ -648,7 +651,7 @@
               :disabled="isTryActionInFlight"
               @click="tryComposio(selectedComposioDetail.connector, selectedComposioDetail.connections)"
             >
-              {{ props.tryInFlightKey === composioTryKey(selectedComposioDetail.connector.slug) ? 'Starting...' : 'Try it!' }}
+              {{ props.tryInFlightKey === composioTryKey(selectedComposioDetail.connector.slug) ? t('Starting...') : t('Try it!') }}
             </button>
           </div>
         </article>
@@ -688,6 +691,7 @@ import {
   type DirectoryPluginDetail,
   type DirectoryPluginSummary,
 } from '../../api/codexGateway'
+import { useUiLanguage } from '../../composables/useUiLanguage'
 import { sortComposioConnectors, type DirectorySortMode } from './directoryHubUtils'
 import SkillsHub from './SkillsHub.vue'
 
@@ -762,6 +766,7 @@ const emit = defineEmits<{
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useUiLanguage()
 
 const tabs: Array<{ id: DirectoryTab; label: string; subtitle: string }> = [
   { id: 'plugins', label: 'Plugins', subtitle: 'Plugins make Codex work your way.' },
@@ -775,49 +780,49 @@ const composioPreviewConnectors = [
     name: 'Gmail',
     slug: 'gmail',
     initial: 'G',
-    meta: 'Inbox, drafts, attachments',
-    description: 'Find emails, summarize threads, draft replies, and pull attachment context into a chat.',
-    chips: ['Email', 'Search', 'Drafts'],
+    meta: '收件箱、草稿、附件',
+    description: '查找邮件、总结对话、起草回复，并把附件上下文带入聊天。',
+    chips: ['邮件', '搜索', '草稿'],
   },
   {
     name: 'Google Calendar',
     slug: 'google-calendar',
     initial: 'C',
-    meta: 'Events and availability',
-    description: 'Check what is next, find open time, and turn follow-ups into calendar blocks.',
-    chips: ['Events', 'Availability', 'Reminders'],
+    meta: '事件和空闲时间',
+    description: '查看接下来的安排、查找空闲时间，并把后续事项转成日历块。',
+    chips: ['事件', '空闲时间', '提醒'],
   },
   {
     name: 'Reddit',
     slug: 'reddit',
     initial: 'R',
-    meta: 'Posts, comments, communities',
-    description: 'Search communities, inspect posts, and prepare natural replies before posting.',
-    chips: ['Search', 'Comments', 'Posts'],
+    meta: '帖子、评论、社区',
+    description: '搜索社区、查看帖子，并在发布前准备自然回复。',
+    chips: ['搜索', '评论', '帖子'],
   },
   {
     name: 'YouTube',
     slug: 'youtube',
     initial: 'Y',
-    meta: 'Videos, channels, comments',
-    description: 'Look up channel details, inspect video metadata, and help manage comment workflows.',
-    chips: ['Videos', 'Channels', 'Comments'],
+    meta: '视频、频道、评论',
+    description: '查询频道详情、查看视频元数据，并辅助管理评论流程。',
+    chips: ['视频', '频道', '评论'],
   },
   {
     name: 'Google Drive',
     slug: 'google-drive',
     initial: 'D',
-    meta: 'Files, docs, folders',
-    description: 'Find files, read shared docs, and bring Drive context into a Codex thread.',
-    chips: ['Files', 'Docs', 'Search'],
+    meta: '文件、文档、文件夹',
+    description: '查找文件、阅读共享文档，并把 Drive 上下文带入 Codex 线程。',
+    chips: ['文件', '文档', '搜索'],
   },
   {
     name: 'X',
     slug: 'x',
     initial: 'X',
-    meta: 'Posts, replies, profiles',
-    description: 'Research public posts, draft replies, and keep social workflows reviewable.',
-    chips: ['Posts', 'Replies', 'Profiles'],
+    meta: '帖子、回复、资料',
+    description: '研究公开帖子、起草回复，并让社交流程保持可审查。',
+    chips: ['帖子', '回复', '资料'],
   },
 ]
 
@@ -942,13 +947,13 @@ const hasMoreComposioConnectors = computed(() => composioNextCursor.value !== nu
 const mcpStatusByName = computed(() => new Map(mcpServers.value.map((server) => [server.name, server])))
 const composioWorkspaceSummary = computed(() => {
   const status = composioStatus.value
-  if (!status) return 'Composio CLI shares the login and connections from this machine.'
+  if (!status) return t('Composio CLI shares the login and connections from this machine.')
   const parts = [
     status.email || status.defaultOrgName,
     status.defaultOrgId ? `org ${status.defaultOrgId}` : '',
     status.baseUrl || '',
   ].filter(Boolean)
-  return parts.join(' · ') || 'Composio CLI shares the login and connections from this machine.'
+  return parts.join(' · ') || t('Composio CLI shares the login and connections from this machine.')
 })
 
 function normalizeSearch(value: string): string {
@@ -1018,13 +1023,13 @@ function normalizePluginAppName(name: string): string {
 }
 
 function formatDistributionChannel(value: string): string {
-  if (value === 'DEFAULT_OAI_CATALOG') return 'OpenAI catalog'
-  if (value === 'ECOSYSTEM_DIRECTORY') return 'Ecosystem directory'
+  if (value === 'DEFAULT_OAI_CATALOG') return t('OpenAI catalog')
+  if (value === 'ECOSYSTEM_DIRECTORY') return t('Ecosystem directory')
   return value ? value.replace(/_/gu, ' ').toLowerCase().replace(/\b\w/gu, (char) => char.toUpperCase()) : ''
 }
 
 function appMetaLabel(app: DirectoryAppInfo): string {
-  return app.developer || formatDistributionChannel(app.distributionChannel) || 'App'
+  return app.developer || formatDistributionChannel(app.distributionChannel) || t('App')
 }
 
 function getMcpAuthStatus(serverName: string): string {
@@ -1033,11 +1038,11 @@ function getMcpAuthStatus(serverName: string): string {
 
 function formatMcpAuthStatus(serverName: string): string {
   const status = getMcpAuthStatus(serverName)
-  if (status === 'oAuth') return 'Logged in'
-  if (status === 'bearerToken') return 'Bearer token'
-  if (status === 'notLoggedIn') return 'Login required'
-  if (status === 'unsupported') return 'Auth unsupported'
-  return 'Status unknown'
+  if (status === 'oAuth') return t('Logged in')
+  if (status === 'bearerToken') return t('Bearer token')
+  if (status === 'notLoggedIn') return t('Login required')
+  if (status === 'unsupported') return t('Auth unsupported')
+  return t('Status unknown')
 }
 
 function mcpAuthStatusClass(serverName: string): string {
@@ -1186,11 +1191,11 @@ function appLogoSrc(app: DirectoryAppInfo): string {
 
 function composioMetaLabel(connector: DirectoryComposioConnector): string {
   if (connector.activeCount > 0) {
-    return `${connector.activeCount} connected ${connector.activeCount === 1 ? 'account' : 'accounts'}`
+    return t(connector.activeCount === 1 ? '{count} connected account' : '{count} connected accounts', { count: connector.activeCount })
   }
-  if (connector.isNoAuth) return 'No auth required'
+  if (connector.isNoAuth) return t('No auth required')
   if (connector.connectionStatuses.length > 0) return connector.connectionStatuses.join(', ')
-  return connector.authModes.join(', ') || 'Connection required'
+  return connector.authModes.join(', ') || t('Connection required')
 }
 
 function composioHasUsableConnection(connector: DirectoryComposioConnector): boolean {
@@ -1199,18 +1204,18 @@ function composioHasUsableConnection(connector: DirectoryComposioConnector): boo
 
 function composioPrimaryActionLabel(connector: DirectoryComposioConnector): string {
   if (connector.isNoAuth) return ''
-  if (connector.activeCount > 0) return 'Manage'
-  if (connector.totalConnections > 0) return 'Reconnect'
-  return 'Connect'
+  if (connector.activeCount > 0) return t('Manage')
+  if (connector.totalConnections > 0) return t('Reconnect')
+  return t('Connect')
 }
 
 function composioConnectionStatusLabel(status: string): string {
   const normalized = status.trim().toUpperCase()
-  if (normalized === 'ACTIVE') return 'Active'
-  if (normalized === 'EXPIRED') return 'Expired'
-  if (normalized === 'FAILED') return 'Failed'
-  if (normalized === 'INITIATED') return 'Pending'
-  return normalized || 'Unknown'
+  if (normalized === 'ACTIVE') return t('Active')
+  if (normalized === 'EXPIRED') return t('Expired')
+  if (normalized === 'FAILED') return t('Failed')
+  if (normalized === 'INITIATED') return t('Pending')
+  return normalized || t('Unknown')
 }
 
 function composioConnectionStatusClass(status: string): string {
@@ -1258,9 +1263,9 @@ function canTryComposio(connector: DirectoryComposioConnector): boolean {
 function buildComposioTryPrompt(connector: DirectoryComposioConnector, connections: DirectoryComposioConnection[] = []): string {
   const firstActive = connections.find((connection) => connection.status === 'ACTIVE' && !connection.isDisabled)
   const accountHint = firstActive?.wordId
-    ? ` If there are multiple accounts, prefer \`${firstActive.wordId}\`.`
+    ? ` 如果有多个账号，优先使用 \`${firstActive.wordId}\`。`
     : ''
-  return `Use the Composio CLI skill with the ${connector.name} connector (${connector.slug}). Start by listing what it can do here, mention the current connection status, and suggest one safe command I can run now.${accountHint}`
+  return `使用 Composio CLI 技能和 ${connector.name} 连接器（${connector.slug}）。先列出它在这里能做什么，说明当前连接状态，并建议一条我现在可以运行的安全命令。${accountHint}`
 }
 
 function tryComposio(connector: DirectoryComposioConnector, connections: DirectoryComposioConnection[] = []): void {
@@ -1313,7 +1318,7 @@ async function loadPlugins(): Promise<void> {
     ])
     plugins.value = nextPlugins
   } catch (error) {
-    pluginError.value = error instanceof Error ? error.message : 'Failed to load plugins'
+    pluginError.value = error instanceof Error ? error.message : t('Failed to load plugins')
   } finally {
     isLoadingPlugins.value = false
   }
@@ -1326,7 +1331,7 @@ async function loadApps(): Promise<void> {
   try {
     apps.value = await listDirectoryApps(props.threadId?.trim() || undefined)
   } catch (error) {
-    appError.value = error instanceof Error ? error.message : 'Failed to load apps'
+    appError.value = error instanceof Error ? error.message : t('Failed to load apps')
   } finally {
     isLoadingApps.value = false
   }
@@ -1355,7 +1360,7 @@ async function loadComposio(append = false): Promise<void> {
     composioNextCursor.value = page.nextCursor
     composioTotal.value = page.total
   } catch (error) {
-    composioError.value = error instanceof Error ? error.message : 'Failed to load Composio connectors'
+    composioError.value = error instanceof Error ? error.message : t('Failed to load Composio connectors')
     composioConnectors.value = []
     composioNextCursor.value = null
     composioTotal.value = 0
@@ -1380,7 +1385,7 @@ async function loadMcps(): Promise<void> {
   try {
     mcpServers.value = await listDirectoryMcpServers()
   } catch (error) {
-    mcpError.value = error instanceof Error ? error.message : 'Failed to load MCP servers'
+    mcpError.value = error instanceof Error ? error.message : t('Failed to load MCP servers')
   } finally {
     isLoadingMcps.value = false
   }
@@ -1431,7 +1436,7 @@ async function openPluginDetail(plugin: DirectoryPluginSummary): Promise<void> {
     if (supportsApps.value && apps.value.length === 0) await loadApps()
     await refreshMcpStatusesForPluginDetail()
   } catch (error) {
-    pluginDetailError.value = error instanceof Error ? error.message : 'Failed to load plugin'
+    pluginDetailError.value = error instanceof Error ? error.message : t('Failed to load plugin')
   } finally {
     isLoadingPluginDetail.value = false
   }
@@ -1443,13 +1448,13 @@ async function loginMcpServer(serverName: string): Promise<boolean> {
   try {
     const result = await startDirectoryMcpLogin(serverName)
     if (!result.authorizationUrl) {
-      showToast(`No login URL returned for ${serverName}`, 'error')
+      showToast(t('No login URL returned for {name}', { name: serverName }), 'error')
       return false
     }
     openExternalUrl(result.authorizationUrl)
     return true
   } catch (error) {
-    showToast(error instanceof Error ? error.message : `Failed to start login for ${serverName}`, 'error')
+    showToast(error instanceof Error ? error.message : t('Failed to start login for {name}', { name: serverName }), 'error')
     return false
   } finally {
     mcpLoginServerName.value = ''
@@ -1476,7 +1481,7 @@ async function openComposioDetail(slug: string): Promise<void> {
   try {
     selectedComposioDetail.value = await readDirectoryComposioConnector(slug)
   } catch (error) {
-    composioDetailError.value = error instanceof Error ? error.message : 'Failed to load Composio connector'
+    composioDetailError.value = error instanceof Error ? error.message : t('Failed to load Composio connector')
   } finally {
     isLoadingComposioDetail.value = false
   }
@@ -1491,17 +1496,17 @@ async function startComposioConnect(connector: DirectoryComposioConnector): Prom
   try {
     const result = await startDirectoryComposioLogin(connector.slug)
     if (!result.redirectUrl) {
-      showToast(`No login URL returned for ${connector.name}`, 'error')
+      showToast(t('No login URL returned for {name}', { name: connector.name }), 'error')
       return
     }
     openExternalUrl(result.redirectUrl)
-    showToast(`Opened ${connector.name} authorization`)
+    showToast(t('Opened {name} authorization', { name: connector.name }))
     await loadComposio()
     if (isComposioDetailOpen.value && selectedComposioDetail.value?.connector.slug === connector.slug) {
       await openComposioDetail(connector.slug)
     }
   } catch (error) {
-    showToast(error instanceof Error ? error.message : `Failed to connect ${connector.name}`, 'error')
+    showToast(error instanceof Error ? error.message : t('Failed to connect {name}', { name: connector.name }), 'error')
   } finally {
     composioActionSlug.value = ''
   }
@@ -1530,10 +1535,10 @@ async function startComposioCliLogin(): Promise<void> {
     } else {
       loginTab?.close()
     }
-    showToast('Composio CLI login started')
+    showToast(t('Composio CLI login started'))
   } catch (error) {
     loginTab?.close()
-    showToast(error instanceof Error ? error.message : 'Failed to start Composio login', 'error')
+    showToast(error instanceof Error ? error.message : t('Failed to start Composio login'), 'error')
   } finally {
     isStartingComposioLogin.value = false
   }
@@ -1543,10 +1548,10 @@ async function installComposioCli(): Promise<void> {
   isInstallingComposio.value = true
   try {
     await installDirectoryComposioCli()
-    showToast('Composio CLI installed')
+    showToast(t('Composio CLI installed'))
     await loadComposio()
   } catch (error) {
-    showToast(error instanceof Error ? error.message : 'Failed to install Composio CLI', 'error')
+    showToast(error instanceof Error ? error.message : t('Failed to install Composio CLI'), 'error')
   } finally {
     isInstallingComposio.value = false
   }
@@ -1559,7 +1564,7 @@ async function installSelectedPlugin(): Promise<void> {
   try {
     const result = await installDirectoryPlugin(selectedPlugin.value)
     installAuthApps.value = result.appsNeedingAuth
-    showToast(`${selectedPlugin.value.displayName} plugin installed`)
+    showToast(t('{name} plugin installed', { name: selectedPlugin.value.displayName }))
     const openedAppLogin = openFirstAppLoginIfNeeded(result.appsNeedingAuth)
     await loadPlugins()
     const updated = plugins.value.find((plugin) => plugin.id === selectedPlugin.value?.id)
@@ -1570,7 +1575,7 @@ async function installSelectedPlugin(): Promise<void> {
       }
     }
   } catch (error) {
-    showToast(error instanceof Error ? error.message : 'Failed to install plugin', 'error')
+    showToast(error instanceof Error ? error.message : t('Failed to install plugin'), 'error')
   } finally {
     isPluginActionInFlight.value = false
   }
@@ -1582,11 +1587,11 @@ async function uninstallSelectedPlugin(): Promise<void> {
   try {
     const name = selectedPlugin.value.displayName
     await uninstallDirectoryPlugin(selectedPlugin.value.id)
-    showToast(`${name} plugin uninstalled`)
+    showToast(t('{name} plugin uninstalled', { name }))
     closePluginDetail()
     await loadPlugins()
   } catch (error) {
-    showToast(error instanceof Error ? error.message : 'Failed to uninstall plugin', 'error')
+    showToast(error instanceof Error ? error.message : t('Failed to uninstall plugin'), 'error')
   } finally {
     isPluginActionInFlight.value = false
   }
@@ -1605,10 +1610,10 @@ async function toggleSelectedPlugin(): Promise<void> {
         summary: { ...selectedPluginDetail.value.summary, enabled: next },
       }
     }
-    showToast(`${selectedPlugin.value.displayName} plugin ${next ? 'enabled' : 'disabled'}`)
+    showToast(t('{name} plugin {state}', { name: selectedPlugin.value.displayName, state: t(next ? 'enabled' : 'disabled') }))
     await loadPlugins()
   } catch (error) {
-    showToast(error instanceof Error ? error.message : 'Failed to update plugin', 'error')
+    showToast(error instanceof Error ? error.message : t('Failed to update plugin'), 'error')
   } finally {
     isPluginActionInFlight.value = false
   }
@@ -1620,9 +1625,9 @@ async function toggleApp(app: DirectoryAppInfo): Promise<void> {
     const next = !app.isEnabled
     await setDirectoryAppEnabled(app.id, next)
     apps.value = apps.value.map((row) => row.id === app.id ? { ...row, isEnabled: next } : row)
-    showToast(`${app.name} app ${next ? 'enabled' : 'disabled'}`)
+    showToast(t('{name} app {state}', { name: app.name, state: t(next ? 'enabled' : 'disabled') }))
   } catch (error) {
-    showToast(error instanceof Error ? error.message : 'Failed to update app', 'error')
+    showToast(error instanceof Error ? error.message : t('Failed to update app'), 'error')
   } finally {
     appActionId.value = ''
   }
@@ -1633,9 +1638,9 @@ async function reloadMcps(): Promise<void> {
   try {
     await reloadDirectoryMcpServers()
     await loadMcps()
-    showToast('MCP servers reloaded')
+    showToast(t('MCP servers reloaded'))
   } catch (error) {
-    showToast(error instanceof Error ? error.message : 'Failed to reload MCP servers', 'error')
+    showToast(error instanceof Error ? error.message : t('Failed to reload MCP servers'), 'error')
   } finally {
     isReloadingMcps.value = false
   }

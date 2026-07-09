@@ -6,7 +6,7 @@ if ! command -v pnpm >/dev/null 2>&1; then
   exit 1
 fi
 
-package_name="codexui-android"
+package_name="linux-codex-webui-android"
 current_version=$(node -p "require('./package.json').version")
 published_version=$(pnpm view "$package_name" dist-tags.latest 2>/dev/null || true)
 
@@ -30,7 +30,7 @@ pnpm run build
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
-publish_dir="$tmp_dir/codexui-android"
+publish_dir="$tmp_dir/linux-codex-webui-android"
 
 rsync -a \
   --exclude '.git' \
@@ -50,7 +50,7 @@ packageJson.name = packageName;
 packageJson.version = nextVersion;
 packageJson.bin = {
   ...(packageJson.bin || {}),
-  'codexui-android': 'dist-cli/index.js',
+  'linux-codex-webui-android': 'dist-cli/index.js',
 };
 packageJson.scripts = {
   ...(packageJson.scripts || {}),

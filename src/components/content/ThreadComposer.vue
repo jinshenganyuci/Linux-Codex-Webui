@@ -68,7 +68,7 @@
             class="thread-composer-skill-chip-name"
             type="button"
             :title="skillMarkdownPath(skill.path)"
-            :aria-label="`Open ${skill.displayName || skill.name} SKILL.md`"
+            :aria-label="t('Open {name} SKILL.md', { name: skill.displayName || skill.name })"
             @click="openSkillMarkdown(skill)"
           >
             {{ skill.displayName || skill.name }}
@@ -76,7 +76,7 @@
           <button
             class="thread-composer-skill-chip-remove"
             type="button"
-            :aria-label="`Remove skill ${skill.displayName || skill.name}`"
+            :aria-label="t('Remove skill {name}', { name: skill.displayName || skill.name })"
             @click="removeSkill(skill.path)"
           >×</button>
         </span>
@@ -94,7 +94,7 @@
         @drop="onInputDrop"
       >
         <div v-if="isDragActive" class="thread-composer-drop-overlay" aria-hidden="true">
-          <span class="thread-composer-drop-overlay-copy">Drop images or files</span>
+          <span class="thread-composer-drop-overlay-copy">{{ t('Drop images or files') }}</span>
         </div>
         <div v-if="isFileMentionOpen" class="thread-composer-file-mentions">
           <template v-if="fileMentionSuggestions.length > 0">
@@ -258,16 +258,13 @@
 
         <template v-if="!isDictationRecording">
           <ComposerDropdown
-            class="thread-composer-control"
-            :model-value="selectedModel"
-            :options="modelOptions"
-            :selected-prefix-icon="showFastModeModelIcon ? IconTablerBolt : null"
-            :placeholder="t('Model')"
+            class="thread-composer-control thread-composer-permission-control"
+            :model-value="selectedCodexPermissionMode"
+            :options="permissionModeOptions"
+            :placeholder="t('Codex permissions')"
             open-direction="up"
-            :disabled="isComposerConfigDisabled || models.length === 0"
-            enable-search
-            :search-placeholder="t('Search models...')"
-            @update:model-value="onModelSelect"
+            :disabled="isPermissionModeDisabled"
+            @update:model-value="onPermissionModeSelect"
           />
 
           <ComposerSearchDropdown
@@ -286,14 +283,17 @@
             @remove="onRemovePrompt"
           />
 
-          <ComposerDropdown
-            class="thread-composer-control"
-            :model-value="selectedReasoningEffort"
-            :options="reasoningOptions"
-            :placeholder="t('Thinking')"
+          <ComposerModelReasoningDropdown
+            class="thread-composer-control thread-composer-model-reasoning-control"
+            :selected-model="selectedModel"
+            :selected-reasoning-effort="selectedReasoningEffort"
+            :selected-speed-mode="selectedSpeedMode"
+            :model-options="modelOptions"
+            :reasoning-options="reasoningOptions"
             open-direction="up"
             :disabled="isComposerConfigDisabled"
-            @update:model-value="onReasoningEffortSelect"
+            @update:selected-model="onModelSelect"
+            @update:selected-reasoning-effort="onReasoningEffortSelect"
           />
         </template>
 
@@ -330,6 +330,47 @@
             />
             <IconTablerMicrophone v-else class="thread-composer-mic-icon" />
           </button>
+
+          <div
+            v-if="contextUsageView"
+            ref="contextUsageRootRef"
+            class="thread-composer-context"
+            :class="[
+              `is-${contextUsageView.tone}`,
+              { 'is-open': isContextDetailsOpen },
+            ]"
+            @keydown.esc.stop.prevent="closeContextUsageDetails"
+          >
+            <button
+              class="thread-composer-context-button"
+              type="button"
+              :style="contextUsageRingStyle"
+              :aria-label="contextUsageButtonAriaLabel"
+              :aria-expanded="isContextDetailsOpen"
+              @click.stop="toggleContextUsageDetails"
+            >
+              <span class="thread-composer-context-button-label">{{ contextUsagePercentLabel }}</span>
+            </button>
+            <div
+              class="thread-composer-context-popover"
+              :class="{ 'is-detail': isContextDetailsOpen }"
+              role="status"
+            >
+              <div class="thread-composer-context-popover-title">{{ t('Context') }}</div>
+              <div class="thread-composer-context-popover-summary">
+                {{ contextUsageView.summaryText }}
+              </div>
+              <dl v-if="isContextDetailsOpen" class="thread-composer-context-popover-list">
+                <template v-for="row in contextUsageView.detailRows" :key="row.label">
+                  <dt>{{ row.label }}</dt>
+                  <dd>{{ row.value }}</dd>
+                </template>
+              </dl>
+              <div v-else class="thread-composer-context-popover-hint">
+                {{ t('Click for context details') }}
+              </div>
+            </div>
+          </div>
 
           <button
             v-if="isTurnInProgress && !hasSubmitContent"
@@ -394,6 +435,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type {
   CollaborationModeKind,
   CollaborationModeOption,
+  CodexPermissionMode,
   ReasoningEffort,
   SpeedMode,
   UiRateLimitSnapshot,
@@ -414,7 +456,6 @@ import {
   type ComposerPromptInfo,
 } from '../../api/codexGateway'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
-import IconTablerBolt from '../icons/IconTablerBolt.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerFolder from '../icons/IconTablerFolder.vue'
 import IconTablerMaximize from '../icons/IconTablerMaximize.vue'
@@ -422,6 +463,7 @@ import IconTablerMicrophone from '../icons/IconTablerMicrophone.vue'
 import IconTablerMinimize from '../icons/IconTablerMinimize.vue'
 import IconTablerPlayerStopFilled from '../icons/IconTablerPlayerStopFilled.vue'
 import ComposerDropdown from './ComposerDropdown.vue'
+import ComposerModelReasoningDropdown from './ComposerModelReasoningDropdown.vue'
 import ComposerSearchDropdown from './ComposerSearchDropdown.vue'
 
 type SkillSourceBadge = {
@@ -431,6 +473,10 @@ type SkillSourceBadge = {
 }
 
 type SkillItem = { name: string; displayName?: string; description: string; path: string; scope?: string; enabled?: boolean }
+type PermissionModeOption = {
+  value: CodexPermissionMode
+  label: string
+}
 
 const props = defineProps<{
   activeThreadId: string
@@ -441,6 +487,7 @@ const props = defineProps<{
   selectedModel: string
   selectedReasoningEffort: ReasoningEffort | ''
   selectedSpeedMode: SpeedMode
+  selectedCodexPermissionMode: CodexPermissionMode
   skills?: SkillItem[]
   threadTokenUsage?: UiThreadTokenUsage | null
   codexQuota?: UiRateLimitSnapshot | null
@@ -448,6 +495,7 @@ const props = defineProps<{
   isStopPending?: boolean
   isInterruptingTurn?: boolean
   isUpdatingSpeedMode?: boolean
+  isUpdatingPermissionMode?: boolean
   disabled?: boolean
   hasQueueAbove?: boolean
   sendWithEnter?: boolean
@@ -487,6 +535,7 @@ const emit = defineEmits<{
   'update:selected-model': [modelId: string]
   'update:selected-reasoning-effort': [effort: ReasoningEffort | '']
   'update:selected-speed-mode': [mode: SpeedMode]
+  'update:selected-codex-permission-mode': [mode: CodexPermissionMode]
 }>()
 const { t } = useUiLanguage()
 
@@ -511,7 +560,6 @@ type AttachmentBatchStats = {
   failed: number
 }
 
-const CONTEXT_WINDOW_BASELINE_TOKENS = 12000
 const PASTED_TEXT_FILE_THRESHOLD = 2000
 const PROMPT_OPTION_PREFIX = 'prompt:'
 
@@ -549,24 +597,26 @@ const {
   },
   onEmpty: () => {
     dictationFeedback.value = props.dictationClickToToggle
-      ? 'No speech detected. Click again after speaking.'
-      : 'No speech detected. Hold the mic and speak.'
+      ? t('No speech detected. Click again after speaking.')
+      : t('No speech detected. Hold the mic and speak.')
   },
   onError: (error) => {
     if (error instanceof DOMException && error.name === 'NotAllowedError') {
-      dictationFeedback.value = 'Microphone access was denied.'
+      dictationFeedback.value = t('Microphone access was denied.')
       return
     }
-    dictationFeedback.value = error instanceof Error ? error.message : 'Dictation failed.'
+    dictationFeedback.value = error instanceof Error ? error.message : t('Dictation failed.')
   },
 })
 const attachMenuRootRef = ref<HTMLElement | null>(null)
+const contextUsageRootRef = ref<HTMLElement | null>(null)
 const photoLibraryInputRef = ref<HTMLInputElement | null>(null)
 const cameraCaptureInputRef = ref<HTMLInputElement | null>(null)
 const folderPickerInputRef = ref<HTMLInputElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const { isMobile } = useMobile()
 const isAttachMenuOpen = ref(false)
+const isContextDetailsOpen = ref(false)
 const mentionStartIndex = ref<number | null>(null)
 const mentionQuery = ref('')
 const fileMentionSuggestions = ref<ComposerFileSuggestion[]>([])
@@ -585,14 +635,14 @@ const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.
 const DRAFT_STORAGE_PREFIX = 'codex-web-local.thread-draft.v1.'
 let lastActiveThreadId = ''
 
-const reasoningOptions: Array<{ value: ReasoningEffort; label: string }> = [
-  { value: 'none', label: 'None' },
-  { value: 'minimal', label: 'Minimal' },
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-  { value: 'xhigh', label: 'Extra high' },
-]
+const reasoningOptions = computed<Array<{ value: ReasoningEffort; label: string }>>(() => [
+  { value: 'none', label: t('None') },
+  { value: 'minimal', label: t('Minimal') },
+  { value: 'low', label: t('Low') },
+  { value: 'medium', label: t('Medium') },
+  { value: 'high', label: t('High') },
+  { value: 'xhigh', label: t('Extra high') },
+])
 function formatModelLabel(modelId: string): string {
   return modelId.trim().replace(/^gpt/i, 'GPT')
 }
@@ -658,12 +708,26 @@ const standaloneFileAttachments = computed(() => {
 const isInteractionDisabled = computed(() => props.disabled || !props.activeThreadId)
 const isComposerConfigDisabled = computed(() => props.disabled || !props.activeThreadId)
 const isFastModeSupported = computed(() => /^gpt-5\.(?:4|5)(?:$|-)/.test(props.selectedModel.trim()))
-const showFastModeModelIcon = computed(() =>
-  props.selectedSpeedMode === 'fast' && isFastModeSupported.value,
-)
 const isSpeedToggleDisabled = computed(() =>
   isInteractionDisabled.value || props.isUpdatingSpeedMode === true,
 )
+const isPermissionModeDisabled = computed(() =>
+  isComposerConfigDisabled.value || props.isUpdatingPermissionMode === true,
+)
+const permissionModeOptions = computed<PermissionModeOption[]>(() => [
+  {
+    value: 'request-approval',
+    label: t('Request approval'),
+  },
+  {
+    value: 'auto-approve',
+    label: t('Auto approve'),
+  },
+  {
+    value: 'full-access',
+    label: t('Full access'),
+  },
+])
 const speedModeDescription = computed(() => {
   if (props.isUpdatingSpeedMode) {
     return t('Saving speed setting...')
@@ -732,15 +796,17 @@ const quotaSummaryText = computed(() => buildQuotaSummaryText(props.codexQuota ?
 const quotaWeeklyRefreshText = computed(() => '')
 const quotaTooltipText = computed(() => buildQuotaTooltipText(props.codexQuota ?? null))
 const contextUsageView = computed(() => buildContextUsageView(props.threadTokenUsage ?? null))
-const contextUsageSummaryText = computed(() => contextUsageView.value?.summaryText ?? '')
-const contextUsageTooltipText = computed(() => contextUsageView.value?.tooltipText ?? '')
-const contextUsageRemainingPercent = computed(() => contextUsageView.value?.percentRemaining ?? 0)
-const contextUsageTone = computed(() => contextUsageView.value?.tone ?? 'healthy')
+const contextUsageUsedPercent = computed(() => contextUsageView.value?.usedPercent ?? 0)
+const contextUsagePercentLabel = computed(() => String(contextUsageUsedPercent.value))
+const contextUsageButtonAriaLabel = computed(() => contextUsageView.value?.ariaLabel ?? t('Current context usage'))
+const contextUsageRingStyle = computed<Record<string, string>>(() => ({
+  '--context-usage-used-percent': `${contextUsageUsedPercent.value}%`,
+}))
 
 function formatPlanType(planType: string | null | undefined): string {
   if (!planType || planType === 'unknown') return ''
-  if (planType === 'edu') return 'Education'
-  return `${planType.slice(0, 1).toUpperCase()}${planType.slice(1)}`
+  if (planType === 'edu') return t('Education')
+  return planType
 }
 
 function formatWindowSpan(windowMinutes: number | null): string {
@@ -754,16 +820,16 @@ function formatResetTime(resetsAt: number | null): string {
   if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt)) return ''
   const resetMs = resetsAt * 1000
   const diffMs = resetMs - Date.now()
-  if (diffMs <= 0) return 'resetting now'
+  if (diffMs <= 0) return t('resetting now')
 
   const totalMinutes = Math.round(diffMs / 60000)
-  if (totalMinutes < 60) return `resets in ${Math.max(1, totalMinutes)}m`
+  if (totalMinutes < 60) return t('resets in {count}m', { count: Math.max(1, totalMinutes) })
 
   const totalHours = Math.round(totalMinutes / 60)
-  if (totalHours < 48) return `resets in ${Math.max(1, totalHours)}h`
+  if (totalHours < 48) return t('resets in {count}h', { count: Math.max(1, totalHours) })
 
   const totalDays = Math.round(totalHours / 24)
-  return `resets in ${Math.max(1, totalDays)}d`
+  return t('resets in {count}d', { count: Math.max(1, totalDays) })
 }
 
 function formatResetDate(resetsAt: number | null): string {
@@ -818,9 +884,9 @@ function buildQuotaSummaryText(quota: UiRateLimitSnapshot | null): string {
   }
 
   if (segments.length === 0 && quota.credits?.unlimited) {
-    segments.push('Unlimited credits')
+    segments.push(t('Unlimited credits'))
   } else if (segments.length === 0 && quota.credits?.hasCredits && quota.credits.balance) {
-    segments.push(`${quota.credits.balance} credits`)
+    segments.push(t('{count} credits', { count: quota.credits.balance }))
   }
 
   return segments.join(' · ')
@@ -832,30 +898,30 @@ function buildQuotaTooltipText(quota: UiRateLimitSnapshot | null): string {
   const lines: string[] = []
   const plan = formatPlanType(quota.planType)
   if (plan) {
-    lines.push(`Plan: ${plan}`)
+    lines.push(t('Plan: {plan}', { plan }))
   }
 
   if (quota.primary) {
     const reset = formatResetTime(quota.primary.resetsAt)
-    lines.push(`Primary window: ${formatWindowSummary(quota.primary)}${reset ? `, ${reset}` : ''}`)
+    lines.push(t('Primary window: {summary}{reset}', { summary: formatWindowSummary(quota.primary), reset: reset ? `, ${reset}` : '' }))
   }
 
   if (quota.secondary) {
     const reset = formatResetTime(quota.secondary.resetsAt)
-    lines.push(`Secondary window: ${formatWindowSummary(quota.secondary)}${reset ? `, ${reset}` : ''}`)
+    lines.push(t('Secondary window: {summary}{reset}', { summary: formatWindowSummary(quota.secondary), reset: reset ? `, ${reset}` : '' }))
   }
 
   if (quota.credits?.unlimited) {
-    lines.push('Credits: unlimited')
+    lines.push(t('Credits: unlimited'))
   } else if (quota.credits?.hasCredits && quota.credits.balance) {
-    lines.push(`Credits: ${quota.credits.balance}`)
+    lines.push(t('Credits: {count}', { count: quota.credits.balance }))
   }
 
   const weeklyWindow = pickWeeklyQuotaWindow(quota)
   if (weeklyWindow) {
     const weeklyRefreshDate = formatResetDate(weeklyWindow.resetsAt)
     if (weeklyRefreshDate) {
-      lines.push(`Weekly refresh: ${weeklyRefreshDate}`)
+      lines.push(t('Weekly refresh: {date}', { date: weeklyRefreshDate }))
     }
   }
 
@@ -867,7 +933,7 @@ function buildQuotaWeeklyRefreshText(quota: UiRateLimitSnapshot | null): string 
   const weeklyWindow = pickWeeklyQuotaWindow(quota)
   if (!weeklyWindow) return ''
   const weeklyRefreshDate = formatResetDate(weeklyWindow.resetsAt)
-  return weeklyRefreshDate ? `Weekly refresh ${weeklyRefreshDate}` : ''
+  return weeklyRefreshDate ? t('Weekly refresh {date}', { date: weeklyRefreshDate }) : ''
 }
 
 function formatCompactTokenCount(value: number): string {
@@ -887,41 +953,28 @@ function formatCompactTokenCount(value: number): string {
 function formatBreakdownSummary(breakdown: UiTokenUsageBreakdown): string {
   const nonCachedInput = Math.max(0, breakdown.inputTokens - breakdown.cachedInputTokens)
   const parts = [
-    `${formatCompactTokenCount(breakdown.totalTokens)} total`,
-    `${formatCompactTokenCount(nonCachedInput)} input`,
+    `${formatCompactTokenCount(breakdown.totalTokens)} ${t('total')}`,
+    `${formatCompactTokenCount(nonCachedInput)} ${t('input')}`,
   ]
   if (breakdown.cachedInputTokens > 0) {
-    parts.push(`${formatCompactTokenCount(breakdown.cachedInputTokens)} cached`)
+    parts.push(`${formatCompactTokenCount(breakdown.cachedInputTokens)} ${t('cached')}`)
   }
   if (breakdown.outputTokens > 0) {
-    parts.push(`${formatCompactTokenCount(breakdown.outputTokens)} output`)
+    parts.push(`${formatCompactTokenCount(breakdown.outputTokens)} ${t('output')}`)
   }
   if (breakdown.reasoningOutputTokens > 0) {
-    parts.push(`${formatCompactTokenCount(breakdown.reasoningOutputTokens)} reasoning`)
+    parts.push(`${formatCompactTokenCount(breakdown.reasoningOutputTokens)} ${t('reasoning')}`)
   }
   return parts.join(' · ')
-}
-
-function calculateContextPercentRemaining(tokensInContext: number, contextWindow: number): number {
-  // Mirror official Codex normalization so the first prompt does not look artificially "used".
-  if (!Number.isFinite(tokensInContext) || !Number.isFinite(contextWindow) || contextWindow <= 0) {
-    return 0
-  }
-  if (contextWindow <= CONTEXT_WINDOW_BASELINE_TOKENS) {
-    const remaining = Math.max(0, contextWindow - Math.max(0, tokensInContext))
-    return Math.max(0, Math.min(100, Math.round((remaining / contextWindow) * 100)))
-  }
-  const effectiveWindow = contextWindow - CONTEXT_WINDOW_BASELINE_TOKENS
-  const used = Math.max(0, tokensInContext - CONTEXT_WINDOW_BASELINE_TOKENS)
-  const remaining = Math.max(0, effectiveWindow - used)
-  return Math.max(0, Math.min(100, Math.round((remaining / effectiveWindow) * 100)))
 }
 
 function buildContextUsageView(
   usage: UiThreadTokenUsage | null,
 ): {
     summaryText: string
-    tooltipText: string
+    ariaLabel: string
+    detailRows: Array<{ label: string; value: string }>
+    usedPercent: number
     percentRemaining: number
     tone: 'healthy' | 'warning' | 'danger'
   } | null {
@@ -930,23 +983,35 @@ function buildContextUsageView(
   const contextWindow = usage.modelContextWindow ?? null
   if (typeof contextWindow !== 'number' || !Number.isFinite(contextWindow) || contextWindow <= 0) return null
 
-  const tokensInContext = Math.max(0, usage.last.totalTokens)
-  const percentRemaining = calculateContextPercentRemaining(tokensInContext, contextWindow)
+  const tokensInContext = Math.max(0, usage.currentContextTokens)
+  const remainingTokens = Math.max(0, usage.remainingContextTokens ?? (contextWindow - tokensInContext))
+  const percentRemaining = typeof usage.remainingContextPercent === 'number'
+    ? Math.max(0, Math.min(100, Math.round(usage.remainingContextPercent)))
+    : Math.max(0, Math.min(100, Math.round((remainingTokens / contextWindow) * 100)))
   const percentUsed = Math.max(0, Math.min(100, 100 - percentRemaining))
   const tone: 'healthy' | 'warning' | 'danger' = percentRemaining <= 15
     ? 'danger'
     : percentRemaining <= 35
       ? 'warning'
       : 'healthy'
+  const usedTokenText = formatCompactTokenCount(tokensInContext)
+  const windowTokenText = formatCompactTokenCount(contextWindow)
+  const remainingTokenText = formatCompactTokenCount(remainingTokens)
+  const summaryText = `${percentUsed}% ${t('used')} (${percentRemaining}% ${t('left')})`
+  const inContextText = `${usedTokenText} / ${windowTokenText} ${t('tokens')}`
+  const remainingText = `${remainingTokenText} ${t('tokens')}`
+  const detailRows = [
+    { label: t('Current context usage'), value: inContextText },
+    { label: t('Remaining context'), value: remainingText },
+    { label: t('Last turn'), value: formatBreakdownSummary(usage.last) },
+    { label: t('Cumulative thread usage'), value: formatBreakdownSummary(usage.total) },
+  ]
 
   return {
-    summaryText: `${percentRemaining}% · ${formatCompactTokenCount(tokensInContext)} / ${formatCompactTokenCount(contextWindow)}`,
-    tooltipText: [
-      `Context window: ${percentRemaining}% left (${percentUsed}% used)`,
-      `In context: ${tokensInContext.toLocaleString()} / ${contextWindow.toLocaleString()} tokens`,
-      `Last turn: ${formatBreakdownSummary(usage.last)}`,
-      `Session total: ${formatBreakdownSummary(usage.total)}`,
-    ].join('\n'),
+    summaryText,
+    ariaLabel: `${t('Context')}: ${summaryText}`,
+    detailRows,
+    usedPercent: percentUsed,
     percentRemaining,
     tone,
   }
@@ -1138,6 +1203,17 @@ function onReasoningEffortSelect(value: string): void {
 function onToggleSpeedMode(): void {
   if (isSpeedToggleDisabled.value) return
   emit('update:selected-speed-mode', props.selectedSpeedMode === 'fast' ? 'standard' : 'fast')
+}
+
+function isCodexPermissionMode(value: string): value is CodexPermissionMode {
+  return value === 'request-approval' || value === 'auto-approve' || value === 'full-access'
+}
+
+function onPermissionModeSelect(value: string): void {
+  if (!isCodexPermissionMode(value)) return
+  const mode = value
+  if (isPermissionModeDisabled.value || props.selectedCodexPermissionMode === mode) return
+  emit('update:selected-codex-permission-mode', mode)
 }
 
 function onDictationToggle(): void {
@@ -1797,12 +1873,26 @@ function onSkillDropdownToggle(path: string, checked: boolean): void {
 }
 
 function onDocumentClick(event: MouseEvent): void {
-  if (!isAttachMenuOpen.value) return
-  const root = attachMenuRootRef.value
-  if (!root) return
   const target = event.target as Node | null
-  if (!target || root.contains(target)) return
-  isAttachMenuOpen.value = false
+  if (!target) return
+
+  const attachRoot = attachMenuRootRef.value
+  if (isAttachMenuOpen.value && attachRoot && !attachRoot.contains(target)) {
+    isAttachMenuOpen.value = false
+  }
+
+  const contextRoot = contextUsageRootRef.value
+  if (isContextDetailsOpen.value && contextRoot && !contextRoot.contains(target)) {
+    isContextDetailsOpen.value = false
+  }
+}
+
+function toggleContextUsageDetails(): void {
+  isContextDetailsOpen.value = !isContextDetailsOpen.value
+}
+
+function closeContextUsageDetails(): void {
+  isContextDetailsOpen.value = false
 }
 
 onMounted(() => {
@@ -1876,6 +1966,19 @@ watch(
   },
 )
 
+watch(
+  () => props.activeThreadId,
+  () => {
+    isContextDetailsOpen.value = false
+  },
+)
+
+watch(
+  contextUsageView,
+  (nextView) => {
+    if (!nextView) isContextDetailsOpen.value = false
+  },
+)
 
 </script>
 
@@ -1887,7 +1990,8 @@ watch(
 }
 
 .thread-composer:has(.thread-composer-input-wrap--expanded) {
-  @apply fixed inset-0 z-50 max-w-none bg-white/95 p-3 sm:p-6;
+  @apply fixed inset-x-0 bottom-0 top-0 z-50 max-w-none bg-white/95 px-3 pb-3 pt-8 sm:px-6 sm:pb-6 sm:pt-10;
+  height: 100dvh;
 }
 
 .thread-composer-shell {
@@ -1895,7 +1999,7 @@ watch(
 }
 
 .thread-composer:has(.thread-composer-input-wrap--expanded) .thread-composer-shell {
-  @apply mx-auto flex h-full w-full max-w-[min(var(--chat-column-max,72rem),100%)] flex-col shadow-2xl;
+  @apply mx-auto flex h-full w-full max-w-[min(var(--chat-column-max,72rem),100%)] flex-col overflow-hidden shadow-2xl;
 }
 
 .thread-composer-shell--drag-active {
@@ -1908,6 +2012,10 @@ watch(
 
 .thread-composer-attachments {
   @apply mb-2 flex flex-wrap gap-2;
+}
+
+.thread-composer:has(.thread-composer-input-wrap--expanded) .thread-composer-attachments {
+  @apply max-h-28 shrink-0 overflow-y-auto pt-1;
 }
 
 .thread-composer-attachment {
@@ -1994,33 +2102,6 @@ watch(
   @apply min-w-0 flex-1 truncate;
 }
 
-.thread-composer-context-usage-inline {
-  --context-usage-accent: rgb(34 197 94);
-  @apply ml-auto inline-flex min-w-0 max-w-[56%] items-center gap-2 text-right;
-}
-
-.thread-composer-context-usage-inline.is-warning {
-  --context-usage-accent: rgb(245 158 11);
-}
-
-.thread-composer-context-usage-inline.is-danger {
-  --context-usage-accent: rgb(239 68 68);
-}
-
-.thread-composer-context-usage-inline-value {
-  @apply min-w-0 truncate font-medium tabular-nums;
-  color: var(--context-usage-accent);
-}
-
-.thread-composer-context-usage-inline-bar {
-  @apply block h-1.5 w-14 shrink-0 overflow-hidden rounded-full bg-zinc-200/80;
-}
-
-.thread-composer-context-usage-inline-bar-fill {
-  @apply block h-full rounded-full transition-[width] duration-200 ease-out;
-  background: var(--context-usage-accent);
-}
-
 .thread-composer-input-wrap {
   @apply relative;
 }
@@ -2098,7 +2179,7 @@ watch(
 }
 
 .thread-composer-input-wrap--expanded .thread-composer-input {
-  @apply h-full max-h-none pr-12 text-base leading-6;
+  @apply h-full max-h-none pr-12 pt-3 text-base leading-6;
 }
 
 .thread-composer-input:focus {
@@ -2118,7 +2199,7 @@ watch(
 }
 
 .thread-composer-controls {
-  @apply relative mt-2 sm:mt-3 flex items-center gap-2 sm:gap-4 overflow-visible pb-px;
+  @apply relative mt-2 sm:mt-3 flex items-center gap-1 sm:gap-4 overflow-visible pb-px;
 }
 
 .thread-composer-controls--recording {
@@ -2210,17 +2291,102 @@ watch(
   @apply shrink-1 min-w-0;
 }
 
+.thread-composer-permission-control {
+  @apply max-w-24 shrink-0 sm:max-w-28;
+}
+
+.thread-composer-permission-control :deep(.composer-dropdown-menu) {
+  @apply min-w-[9rem];
+}
+
+.thread-composer-model-reasoning-control {
+  @apply ml-auto max-w-[5.75rem] shrink-0;
+}
+
 .thread-composer-control :deep(.composer-dropdown-value) {
   @apply truncate;
 }
 
 
 .thread-composer-actions {
-  @apply ml-auto flex min-w-0 items-center gap-2;
+  @apply flex shrink-0 items-center gap-1 sm:gap-2;
 }
 
 .thread-composer-actions--recording {
   @apply ml-0 flex-1;
+}
+
+.thread-composer-context {
+  --context-usage-accent: rgb(34 197 94);
+  @apply relative inline-flex shrink-0 items-center;
+}
+
+.thread-composer-context.is-warning {
+  --context-usage-accent: rgb(245 158 11);
+}
+
+.thread-composer-context.is-danger {
+  --context-usage-accent: rgb(239 68 68);
+}
+
+.thread-composer-context-button {
+  background: conic-gradient(
+    var(--context-usage-accent) var(--context-usage-used-percent, 0%),
+    rgb(228 228 231) 0
+  );
+  @apply relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-0 p-0 text-[10px] font-semibold leading-none text-zinc-900 shadow-sm transition hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-2;
+}
+
+.thread-composer-context-button::before {
+  content: '';
+  @apply absolute inset-[3px] rounded-full bg-white;
+}
+
+.thread-composer-context-button-label {
+  @apply relative z-10 tabular-nums;
+}
+
+.thread-composer-context-popover {
+  @apply pointer-events-none invisible absolute bottom-[calc(100%+0.75rem)] right-[-0.375rem] z-30 w-56 max-w-[calc(100vw-2rem)] translate-y-1 rounded-xl border border-zinc-200 bg-white p-3 text-left text-xs text-zinc-700 opacity-0 shadow-xl transition;
+}
+
+.thread-composer-context-popover.is-detail {
+  @apply w-72;
+}
+
+.thread-composer-context-popover::after {
+  content: '';
+  @apply absolute -bottom-1.5 right-5 h-3 w-3 rotate-45 border-b border-r border-zinc-200 bg-white;
+}
+
+.thread-composer-context:hover .thread-composer-context-popover,
+.thread-composer-context.is-open .thread-composer-context-popover {
+  @apply pointer-events-auto visible translate-y-0 opacity-100;
+}
+
+.thread-composer-context-popover-title {
+  @apply text-sm font-semibold text-zinc-950;
+}
+
+.thread-composer-context-popover-summary {
+  @apply mt-1 font-medium tabular-nums;
+  color: var(--context-usage-accent);
+}
+
+.thread-composer-context-popover-hint {
+  @apply mt-2 text-[11px] text-zinc-500;
+}
+
+.thread-composer-context-popover-list {
+  @apply mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5;
+}
+
+.thread-composer-context-popover-list dt {
+  @apply whitespace-nowrap text-zinc-500;
+}
+
+.thread-composer-context-popover-list dd {
+  @apply m-0 min-w-0 text-right font-medium text-zinc-800 tabular-nums;
 }
 
 .thread-composer-mic {

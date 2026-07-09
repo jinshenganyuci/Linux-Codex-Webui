@@ -65,6 +65,15 @@ type CurrentModelConfig = {
   speedMode: SpeedMode
 }
 
+export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+export type CodexApprovalPolicy = 'untrusted' | 'on-failure' | 'on-request' | 'never'
+
+export type CodexRuntimeConfig = {
+  sandboxMode: CodexSandboxMode
+  approvalPolicy: CodexApprovalPolicy
+  memories: boolean
+}
+
 export type DirectoryPluginSummary = {
   id: string
   name: string
@@ -290,6 +299,7 @@ export type StoredQueuedMessage = {
   skills: Array<{ name: string; path: string }>
   fileAttachments: Array<{ label: string; path: string; fsPath: string }>
   collaborationMode: CollaborationModeKind
+  speedMode?: SpeedMode
 }
 
 export type ThreadQueueState = Record<string, StoredQueuedMessage[]>
@@ -1300,6 +1310,68 @@ function normalizeThreadTerminalSession(value: unknown): ThreadTerminalSession |
   }
 }
 
+function normalizeCodexSandboxMode(value: unknown): CodexSandboxMode | null {
+  const normalized = readString(value)?.trim().toLowerCase()
+  if (
+    normalized === 'read-only'
+    || normalized === 'workspace-write'
+    || normalized === 'danger-full-access'
+  ) {
+    return normalized
+  }
+  return null
+}
+
+function normalizeCodexApprovalPolicy(value: unknown): CodexApprovalPolicy | null {
+  const normalized = readString(value)?.trim().toLowerCase()
+  if (
+    normalized === 'untrusted'
+    || normalized === 'on-failure'
+    || normalized === 'on-request'
+    || normalized === 'never'
+  ) {
+    return normalized
+  }
+  return null
+}
+
+function normalizeCodexRuntimeConfig(value: unknown): CodexRuntimeConfig {
+  const record = asRecord(value)
+  const sandboxMode = normalizeCodexSandboxMode(record?.sandboxMode)
+  const approvalPolicy = normalizeCodexApprovalPolicy(record?.approvalPolicy)
+  if (!sandboxMode || !approvalPolicy) {
+    throw new Error('Codex runtime config response was malformed')
+  }
+  return {
+    sandboxMode,
+    approvalPolicy,
+    memories: readBoolean(record?.memories) ?? true,
+  }
+}
+
+async function fetchRuntimeConfigJson(path: string, init?: RequestInit): Promise<unknown> {
+  const response = await fetch(path, init)
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(payload, `Runtime config request failed with HTTP ${response.status}`))
+  }
+  return payload
+}
+
+export async function getCodexRuntimeConfig(): Promise<CodexRuntimeConfig> {
+  const payload = await fetchRuntimeConfigJson('/codex-api/runtime-config')
+  return normalizeCodexRuntimeConfig(payload)
+}
+
+export async function setCodexRuntimeConfig(input: Pick<CodexRuntimeConfig, 'sandboxMode' | 'approvalPolicy'>): Promise<CodexRuntimeConfig> {
+  const payload = await fetchRuntimeConfigJson('/codex-api/runtime-config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  return normalizeCodexRuntimeConfig(payload)
+}
+
 async function fetchTerminalJson(path: string, init?: RequestInit): Promise<unknown> {
   const response = await fetch(path, init)
   const payload = await response.json().catch(() => null)
@@ -1668,7 +1740,14 @@ export type ForkedThread = {
   messages: UiMessage[]
 }
 
-export async function startThread(cwd?: string, model?: string): Promise<StartedThread> {
+function normalizeServiceTierParam(serviceTier: string | null | undefined): string | null | undefined {
+  if (serviceTier === null) return null
+  if (typeof serviceTier !== 'string') return undefined
+  const normalized = serviceTier.trim()
+  return normalized.length > 0 ? normalized : undefined
+}
+
+export async function startThread(cwd?: string, model?: string, serviceTier?: string | null): Promise<StartedThread> {
   try {
     const params: Record<string, unknown> = {}
     if (typeof cwd === 'string' && cwd.trim().length > 0) {
@@ -1676,6 +1755,10 @@ export async function startThread(cwd?: string, model?: string): Promise<Started
     }
     if (typeof model === 'string' && model.trim().length > 0) {
       params.model = model.trim()
+    }
+    const normalizedServiceTier = normalizeServiceTierParam(serviceTier)
+    if (normalizedServiceTier !== undefined) {
+      params.serviceTier = normalizedServiceTier
     }
     const payload = await callRpc<ThreadStartResponse>('thread/start', params)
     const threadId = normalizeThreadIdFromPayload(payload)
@@ -1842,6 +1925,7 @@ export async function startThreadTurn(
   skills?: Array<{ name: string; path: string }>,
   fileAttachments: FileAttachmentParam[] = [],
   collaborationMode?: CollaborationModeKind,
+  serviceTier?: string | null,
 ): Promise<string> {
   try {
     const normalizedModel = model?.trim() ?? ''
@@ -1893,6 +1977,10 @@ export async function startThreadTurn(
     }
     if (typeof effort === 'string' && effort.length > 0) {
       params.effort = effort
+    }
+    const normalizedServiceTier = normalizeServiceTierParam(serviceTier)
+    if (normalizedServiceTier !== undefined) {
+      params.serviceTier = normalizedServiceTier
     }
     if (collaborationMode) {
       const collaborationModeSettings = await resolveCollaborationModeSettings(collaborationMode, normalizedModel, effort)
@@ -2551,6 +2639,12 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
     })
     : []
 
+  const speedMode: SpeedMode | undefined = record.speedMode === 'fast'
+    ? 'fast'
+    : record.speedMode === 'standard'
+      ? 'standard'
+      : undefined
+
   return {
     id,
     text: typeof record.text === 'string' ? record.text : '',
@@ -2558,6 +2652,7 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
     skills,
     fileAttachments,
     collaborationMode: record.collaborationMode === 'plan' ? 'plan' : 'default',
+    ...(speedMode ? { speedMode } : {}),
   }
 }
 

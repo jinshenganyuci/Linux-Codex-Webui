@@ -89,17 +89,17 @@
 ## Provider/Auth Docker Workflow
 
 - Use this only when changes touch Docker startup, Codex auth detection, OpenCode Zen/OpenRouter/custom providers, provider model loading, app-server config, chat send/reply handling, or failed-turn error rendering.
-- Build/package first: `pnpm run build`, `pnpm pack --pack-destination /tmp`, then build an OrbStack/Docker image installing the packed `codexapp` tarball plus `@openai/codex`, using `CODEX_HOME=/codex-home` and command `codexapp --port ${PORT:-4190} --no-password --no-open --no-tunnel --no-login`.
+- Build/package first: `pnpm run build`, `pnpm pack --pack-destination /tmp`, then build an OrbStack/Docker image installing the packed `linux-codex-webui` tarball plus `@openai/codex`, using `CODEX_HOME=/codex-home` and command `linux-codex-webui --port ${PORT:-4190} --no-password --no-open --no-tunnel --no-login`.
 - Test isolated containers on unique localhost ports for: no auth Zen fallback, invalid/expired auth Codex error persistence after reload, malformed auth fallback, and provider switch from Zen to OpenRouter.
 - Before success, report tested ports, provider/config summary, exact commands, screenshot paths, whether invalid auth persisted after reload, and whether duplicate live overlay count was zero.
 
 ## Fast Docker Feature Tests
 
 - Use this for local-only feature checks that do not need packaged install behavior, for example project import/export HTTP endpoints.
-- Build the reusable base image once with `docker build -t codexapp-fast-test-base:latest -f scripts/docker-fast-test-base.Dockerfile .`.
+- Build the reusable base image once with `docker build -t linux-codex-webui-fast-test-base:latest -f scripts/docker-fast-test-base.Dockerfile .`.
 - For each test run, prefer `scripts/run-docker-fast-test.sh`; it runs `pnpm run build`, mounts the current repo read-only, reuses a Docker `CODEX_HOME` volume, and starts `node /repo/dist-cli/index.js` on `127.0.0.1:${PORT:-4191}`.
 - Do not rebuild a packed-image Docker artifact for these checks unless the task specifically needs package install, npm tarball contents, postinstall behavior, auth/provider startup, or published `npx` behavior.
-- To reset state, remove the named volume printed by the script or pass a new `CODEXAPP_DOCKER_FAST_HOME=<volume>` value.
+- To reset state, remove the named volume printed by the script or pass a new `LINUX_CODEX_WEBUI_DOCKER_FAST_HOME=<volume>` value.
 
 ## NPX / A1 Validation
 

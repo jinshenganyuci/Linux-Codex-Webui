@@ -2,10 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE_NAME="${CODEXAPP_DOCKER_FAST_IMAGE:-codexapp-fast-test-base:latest}"
-CONTAINER_NAME="${CODEXAPP_DOCKER_FAST_CONTAINER:-codexapp-fast-test}"
+IMAGE_NAME="${LINUX_CODEX_WEBUI_DOCKER_FAST_IMAGE:-linux-codex-webui-fast-test-base:latest}"
+CONTAINER_NAME="${LINUX_CODEX_WEBUI_DOCKER_FAST_CONTAINER:-linux-codex-webui-fast-test}"
 PORT="${PORT:-4191}"
-CODEX_HOME_VOLUME="${CODEXAPP_DOCKER_FAST_HOME:-codexapp-fast-test-home}"
+CODEX_HOME_VOLUME="${LINUX_CODEX_WEBUI_DOCKER_FAST_HOME:-linux-codex-webui-fast-test-home}"
 
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
   docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/docker-fast-test-base.Dockerfile" "$ROOT_DIR"

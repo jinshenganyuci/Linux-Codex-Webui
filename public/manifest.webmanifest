@@ -1,7 +1,8 @@
 {
-  "name": "Codex Web",
-  "short_name": "Codex Web",
-  "description": "A lightweight web interface for Codex that can be installed like an app in Chrome.",
+  "name": "Linux-Codex-Webui",
+  "short_name": "Linux-Codex-Webui",
+  "description": "一个面向 Linux 远程使用场景的 Codex 中文 Web 界面。",
+  "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getAvailableModelIds, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startThreadTurn } from './codexGateway'
+import { getAvailableModelIds, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startThread, startThreadTurn } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -12,11 +12,17 @@ function mockRpcFetch(): { requests: Array<{ method: string, params: Record<stri
     requests.push(body)
 
     return new Response(JSON.stringify({
-      result: {
-        turn: {
-          id: `turn-${requests.length}`,
-        },
-      },
+      result: body.method === 'thread/start'
+        ? {
+            thread: {
+              id: `thread-${requests.length}`,
+            },
+          }
+        : {
+            turn: {
+              id: `turn-${requests.length}`,
+            },
+          },
     }), {
       status: 200,
       headers: {
@@ -58,6 +64,26 @@ describe('startThreadTurn collaboration mode payloads', () => {
         developer_instructions: null,
       },
     })
+  })
+
+  it('sends service tiers explicitly on thread and turn start', async () => {
+    const { requests } = mockRpcFetch()
+
+    await startThread('/repo', 'gpt-5.5', 'fast')
+    await startThreadTurn('thread-1', 'fast turn', [], 'gpt-5.5', 'medium', undefined, [], 'default', 'fast')
+    await startThreadTurn('thread-1', 'standard turn', [], 'gpt-5.5', 'medium', undefined, [], 'default', null)
+
+    expect(requests).toHaveLength(3)
+    expect(requests[0]).toMatchObject({
+      method: 'thread/start',
+      params: {
+        cwd: '/repo',
+        model: 'gpt-5.5',
+        serviceTier: 'fast',
+      },
+    })
+    expect(requests[1].params.serviceTier).toBe('fast')
+    expect(requests[2].params.serviceTier).toBeNull()
   })
 })
 

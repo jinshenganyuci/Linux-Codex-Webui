@@ -10,7 +10,7 @@
     >
       <IconTablerGitFork class="header-git-trigger-icon" />
       <span class="header-git-trigger-label">{{ displayLabel }}</span>
-      <span v-if="dirty" class="header-git-dirty-dot" aria-label="Uncommitted changes" />
+      <span v-if="dirty" class="header-git-dirty-dot" :aria-label="t('Uncommitted changes')" />
       <IconTablerChevronDown class="header-git-trigger-chevron" />
     </button>
 
@@ -18,7 +18,7 @@
       <div class="header-git-menu" :class="{ 'has-commit-files': Boolean(selectedCommit) }">
         <button v-if="showReview" class="header-git-review-row" type="button" @click="toggleReview">
           <IconTablerFilePencil class="header-git-row-icon" />
-          <span class="header-git-review-label">{{ reviewOpen ? 'Review Worktree Changes (Open)' : 'Review Worktree Changes' }}</span>
+          <span class="header-git-review-label">{{ reviewOpen ? t('Review Worktree Changes (Open)') : t('Review Worktree Changes') }}</span>
           <span class="header-git-review-delta">
             <span class="header-git-file-added">+{{ worktreeChangeSummary.addedLineCount }}</span>
             <span class="header-git-file-removed">-{{ worktreeChangeSummary.removedLineCount }}</span>
@@ -26,24 +26,24 @@
         </button>
 
         <div class="header-git-state">
-          <span class="header-git-state-label">{{ detached ? 'Detached HEAD' : 'Current branch' }}</span>
+          <span class="header-git-state-label">{{ detached ? t('Detached HEAD') : t('Current branch') }}</span>
           <span class="header-git-state-value">{{ displayLabel }}</span>
           <span v-if="currentCommitSummary" class="header-git-state-meta">{{ currentCommitSummary }}</span>
         </div>
 
         <div v-if="statusMessage" class="header-git-status" :class="{ 'is-error': statusKind === 'error' }">
           <span>{{ statusMessage }}</span>
-          <a v-if="statusKind === 'error'" class="header-git-feedback" :href="feedbackMailto" @click="prepareHeaderFeedback($event, statusMessage)">Send feedback</a>
+          <a v-if="statusKind === 'error'" class="header-git-feedback" :href="feedbackMailto" @click="prepareHeaderFeedback($event, statusMessage)">{{ t('Send feedback') }}</a>
         </div>
 
         <div class="header-git-columns" :class="{ 'has-commit-files': Boolean(selectedCommit) }">
-          <section v-if="selectedCommit" class="header-git-commit-detail-panel" aria-label="Commit files">
+          <section v-if="selectedCommit" class="header-git-commit-detail-panel" :aria-label="t('Commit files')">
             <div class="header-git-commit-detail-head">
               <div class="header-git-commit-detail-title">
                 <button
                   class="header-git-ref"
                   type="button"
-                  :title="copiedCommitSha === selectedCommit.sha ? 'Copied commit ref' : `Copy ${selectedCommit.sha}`"
+                  :title="copiedCommitSha === selectedCommit.sha ? t('Copied commit ref') : t('Copy {sha}', { sha: selectedCommit.sha })"
                   @click.stop="copyCommitRef(selectedCommit)"
                 >
                   {{ selectedCommit.shortSha }}
@@ -57,12 +57,12 @@
                 :disabled="busy || selectedBranchIsRemote || !selectedBranch"
                 @click="resetSelectedCommit"
               >
-                Reset
+                {{ t('Reset') }}
               </button>
             </div>
 
             <div class="header-git-file-list">
-              <div v-if="commitFilesLoadingFor === selectedCommit.sha" class="header-git-files-empty">Loading files...</div>
+              <div v-if="commitFilesLoadingFor === selectedCommit.sha" class="header-git-files-empty">{{ t('Loading files...') }}</div>
               <div v-else-if="commitFilesError" class="header-git-files-empty is-error">{{ commitFilesError }}</div>
               <template v-else>
                 <button
@@ -83,28 +83,28 @@
                   <span class="header-git-file-path">{{ file.path }}</span>
                   <span v-if="file.previousPath" class="header-git-file-previous-path">← {{ file.previousPath }}</span>
                 </button>
-                <div v-if="selectedCommitFiles.length === 0" class="header-git-files-empty">No file changes.</div>
+                <div v-if="selectedCommitFiles.length === 0" class="header-git-files-empty">{{ t('No file changes.') }}</div>
               </template>
             </div>
           </section>
 
-          <section class="header-git-commit-panel" aria-label="Branch commits">
+          <section class="header-git-commit-panel" :aria-label="t('Branch commits')">
             <div class="header-git-search-wrap">
               <input
                 v-model="commitSearchQuery"
                 class="header-git-search"
                 type="text"
-                placeholder="Search commits..."
+                :placeholder="t('Search commits...')"
                 @keydown.esc.prevent="onEscapeCommitSearch"
               />
             </div>
             <label class="header-git-toggle-row">
               <input v-model="showResetHistoryRefs" type="checkbox" @change="reloadSelectedBranchCommits" />
-              <span>Reset-history refs</span>
+              <span>{{ t('Reset-history refs') }}</span>
             </label>
             <div class="header-git-commit-list">
-              <div v-if="!selectedBranch" class="header-git-commits-empty">Select a branch.</div>
-              <div v-else-if="commitsLoadingFor === selectedBranchCommitsKey" class="header-git-commits-empty">Loading commits...</div>
+              <div v-if="!selectedBranch" class="header-git-commits-empty">{{ t('Select a branch.') }}</div>
+              <div v-else-if="commitsLoadingFor === selectedBranchCommitsKey" class="header-git-commits-empty">{{ t('Loading commits...') }}</div>
               <div v-else-if="commitsError" class="header-git-commits-empty is-error">{{ commitsError }}</div>
               <template v-else>
                 <button
@@ -122,7 +122,7 @@
                       class="header-git-ref"
                       role="button"
                       tabindex="0"
-                      :title="copiedCommitSha === commit.sha ? 'Copied commit ref' : `Copy ${commit.sha}`"
+                      :title="copiedCommitSha === commit.sha ? t('Copied commit ref') : t('Copy {sha}', { sha: commit.sha })"
                       @click.stop="copyCommitRef(commit)"
                       @keydown.enter.prevent.stop="copyCommitRef(commit)"
                       @keydown.space.prevent.stop="copyCommitRef(commit)"
@@ -130,25 +130,25 @@
                       {{ commit.shortSha }}
                     </span>
                     <span class="header-git-commit-meta">
-                      <span v-if="isCurrentCommit(commit)" class="header-git-branch-meta">current</span>
+                      <span v-if="isCurrentCommit(commit)" class="header-git-branch-meta">{{ t('current') }}</span>
                       <span>{{ commit.date }}</span>
                     </span>
                   </span>
                   <span class="header-git-commit-subject">{{ commit.subject }}</span>
                 </button>
-                <div v-if="filteredSelectedBranchCommits.length === 0" class="header-git-commits-empty">No commits found.</div>
+                <div v-if="filteredSelectedBranchCommits.length === 0" class="header-git-commits-empty">{{ t('No commits found.') }}</div>
               </template>
             </div>
           </section>
 
-          <section class="header-git-branch-panel" aria-label="Branches">
+          <section class="header-git-branch-panel" :aria-label="t('Branches')">
             <div class="header-git-search-wrap">
               <input
                 ref="searchInputRef"
                 v-model="searchQuery"
                 class="header-git-search"
                 type="text"
-                placeholder="Search branches..."
+                :placeholder="t('Search branches...')"
                 @keydown.esc.prevent="onEscapeSearch"
               />
             </div>
@@ -164,8 +164,8 @@
                     @click="selectBranch(branch.value)"
                   >
                     <span class="header-git-branch-name">{{ branch.label }}</span>
-                    <span v-if="branch.value === currentBranch" class="header-git-branch-meta">current</span>
-                    <span v-else-if="branch.isRemote" class="header-git-branch-meta">remote</span>
+                    <span v-if="branch.value === currentBranch" class="header-git-branch-meta">{{ t('current') }}</span>
+                    <span v-else-if="branch.isRemote" class="header-git-branch-meta">{{ t('remote') }}</span>
                   </button>
                   <button
                     v-if="branch.value === selectedBranch && branch.value !== currentBranch && !branch.isRemote"
@@ -174,11 +174,11 @@
                     :disabled="busy"
                     @click="emit('checkoutBranch', branch.value)"
                   >
-                    Checkout
+                    {{ t('Checkout') }}
                   </button>
                 </div>
               </li>
-              <li v-if="filteredBranches.length === 0" class="header-git-empty">No branches found.</li>
+              <li v-if="filteredBranches.length === 0" class="header-git-empty">{{ t('No branches found.') }}</li>
             </ul>
           </section>
         </div>
@@ -194,6 +194,7 @@ import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerGitFork from '../icons/IconTablerGitFork.vue'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
+import { useUiLanguage } from '../../composables/useUiLanguage'
 import { copyTextToClipboard } from '../../utils/clipboard'
 
 const props = defineProps<{
@@ -239,6 +240,7 @@ const lastCurrentBranch = ref('')
 const showResetHistoryRefs = ref(true)
 const showReview = computed(() => props.showReview !== false)
 const { buildFeedbackMailto, feedbackMailtoBase, recordVisibleFailure } = useFeedbackDiagnostics()
+const { t } = useUiLanguage()
 const feedbackMailto = feedbackMailtoBase()
 
 function prepareHeaderFeedback(event: MouseEvent, message: string): void {
@@ -252,8 +254,8 @@ function prepareHeaderFeedback(event: MouseEvent, message: string): void {
 const displayLabel = computed(() => {
   if (props.currentBranch) return props.currentBranch
   if (props.headSubject) return props.headSubject
-  if (props.headSha) return `Detached ${props.headSha}`
-  return props.loading ? 'Loading branch...' : 'Detached HEAD'
+  if (props.headSha) return `${t('Detached HEAD')} ${props.headSha}`
+  return props.loading ? t('Loading branch...') : t('Detached HEAD')
 })
 const currentCommitSummary = computed(() => {
   const details = [props.headSha, props.headDate].filter(Boolean).join(' · ')
@@ -261,10 +263,10 @@ const currentCommitSummary = computed(() => {
   if (subject && details) return `${subject} (${details})`
   return subject || details
 })
-const triggerLabel = computed(() => `Git branch: ${displayLabel.value}`)
+const triggerLabel = computed(() => t('Git branch: {label}', { label: displayLabel.value }))
 const disabled = computed(() => props.loading && props.branches.length === 0)
 const busy = computed(() => props.busy || props.loading)
-const statusMessage = computed(() => props.error || (props.dirty ? 'Tracked changes must be committed, stashed, or discarded before switching or resetting. Untracked files are allowed unless Git would overwrite them.' : ''))
+const statusMessage = computed(() => props.error || (props.dirty ? t('Tracked changes must be committed, stashed, or discarded before switching or resetting. Untracked files are allowed unless Git would overwrite them.') : ''))
 const statusKind = computed(() => props.error ? 'error' : 'info')
 const filteredBranches = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
@@ -326,7 +328,7 @@ function isCurrentCommit(commit: GitCommitOption): boolean {
 }
 
 function selectedBranchCommitActionTitle(commit: GitCommitOption): string {
-  return `Show ${commit.shortSha} files`
+  return t('Show {sha} files', { sha: commit.shortSha })
 }
 
 function onSelectCommit(commit: GitCommitOption): void {

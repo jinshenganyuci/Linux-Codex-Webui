@@ -63,7 +63,7 @@
             <p class="thread-pending-request-eyebrow">{{ requestPanelTitle(request) }}</p>
             <p class="thread-pending-request-title">{{ requestPanelPrompt(request) }}</p>
           </div>
-          <span v-if="(requestCount ?? 0) > 1" class="thread-pending-request-counter">{{ requestCount ?? 0 }} pending</span>
+          <span v-if="(requestCount ?? 0) > 1" class="thread-pending-request-counter">{{ t('{count} pending', { count: requestCount ?? 0 }) }}</span>
         </header>
 
         <div v-if="requestPreview(request)" class="thread-pending-request-preview">
@@ -354,22 +354,22 @@ function readRequestReason(request: UiServerRequest): string {
 }
 
 function requestPanelTitle(request: UiServerRequest): string {
-  if (isApprovalRequest(request)) return 'Awaiting approval'
-  if (isMcpElicitationRequest(request)) return 'MCP server input required'
-  if (request.method === 'item/tool/requestUserInput') return 'Awaiting response'
-  if (request.method === 'item/tool/call') return 'Tool call waiting for response'
+  if (isApprovalRequest(request)) return t('Awaiting approval')
+  if (isMcpElicitationRequest(request)) return t('MCP server input required')
+  if (request.method === 'item/tool/requestUserInput') return t('Awaiting response')
+  if (request.method === 'item/tool/call') return t('Tool call waiting for response')
   return request.method
 }
 
 function requestPanelPrompt(request: UiServerRequest): string {
   const explicit = readRequestReason(request)
   if (explicit) return explicit
-  if (isCommandApprovalRequest(request)) return 'Do you want to run this command?'
-  if (isFileApprovalRequest(request)) return 'Do you want to make these changes?'
-  if (isPermissionsApprovalRequest(request)) return 'Do you want to grant these permissions?'
-  if (isMcpElicitationRequest(request)) return 'An MCP server needs your input before Codex can continue.'
-  if (request.method === 'item/tool/requestUserInput') return 'Codex needs your answer before it can continue.'
-  return 'Codex is waiting for a response before it can continue.'
+  if (isCommandApprovalRequest(request)) return t('Do you want to run this command?')
+  if (isFileApprovalRequest(request)) return t('Do you want to make these changes?')
+  if (isPermissionsApprovalRequest(request)) return t('Do you want to grant these permissions?')
+  if (isMcpElicitationRequest(request)) return t('An MCP server needs your input before Codex can continue.')
+  if (request.method === 'item/tool/requestUserInput') return t('Codex needs your answer before it can continue.')
+  return t('Codex is waiting for a response before it can continue.')
 }
 
 function unwrapApprovalCommand(value: string): string {
@@ -430,9 +430,9 @@ function formatPermissionsPreview(value: unknown): string {
 
   const readPaths = Array.isArray(fileSystem?.read) ? fileSystem.read.filter((entry): entry is string => typeof entry === 'string') : []
   const writePaths = Array.isArray(fileSystem?.write) ? fileSystem.write.filter((entry): entry is string => typeof entry === 'string') : []
-  if (readPaths.length > 0) parts.push(`Read: ${readPaths.join(', ')}`)
-  if (writePaths.length > 0) parts.push(`Write: ${writePaths.join(', ')}`)
-  if (network?.enabled === true) parts.push('Network access')
+  if (readPaths.length > 0) parts.push(t('Read: {paths}', { paths: readPaths.join(', ') }))
+  if (writePaths.length > 0) parts.push(t('Write: {paths}', { paths: writePaths.join(', ') }))
+  if (network?.enabled === true) parts.push(t('Network access'))
 
   return parts.join(' • ')
 }
@@ -440,8 +440,8 @@ function formatPermissionsPreview(value: unknown): string {
 function approvalOptionsForRequest(request: UiServerRequest | null): ApprovalOption[] {
   if (!request || !isApprovalRequest(request)) return []
   return [
-    { id: 'accept', label: 'Yes' },
-    { id: 'acceptForSession', label: 'Yes for Session' },
+    { id: 'accept', label: t('Yes') },
+    { id: 'acceptForSession', label: t('Yes for Session') },
   ]
 }
 
@@ -811,8 +811,8 @@ function validateMcpElicitationRequest(request: UiServerRequest): string {
     .map((field) => field.label)
 
   if (missingLabels.length === 0) return ''
-  if (missingLabels.length === 1) return `Answer the required field: ${missingLabels[0]}.`
-  return `Answer the required fields: ${missingLabels.join(', ')}.`
+  if (missingLabels.length === 1) return t('Answer the required field: {field}.', { field: missingLabels[0] })
+  return t('Answer the required fields: {fields}.', { fields: missingLabels.join(', ') })
 }
 
 function buildMcpElicitationContent(request: UiServerRequest): Record<string, unknown> {
@@ -985,11 +985,11 @@ function onRejectUnknownRequest(request: UiServerRequest): void {
 @reference "tailwindcss";
 
 .thread-pending-request {
-  @apply w-full max-w-[min(var(--chat-column-max,45rem),100%)] mx-auto;
+  @apply w-full max-w-[min(var(--chat-column-max,42rem),100%)] mx-auto;
 }
 
 .thread-pending-request-shell {
-  @apply w-full rounded-[1.75rem] border border-zinc-700 bg-zinc-900 px-4 py-4 sm:px-5 sm:py-4 text-zinc-100 shadow-xl;
+  @apply w-full rounded-[1.25rem] border border-zinc-700 bg-zinc-900 px-3 py-3 sm:px-4 text-zinc-100 shadow-lg;
 }
 
 .thread-pending-request-shell--no-top-radius {
@@ -1009,7 +1009,7 @@ function onRejectUnknownRequest(request: UiServerRequest): void {
 }
 
 .thread-pending-request-title {
-  @apply m-0 text-[clamp(0.94rem,2vw,1.2rem)] leading-relaxed text-zinc-50 whitespace-pre-wrap break-words;
+  @apply m-0 text-sm leading-snug text-zinc-50 whitespace-pre-wrap break-words sm:text-base;
 }
 
 .thread-pending-request-counter {
@@ -1018,7 +1018,7 @@ function onRejectUnknownRequest(request: UiServerRequest): void {
 
 .thread-pending-request-command-line,
 .thread-pending-request-preview {
-  @apply mt-3 rounded-xl bg-zinc-800/85 px-4 py-3 text-sm font-medium text-zinc-100;
+  @apply mt-2 rounded-lg bg-zinc-800/85 px-3 py-2 text-xs font-medium text-zinc-100 sm:text-sm;
 }
 
 .thread-pending-request-preview-code {
@@ -1027,15 +1027,15 @@ function onRejectUnknownRequest(request: UiServerRequest): void {
 
 .thread-pending-request-approval,
 .thread-pending-request-user-input {
-  @apply mt-3 flex flex-col gap-2.5;
+  @apply mt-2.5 flex flex-col gap-2;
 }
 
 .thread-pending-request-options {
-  @apply flex flex-col gap-1.5;
+  @apply flex flex-col gap-1;
 }
 
 .thread-pending-request-option {
-  @apply flex h-12 w-full items-center gap-3 rounded-2xl border border-zinc-800 bg-transparent px-4 text-left transition hover:border-zinc-600 hover:bg-zinc-800/70;
+  @apply flex h-10 w-full items-center gap-2.5 rounded-xl border border-zinc-800 bg-transparent px-3 text-left transition hover:border-zinc-600 hover:bg-zinc-800/70;
 }
 
 .thread-pending-request-option.is-selected {
@@ -1044,7 +1044,7 @@ function onRejectUnknownRequest(request: UiServerRequest): void {
 }
 
 .thread-pending-request-option-index {
-  @apply shrink-0 text-base font-medium leading-none text-zinc-500;
+  @apply shrink-0 text-sm font-medium leading-none text-zinc-500;
 }
 
 .thread-pending-request-option-label {
@@ -1052,7 +1052,7 @@ function onRejectUnknownRequest(request: UiServerRequest): void {
 }
 
 .thread-pending-request-inline-input {
-  @apply flex h-12 min-w-0 flex-1 items-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-800/70 px-4 text-sm text-zinc-400 transition focus-within:border-zinc-500 focus-within:bg-zinc-800/90;
+  @apply flex h-10 min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-zinc-800 bg-zinc-800/70 px-3 text-sm text-zinc-400 transition focus-within:border-zinc-500 focus-within:bg-zinc-800/90;
 }
 
 .thread-pending-request-inline-input.is-active {
@@ -1132,16 +1132,16 @@ function onRejectUnknownRequest(request: UiServerRequest): void {
 
 .thread-pending-request-actions,
 .thread-pending-request-footer {
-  @apply mt-3 flex items-center justify-end gap-2;
+  @apply mt-2.5 flex items-center justify-end gap-2;
 }
 
 .thread-pending-request-footer--approval {
-  @apply mt-0 items-stretch gap-2.5;
+  @apply mt-0 items-stretch gap-2;
 }
 
 .thread-pending-request-primary,
 .thread-pending-request-secondary {
-  @apply h-12 shrink-0 rounded-full border px-5 text-sm font-medium transition;
+  @apply h-10 shrink-0 rounded-full border px-4 text-sm font-medium transition;
 }
 
 .thread-pending-request-primary {
@@ -1154,7 +1154,7 @@ function onRejectUnknownRequest(request: UiServerRequest): void {
 
 @media (max-width: 640px) {
   .thread-pending-request-shell {
-    @apply rounded-[1.5rem] px-3 py-3;
+    @apply rounded-[1.125rem] px-3 py-3;
   }
 
   .thread-pending-request-footer--approval {
