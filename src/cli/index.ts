@@ -534,7 +534,7 @@ async function startServer(options: {
   const generatedPasswordPath = password && passwordResolution.generated
     ? await persistGeneratedPassword(password)
     : null
-  const { app, dispose, attachWebSocket } = createApp({ password })
+  const { app, dispose, disposeGracefully, attachWebSocket } = createApp({ password })
   const server = createServer(app)
   attachWebSocket(server)
   const port = await listenWithFallback(server, requestedPort)
@@ -599,20 +599,53 @@ async function startServer(options: {
   }
   if (options.open) openBrowser(`http://localhost:${String(port)}`)
 
+  let shutdownPromise: Promise<void> | null = null
+  let shutdownSignalCount = 0
+
+  function closeServerForShutdown(): Promise<void> {
+    return new Promise((resolve) => {
+      server.close((error?: Error) => {
+        if (error) {
+          console.warn(`\n[shutdown] HTTP server close failed: ${error.message}\n`)
+        }
+        resolve()
+      })
+    })
+  }
+
   function shutdown() {
+    shutdownSignalCount += 1
+    if (shutdownSignalCount > 1) {
+      console.log('\nForce shutting down...')
+      if (tunnelChild && !tunnelChild.killed) {
+        tunnelChild.kill('SIGTERM')
+      }
+      dispose()
+      try {
+        server.closeAllConnections()
+      } catch {
+        // Older Node runtimes or upgraded sockets may not support this path.
+      }
+      process.exit(1)
+    }
+
+    if (shutdownPromise) return
+
     console.log('\nShutting down...')
     if (tunnelChild && !tunnelChild.killed) {
       tunnelChild.kill('SIGTERM')
     }
-    server.close(() => {
-      dispose()
+
+    void closeServerForShutdown()
+    console.log('Waiting for active Codex tasks to finish before shutdown. Send the signal again to force exit.')
+    shutdownPromise = disposeGracefully().then(() => {
       process.exit(0)
-    })
-    // Force exit after timeout
-    setTimeout(() => {
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`\n[shutdown] Graceful shutdown failed: ${message}\n`)
       dispose()
       process.exit(1)
-    }, 5000).unref()
+    })
   }
 
   process.on('SIGINT', shutdown)

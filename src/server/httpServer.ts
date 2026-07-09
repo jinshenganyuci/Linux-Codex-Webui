@@ -20,6 +20,7 @@ export type ServerOptions = {
 export type ServerInstance = {
   app: Express
   dispose: () => void
+  disposeGracefully: () => Promise<void>
   attachWebSocket: (server: HttpServer) => void
 }
 
@@ -252,6 +253,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
   return {
     app,
     dispose: () => bridge.dispose(),
+    disposeGracefully: () => bridge.disposeGracefully(),
     attachWebSocket: (server: HttpServer) => {
       const wss = new WebSocketServer({ noServer: true })
 

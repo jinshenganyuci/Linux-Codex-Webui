@@ -365,6 +365,108 @@ describe('AppServerProcess runtime config restart', () => {
     expect(fakeProcess.stdin.end).toHaveBeenCalledTimes(1)
     expect(fakeProcess.kill).toHaveBeenCalledWith('SIGTERM')
   })
+
+  it('waits for an active turn before graceful shutdown disposes the app-server', async () => {
+    const appServer = new AppServerProcess()
+    const fakeProcess = {
+      killed: false,
+      stdin: {
+        end: vi.fn(),
+      },
+      kill: vi.fn((signal?: string) => {
+        fakeProcess.killed = true
+        return true
+      }),
+    }
+    ;(appServer as unknown as { process: unknown }).process = fakeProcess
+
+    ;(appServer as unknown as { emitNotification: (notification: { method: string; params: unknown }) => void })
+      .emitNotification({
+        method: 'turn/started',
+        params: {
+          threadId: 'thread-active',
+          turn: { id: 'turn-active' },
+        },
+      })
+
+    let disposed = false
+    const disposePromise = appServer.disposeWhenIdle().then(() => {
+      disposed = true
+    })
+    await Promise.resolve()
+
+    expect(disposed).toBe(false)
+    expect(fakeProcess.kill).not.toHaveBeenCalled()
+
+    ;(appServer as unknown as { emitNotification: (notification: { method: string; params: unknown }) => void })
+      .emitNotification({
+        method: 'turn/completed',
+        params: {
+          threadId: 'thread-active',
+          turn: { id: 'turn-active' },
+        },
+      })
+
+    await disposePromise
+
+    expect(disposed).toBe(true)
+    expect(fakeProcess.stdin.end).toHaveBeenCalledTimes(1)
+    expect(fakeProcess.kill).toHaveBeenCalledWith('SIGTERM')
+  })
+
+  it('keeps a successful turn/start busy until the matching turn completes', async () => {
+    const appServer = new AppServerProcess()
+    const fakeProcess = {
+      killed: false,
+      stdin: {
+        end: vi.fn(),
+        write: vi.fn(),
+      },
+      kill: vi.fn((signal?: string) => {
+        fakeProcess.killed = true
+        return true
+      }),
+    }
+    ;(appServer as unknown as { process: unknown }).process = fakeProcess
+
+    const turnPromise = (appServer as unknown as {
+      call: (method: string, params: unknown) => Promise<unknown>
+    }).call('turn/start', {
+      threadId: 'thread-active',
+      input: [{ type: 'text', text: 'hi' }],
+    })
+    ;(appServer as unknown as { handleLine: (line: string) => void }).handleLine(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      result: { turn: { id: 'turn-active' } },
+    }))
+
+    await expect(turnPromise).resolves.toEqual({ turn: { id: 'turn-active' } })
+    expect(appServer.isBusy()).toBe(true)
+
+    let disposed = false
+    const disposePromise = appServer.disposeWhenIdle().then(() => {
+      disposed = true
+    })
+    await Promise.resolve()
+
+    expect(disposed).toBe(false)
+    expect(fakeProcess.kill).not.toHaveBeenCalled()
+
+    ;(appServer as unknown as { emitNotification: (notification: { method: string; params: unknown }) => void })
+      .emitNotification({
+        method: 'turn/completed',
+        params: {
+          threadId: 'thread-active',
+          turn: { id: 'turn-active' },
+        },
+      })
+
+    await disposePromise
+
+    expect(disposed).toBe(true)
+    expect(fakeProcess.kill).toHaveBeenCalledWith('SIGTERM')
+  })
 })
 
 describe('buildProjectlessFolderName', () => {

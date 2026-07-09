@@ -6484,6 +6484,9 @@ export class AppServerProcess {
   private readonly capturedItemsByThreadId = new Map<string, Map<string, CapturedItem>>()
   private readonly liveStateCache = new Map<string, { data: unknown; turnCount: number; sessionSize: number }>()
   private readonly activeTurnThreadIds = new Set<string>()
+  private readonly optimisticTurnThreadIds = new Set<string>()
+  private readonly turnStartRequestThreadIds = new Map<number, string>()
+  private readonly idleWaiters = new Set<() => void>()
   private chatgptAuthRefreshPromise: Promise<ChatgptAuthTokensRefreshResponse> | null = null
   private activeConfigSignature = ''
 
@@ -6533,6 +6536,7 @@ export class AppServerProcess {
 
   private shouldDeferConfigRestart(): boolean {
     return this.activeTurnThreadIds.size > 0 ||
+      this.optimisticTurnThreadIds.size > 0 ||
       this.pending.size > 0 ||
       this.pendingServerRequests.size > 0
   }
@@ -6544,6 +6548,36 @@ export class AppServerProcess {
     this.pendingConfigRestart = false
     this.dispose()
     return true
+  }
+
+  private notifyIdleWaitersIfIdle(): void {
+    if (this.shouldDeferConfigRestart()) return
+    if (this.idleWaiters.size === 0) return
+
+    const waiters = Array.from(this.idleWaiters)
+    this.idleWaiters.clear()
+    for (const resolve of waiters) {
+      resolve()
+    }
+  }
+
+  private settleIdleState(): void {
+    this.applyPendingConfigRestartIfIdle()
+    this.notifyIdleWaitersIfIdle()
+  }
+
+  isBusy(): boolean {
+    return this.shouldDeferConfigRestart()
+  }
+
+  waitUntilIdle(): Promise<void> {
+    if (!this.shouldDeferConfigRestart()) {
+      return Promise.resolve()
+    }
+
+    return new Promise((resolve) => {
+      this.idleWaiters.add(resolve)
+    })
   }
 
   requestConfigRestartWhenIdle(): boolean {
@@ -6602,6 +6636,10 @@ export class AppServerProcess {
       this.initialized = false
       this.initializePromise = null
       this.readBuffer = ''
+      this.activeTurnThreadIds.clear()
+      this.optimisticTurnThreadIds.clear()
+      this.turnStartRequestThreadIds.clear()
+      this.notifyIdleWaitersIfIdle()
     })
   }
 
@@ -6629,10 +6667,16 @@ export class AppServerProcess {
 
       if (message.error) {
         pendingRequest.reject(new Error(message.error.message))
+        const threadId = this.turnStartRequestThreadIds.get(message.id)
+        if (threadId) {
+          this.optimisticTurnThreadIds.delete(threadId)
+        }
+        this.turnStartRequestThreadIds.delete(message.id)
       } else {
         pendingRequest.resolve(message.result)
+        this.turnStartRequestThreadIds.delete(message.id)
       }
-      this.applyPendingConfigRestartIfIdle()
+      this.settleIdleState()
       return
     }
 
@@ -6662,7 +6706,7 @@ export class AppServerProcess {
     for (const listener of this.notificationListeners) {
       listener(notification)
     }
-    this.applyPendingConfigRestartIfIdle()
+    this.settleIdleState()
   }
 
   private updateActiveTurnState(notification: { method: string; params: unknown }): void {
@@ -6671,9 +6715,11 @@ export class AppServerProcess {
     if (!threadId) return
     if (notification.method === 'turn/started') {
       this.activeTurnThreadIds.add(threadId)
+      this.optimisticTurnThreadIds.delete(threadId)
       return
     }
     this.activeTurnThreadIds.delete(threadId)
+    this.optimisticTurnThreadIds.delete(threadId)
   }
 
   private extractThreadIdFromParams(params: unknown): string {
@@ -6892,7 +6938,7 @@ export class AppServerProcess {
         resolvedAtIso: new Date().toISOString(),
       },
     })
-    this.applyPendingConfigRestartIfIdle()
+    this.settleIdleState()
   }
 
   private async refreshChatgptAuthTokens(params: ChatgptAuthTokensRefreshParams): Promise<ChatgptAuthTokensRefreshResponse> {
@@ -6955,9 +7001,16 @@ export class AppServerProcess {
   private async call(method: string, params: unknown): Promise<unknown> {
     this.start()
     const id = this.nextId++
+    const turnStartThreadId = method === 'turn/start'
+      ? this.extractThreadIdFromParams(params)
+      : ''
 
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject })
+      if (turnStartThreadId) {
+        this.turnStartRequestThreadIds.set(id, turnStartThreadId)
+        this.optimisticTurnThreadIds.add(turnStartThreadId)
+      }
 
       this.sendLine({
         jsonrpc: '2.0',
@@ -7063,6 +7116,9 @@ export class AppServerProcess {
     this.pending.clear()
     this.pendingServerRequests.clear()
     this.activeTurnThreadIds.clear()
+    this.optimisticTurnThreadIds.clear()
+    this.turnStartRequestThreadIds.clear()
+    this.notifyIdleWaitersIfIdle()
 
     try {
       proc.stdin.end()
@@ -7086,6 +7142,11 @@ export class AppServerProcess {
       }
     }, 1500)
     forceKillTimer.unref()
+  }
+
+  async disposeWhenIdle(): Promise<void> {
+    await this.waitUntilIdle()
+    this.dispose()
   }
 }
 
@@ -7452,6 +7513,7 @@ class MethodCatalog {
 
 type CodexBridgeMiddleware = ((req: IncomingMessage, res: ServerResponse, next: () => void) => Promise<void>) & {
   dispose: () => void
+  disposeGracefully: () => Promise<void>
   subscribeNotifications: (listener: (value: { method: string; params: unknown; atIso: string }) => void) => () => void
 }
 
@@ -9814,6 +9876,13 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     terminalManager.dispose()
     backendQueueProcessor.dispose()
     appServer.dispose()
+  }
+  middleware.disposeGracefully = async () => {
+    threadSearchIndex = null
+    telegramBridge.stop()
+    backendQueueProcessor.dispose()
+    terminalManager.dispose()
+    await appServer.disposeWhenIdle()
   }
   middleware.subscribeNotifications = (
     listener: (value: { method: string; params: unknown; atIso: string }) => void,
