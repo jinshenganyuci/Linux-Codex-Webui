@@ -13,13 +13,20 @@
     >
       <div v-if="selectedImages.length > 0" class="thread-composer-attachments">
         <div v-for="image in selectedImages" :key="image.id" class="thread-composer-attachment">
-          <img class="thread-composer-attachment-image" :src="image.url" :alt="image.name || 'Selected image'" />
+          <button
+            class="thread-composer-attachment-preview"
+            type="button"
+            :aria-label="t('Open image preview')"
+            @click.stop="openImageModal(image.url)"
+          >
+            <img class="thread-composer-attachment-image" :src="image.url" :alt="image.name || t('Selected image')" />
+          </button>
           <button
             class="thread-composer-attachment-remove"
             type="button"
             :aria-label="`Remove ${image.name || 'image'}`"
             :disabled="isInteractionDisabled"
-            @click="removeImage(image.id)"
+            @click.stop="removeImage(image.id)"
           >
             x
           </button>
@@ -400,6 +407,16 @@
       </div>
 
     </div>
+    <Teleport to="body">
+      <div v-if="modalImageUrl.length > 0" class="thread-composer-image-modal-backdrop" @click="closeImageModal">
+        <div class="thread-composer-image-modal-content" @click.stop>
+          <button class="thread-composer-image-modal-close" type="button" :aria-label="t('Close image preview')" @click="closeImageModal">
+            <IconTablerX class="thread-composer-image-modal-close-icon" />
+          </button>
+          <img class="thread-composer-image-modal-image" :src="modalImageUrl" :alt="t('Expanded message image')" />
+        </div>
+      </div>
+    </Teleport>
     <input
       ref="photoLibraryInputRef"
       class="thread-composer-hidden-input"
@@ -462,6 +479,7 @@ import IconTablerMaximize from '../icons/IconTablerMaximize.vue'
 import IconTablerMicrophone from '../icons/IconTablerMicrophone.vue'
 import IconTablerMinimize from '../icons/IconTablerMinimize.vue'
 import IconTablerPlayerStopFilled from '../icons/IconTablerPlayerStopFilled.vue'
+import IconTablerX from '../icons/IconTablerX.vue'
 import ComposerDropdown from './ComposerDropdown.vue'
 import ComposerModelReasoningDropdown from './ComposerModelReasoningDropdown.vue'
 import ComposerSearchDropdown from './ComposerSearchDropdown.vue'
@@ -569,6 +587,7 @@ const selectedSkills = ref<SkillItem[]>([])
 const savedPrompts = ref<ComposerPromptInfo[]>([])
 const fileAttachments = ref<FileAttachment[]>([])
 const folderUploadGroups = ref<FolderUploadGroup[]>([])
+const modalImageUrl = ref('')
 
 const dictationFeedback = ref('')
 const pendingAttachmentCount = ref(0)
@@ -1271,6 +1290,16 @@ function triggerCameraCapture(): void {
 
 function triggerFolderPicker(): void {
   folderPickerInputRef.value?.click()
+}
+
+function openImageModal(imageUrl: string): void {
+  const normalized = imageUrl.trim()
+  if (!normalized) return
+  modalImageUrl.value = normalized
+}
+
+function closeImageModal(): void {
+  modalImageUrl.value = ''
 }
 
 function removeImage(id: string): void {
@@ -2022,12 +2051,38 @@ watch(
   @apply relative h-14 w-14 overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50;
 }
 
+.thread-composer-attachment-preview {
+  @apply block h-full w-full border-0 bg-transparent p-0 cursor-zoom-in;
+}
+
 .thread-composer-attachment-image {
   @apply h-full w-full object-cover;
 }
 
 .thread-composer-attachment-remove {
   @apply absolute right-0.5 top-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full border-0 bg-black/70 text-xs leading-none text-white;
+}
+
+.thread-composer-image-modal-backdrop {
+  @apply fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-6;
+  cursor: zoom-out;
+}
+
+.thread-composer-image-modal-content {
+  @apply relative max-w-[min(92vw,1100px)] max-h-[92vh];
+  cursor: default;
+}
+
+.thread-composer-image-modal-close {
+  @apply absolute right-2 top-2 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white/90 text-slate-900;
+}
+
+.thread-composer-image-modal-close-icon {
+  @apply h-5 w-5;
+}
+
+.thread-composer-image-modal-image {
+  @apply block max-h-[90vh] max-w-full rounded-2xl bg-white shadow-2xl;
 }
 
 .thread-composer-file-chips {
