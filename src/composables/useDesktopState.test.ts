@@ -47,7 +47,7 @@ vi.mock('../api/codexGateway', () => ({
   pickCodexRateLimitSnapshot: vi.fn(() => null),
 }))
 
-function thread(id: string, cwd: string, options: { hasWorktree?: boolean } = {}) {
+function thread(id: string, cwd: string, options: { hasWorktree?: boolean; inProgress?: boolean } = {}) {
   return {
     id,
     title: id,
@@ -58,7 +58,7 @@ function thread(id: string, cwd: string, options: { hasWorktree?: boolean } = {}
     updatedAtIso: '2026-04-28T00:00:00.000Z',
     preview: '',
     unread: false,
-    inProgress: false,
+    inProgress: options.inProgress ?? false,
   }
 }
 
@@ -485,6 +485,19 @@ describe('startup request deduplication', () => {
 
     expect(gatewayMocks.getThreadTitleCache).toHaveBeenCalledTimes(2)
     expect(state.projectGroups.value[0]?.threads[0]?.title).toBe('Imported title')
+  })
+
+  it('preserves server-reported in-progress state in sidebar thread groups', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-running', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+
+    expect(state.projectGroups.value[0]?.threads[0]?.inProgress).toBe(true)
   })
 
   it('reuses a just-loaded thread list during startup refresh bursts', async () => {
@@ -1032,7 +1045,7 @@ describe('provider model selection', () => {
     await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
     await state.sendMessageToNewThread('hi', '/tmp/project')
 
-    expect(gatewayMocks.startThread).toHaveBeenCalledWith('/tmp/project', 'gpt-5.5')
+    expect(gatewayMocks.startThread).toHaveBeenCalledWith('/tmp/project', 'gpt-5.5', null)
     expect(gatewayMocks.startThreadTurn).toHaveBeenCalledWith(
       'codex-thread',
       'hi',
@@ -1042,6 +1055,7 @@ describe('provider model selection', () => {
       undefined,
       [],
       'default',
+      null,
     )
     expect(state.readModelIdForThread('codex-thread')).toBe('gpt-5.5')
     expect(state.messages.value.some((message) => (

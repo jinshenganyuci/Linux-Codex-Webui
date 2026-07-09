@@ -1144,6 +1144,23 @@ function mergeIncomingWithLocalInProgressThreads(
   return merged
 }
 
+function mergeIncomingInProgressState(
+  current: Record<string, boolean>,
+  groups: UiProjectGroup[],
+): Record<string, boolean> {
+  let next = current
+
+  for (const thread of flattenThreads(groups)) {
+    if (thread.inProgress !== true || next[thread.id] === true) continue
+    if (next === current) {
+      next = { ...current }
+    }
+    next[thread.id] = true
+  }
+
+  return next
+}
+
 function toProjectNameFromWorkspaceRoot(value: string): string {
   return toProjectName(value)
 }
@@ -4293,6 +4310,7 @@ export function useDesktopState() {
 
     const orderedGroups = orderGroupsByProjectOrder(visibleGroups, projectOrder.value)
     markServerListedThreads(new Set(flattenThreads(orderedGroups).map((thread) => thread.id)))
+    inProgressById.value = mergeIncomingInProgressState(inProgressById.value, orderedGroups)
     const mergedWithInProgress = mergeIncomingWithLocalInProgressThreads(
       sourceGroups.value,
       orderedGroups,
