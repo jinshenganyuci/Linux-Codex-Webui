@@ -3346,6 +3346,12 @@ onBeforeUnmount(() => {
   @apply opacity-100 pointer-events-auto;
 }
 
+.thread-left-stack:has(.thread-status-indicator[data-state='working']) .thread-delete-button:not([data-confirming='true']),
+.thread-left-stack:has(.thread-status-indicator[data-state='awaiting-approval']) .thread-delete-button:not([data-confirming='true']),
+.thread-left-stack:has(.thread-status-indicator[data-state='awaiting-response']) .thread-delete-button:not([data-confirming='true']) {
+  @apply opacity-0 pointer-events-none;
+}
+
 .thread-status-indicator[data-state='unread'] {
   width: 6.6667px;
   height: 6.6667px;
@@ -3365,13 +3371,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-row:hover .thread-status-indicator[data-state='unread'],
-.thread-row:hover .thread-status-indicator[data-state='working'],
-.thread-row:hover .thread-status-indicator[data-state='awaiting-approval'],
-.thread-row:hover .thread-status-indicator[data-state='awaiting-response'],
-.thread-row:focus-within .thread-status-indicator[data-state='unread'],
-.thread-row:focus-within .thread-status-indicator[data-state='working'],
-.thread-row:focus-within .thread-status-indicator[data-state='awaiting-approval'],
-.thread-row:focus-within .thread-status-indicator[data-state='awaiting-response'] {
+.thread-row:focus-within .thread-status-indicator[data-state='unread'] {
   @apply opacity-0;
 }
 
