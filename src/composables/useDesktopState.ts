@@ -1642,7 +1642,7 @@ export function useDesktopState() {
   let loadedThreadListGroups: UiProjectGroup[] = []
   let loadedThreadListRootsState: WorkspaceRootsState | null = null
   let hasHydratedWorkspaceRootsState = false
-  let activeReasoningItemId = ''
+  const activeReasoningItemIdByThreadId = new Map<string, string>()
   let shouldAutoScrollOnNextAgentEvent = false
   const pendingTurnStartsById = new Map<string, TurnStartedInfo>()
   const fallbackRetryInFlightThreadIds = new Set<string>()
@@ -1795,7 +1795,7 @@ export function useDesktopState() {
       selectedCollaborationModeByContext.value,
       nextThreadId,
     )
-    activeReasoningItemId = ''
+    activeReasoningItemIdByThreadId.delete(nextThreadId)
     shouldAutoScrollOnNextAgentEvent = false
   }
 
@@ -2802,7 +2802,7 @@ export function useDesktopState() {
     clearLiveReasoningForThread(threadId)
     setTurnActivityForThread(threadId, null)
     if (threadId === selectedThreadId.value) {
-      activeReasoningItemId = ''
+      activeReasoningItemIdByThreadId.delete(threadId)
     }
     if (liveCommandsByThreadId.value[threadId]) {
       liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
@@ -3091,9 +3091,10 @@ export function useDesktopState() {
     if (!row) return null
 
     const id = row.id
+    const generation = row.generation
     const rawMethod = readString(row.method)
     const requestParams = row.params
-    if (typeof id !== 'number' || !Number.isInteger(id) || !rawMethod) {
+    if (typeof id !== 'number' || !Number.isInteger(id) || typeof generation !== 'number' || !Number.isInteger(generation) || !rawMethod) {
       return null
     }
 
@@ -3117,6 +3118,7 @@ export function useDesktopState() {
 
     return {
       id,
+      generation,
       method,
       threadId,
       turnId,
@@ -3272,10 +3274,10 @@ export function useDesktopState() {
     applyThreadFlags()
   }
 
-  function removePendingServerRequestById(requestId: number): void {
+  function removePendingServerRequestById(requestId: number, generation?: number): void {
     const next: Record<string, UiServerRequest[]> = {}
     for (const [threadId, requests] of Object.entries(pendingServerRequestsByThreadId.value)) {
-      const filtered = requests.filter((request) => request.id !== requestId)
+      const filtered = requests.filter((request) => request.id !== requestId || (generation !== undefined && request.generation !== generation))
       if (filtered.length > 0) {
         next[threadId] = filtered
       }
@@ -3312,7 +3314,21 @@ export function useDesktopState() {
       const row = asRecord(notification.params)
       const id = row?.id
       if (typeof id === 'number' && Number.isInteger(id)) {
-        removePendingServerRequestById(id)
+        removePendingServerRequestById(id, typeof row?.generation === 'number' ? row.generation : undefined)
+      }
+      return true
+    }
+
+    if (notification.method === 'server/requests/invalidated') {
+      const row = asRecord(notification.params)
+      const generation = typeof row?.generation === 'number' && Number.isInteger(row.generation)
+        ? row.generation
+        : undefined
+      const requestIds = Array.isArray(row?.requestIds) ? row.requestIds : []
+      for (const requestId of requestIds) {
+        if (typeof requestId === 'number' && Number.isInteger(requestId)) {
+          removePendingServerRequestById(requestId, generation)
+        }
       }
       return true
     }
@@ -4041,11 +4057,11 @@ export function useDesktopState() {
       })
     }
 
-    if (!notificationThreadId || notificationThreadId !== selectedThreadId.value) return
+    if (!notificationThreadId) return
 
     const startedAgentMessageId = readAgentMessageStartedId(notification)
     if (startedAgentMessageId) {
-      activeReasoningItemId = ''
+      activeReasoningItemIdByThreadId.delete(notificationThreadId)
     }
 
     const liveAgentMessageDelta = readAgentMessageDelta(notification)
@@ -4074,7 +4090,7 @@ export function useDesktopState() {
 
     const startedReasoningItemId = readReasoningStartedItemId(notification)
     if (startedReasoningItemId) {
-      activeReasoningItemId = startedReasoningItemId
+      activeReasoningItemIdByThreadId.set(notificationThreadId, startedReasoningItemId)
     }
 
     const liveReasoningDelta = readReasoningDelta(notification)
@@ -4092,8 +4108,8 @@ export function useDesktopState() {
 
     const completedReasoningMessageId = readReasoningCompletedId(notification)
     if (completedReasoningMessageId) {
-      if (completedReasoningMessageId === liveReasoningMessageId(activeReasoningItemId)) {
-        activeReasoningItemId = ''
+      if (completedReasoningMessageId === liveReasoningMessageId(activeReasoningItemIdByThreadId.get(notificationThreadId) ?? '')) {
+        activeReasoningItemIdByThreadId.delete(notificationThreadId)
       }
     }
 
@@ -4125,12 +4141,12 @@ export function useDesktopState() {
     }
 
     if (isAgentContentEvent(notification)) {
-      activeReasoningItemId = ''
+      activeReasoningItemIdByThreadId.delete(notificationThreadId)
       clearLiveReasoningForThread(notificationThreadId)
     }
 
     if (notification.method === 'turn/completed') {
-      activeReasoningItemId = ''
+      activeReasoningItemIdByThreadId.delete(notificationThreadId)
       shouldAutoScrollOnNextAgentEvent = false
       clearLiveReasoningForThread(notificationThreadId)
       if (liveCommandsByThreadId.value[notificationThreadId]) {
@@ -4518,7 +4534,7 @@ export function useDesktopState() {
     await loadThreadsPromise
   }
 
-  async function loadMessages(threadId: string, options: { silent?: boolean } = {}) {
+  async function loadMessages(threadId: string, options: { silent?: boolean; force?: boolean } = {}) {
     if (!threadId) {
       return
     }
@@ -4531,7 +4547,7 @@ export function useDesktopState() {
     const existingLoad = loadMessagePromiseByThreadId.get(threadId)
     if (existingLoad) {
       await existingLoad
-      return
+      if (!options.force) return
     }
 
     const alreadyLoaded = loadedMessagesByThreadId.value[threadId] === true
@@ -4547,6 +4563,7 @@ export function useDesktopState() {
       const loadedRecently =
         Date.now() - (lastMessageLoadAtByThreadId.get(threadId) ?? 0) < RECENT_THREAD_MESSAGE_LOAD_REUSE_MS
       const canReuseLoadedMessages =
+        !options.force &&
         alreadyLoaded &&
         (
           loadedRecently ||
@@ -4987,6 +5004,7 @@ export function useDesktopState() {
 
     return respondToPendingServerRequest({
       id: request.id,
+      generation: request.generation,
       result: {
         answers: {
           [questionIds[0]]: {
@@ -5658,7 +5676,6 @@ export function useDesktopState() {
     }
 
     isPolling.value = true
-
     const shouldRefreshThreads = pendingThreadsRefresh
     const shouldForceThreadRefresh = pendingThreadsRefreshForce
     const threadIdsToRefresh = new Set(pendingThreadMessageRefresh)
@@ -5672,28 +5689,27 @@ export function useDesktopState() {
       }
 
       const activeThreadId = selectedThreadId.value
-      if (!activeThreadId) return
+      if (activeThreadId) {
+        const isInProgress = inProgressById.value[activeThreadId] === true
+        const currentVersion = currentThreadVersion(activeThreadId)
+        const loadedVersion = loadedVersionByThreadId.value[activeThreadId] ?? ''
+        const hasVersionChange = currentVersion.length > 0 && currentVersion !== loadedVersion
+        if (hasVersionChange || isInProgress || loadedMessagesByThreadId.value[activeThreadId] !== true) {
+          threadIdsToRefresh.add(activeThreadId)
+        }
+      }
 
-      const isActiveDirty = threadIdsToRefresh.has(activeThreadId)
-      const isInProgress = inProgressById.value[activeThreadId] === true
-      const currentVersion = currentThreadVersion(activeThreadId)
-      const loadedVersion = loadedVersionByThreadId.value[activeThreadId] ?? ''
-      const hasVersionChange = currentVersion.length > 0 && currentVersion !== loadedVersion
+      for (const thread of allThreads.value) {
+        if (inProgressById.value[thread.id] === true) threadIdsToRefresh.add(thread.id)
+      }
 
-      const shouldRefreshActiveThread =
-        hasVersionChange ||
-        isActiveDirty ||
-        (isInProgress && loadedMessagesByThreadId.value[activeThreadId] !== true) ||
-        (shouldRefreshThreads && loadedMessagesByThreadId.value[activeThreadId] !== true)
-
-      if (shouldRefreshActiveThread) {
-        await loadMessages(activeThreadId, { silent: true })
+      for (const threadId of threadIdsToRefresh) {
+        await loadMessages(threadId, { silent: true, force: true })
       }
     } catch {
       // Keep UI stable on transient event sync failures.
     } finally {
       isPolling.value = false
-
       if (
         (pendingThreadsRefresh || pendingThreadMessageRefresh.size > 0) &&
         typeof window !== 'undefined' &&
@@ -5707,27 +5723,26 @@ export function useDesktopState() {
     }
   }
 
-  async function recoverBridgeState(): Promise<void> {
+  async function recoverBridgeState(forceRefresh = false): Promise<void> {
     await loadPendingServerRequestsFromBridge()
-    pendingThreadsRefresh = !hasLoadedThreads.value
-    if (
-      selectedThreadId.value &&
-      loadedMessagesByThreadId.value[selectedThreadId.value] !== true
-    ) {
-      pendingThreadMessageRefresh.add(selectedThreadId.value)
+    pendingThreadsRefresh = forceRefresh || !hasLoadedThreads.value
+    pendingThreadsRefreshForce = forceRefresh
+    if (selectedThreadId.value) pendingThreadMessageRefresh.add(selectedThreadId.value)
+    for (const thread of allThreads.value) {
+      if (inProgressById.value[thread.id] === true) pendingThreadMessageRefresh.add(thread.id)
     }
     await syncFromNotifications()
   }
 
   function startPolling(): void {
     if (typeof window === 'undefined') return
-
     if (stopNotificationStream) return
     void loadPendingServerRequestsFromBridge()
     stopNotificationStream = subscribeCodexNotifications((notification) => {
       if (notification.method === 'ready') {
         clearAllTransientTurnErrors()
-        void recoverBridgeState()
+        const params = asRecord(notification.params)
+        void recoverBridgeState(params?.replayAvailable !== true || params?.streamChanged === true)
         return
       }
       applyRealtimeUpdates(notification)
@@ -5749,11 +5764,14 @@ export function useDesktopState() {
 
   async function respondToPendingServerRequest(reply: UiServerRequestReply): Promise<boolean> {
     try {
-      await replyToServerRequest(reply.id, {
+      const generation = reply.generation ?? selectedThreadServerRequests.value
+        .find((request) => request.id === reply.id)?.generation
+      if (generation === undefined) throw new Error('Server request generation is unavailable')
+      await replyToServerRequest(reply.id, generation, {
         result: reply.result,
         error: reply.error,
       })
-      removePendingServerRequestById(reply.id)
+      removePendingServerRequestById(reply.id, generation)
       return true
     } catch (unknownError) {
       error.value = unknownError instanceof Error ? unknownError.message : 'Failed to reply to server request'
@@ -5788,7 +5806,7 @@ export function useDesktopState() {
       }
     }
     delayedTurnSyncTimerByThreadId.clear()
-    activeReasoningItemId = ''
+    activeReasoningItemIdByThreadId.clear()
     shouldAutoScrollOnNextAgentEvent = false
     persistedMessagesByThreadId.value = {}
     livePlanMessagesByThreadId.value = {}

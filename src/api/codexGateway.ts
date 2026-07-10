@@ -1446,10 +1446,12 @@ export async function getThreadTerminalSnapshot(threadId: string): Promise<Threa
 
 export async function replyToServerRequest(
   id: number,
+  generation: number,
   payload: { result?: unknown; error?: { code?: number; message: string } },
 ): Promise<void> {
   await respondServerRequest({
     id,
+    generation,
     ...payload,
   })
 }

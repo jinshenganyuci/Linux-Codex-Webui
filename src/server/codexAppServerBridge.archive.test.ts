@@ -339,7 +339,9 @@ describe('AppServerProcess runtime config restart', () => {
         return true
       }),
     }
-    ;(appServer as unknown as { process: unknown }).process = fakeProcess
+    ;(appServer as unknown as { process: unknown; processGeneration: number; activeProcessGeneration: number }).process = fakeProcess
+    ;(appServer as unknown as { processGeneration: number }).processGeneration = 1
+    ;(appServer as unknown as { activeProcessGeneration: number }).activeProcessGeneration = 1
 
     ;(appServer as unknown as { emitNotification: (notification: { method: string; params: unknown }) => void })
       .emitNotification({
@@ -378,7 +380,9 @@ describe('AppServerProcess runtime config restart', () => {
         return true
       }),
     }
-    ;(appServer as unknown as { process: unknown }).process = fakeProcess
+    ;(appServer as unknown as { process: unknown; processGeneration: number; activeProcessGeneration: number }).process = fakeProcess
+    ;(appServer as unknown as { processGeneration: number }).processGeneration = 1
+    ;(appServer as unknown as { activeProcessGeneration: number }).activeProcessGeneration = 1
 
     ;(appServer as unknown as { emitNotification: (notification: { method: string; params: unknown }) => void })
       .emitNotification({
@@ -427,7 +431,9 @@ describe('AppServerProcess runtime config restart', () => {
         return true
       }),
     }
-    ;(appServer as unknown as { process: unknown }).process = fakeProcess
+    ;(appServer as unknown as { process: unknown; processGeneration: number; activeProcessGeneration: number }).process = fakeProcess
+    ;(appServer as unknown as { processGeneration: number }).processGeneration = 1
+    ;(appServer as unknown as { activeProcessGeneration: number }).activeProcessGeneration = 1
 
     const turnPromise = (appServer as unknown as {
       call: (method: string, params: unknown) => Promise<unknown>
@@ -466,6 +472,52 @@ describe('AppServerProcess runtime config restart', () => {
 
     expect(disposed).toBe(true)
     expect(fakeProcess.kill).toHaveBeenCalledWith('SIGTERM')
+  })
+
+  it('ignores responses from an older app-server generation', async () => {
+    const appServer = new AppServerProcess()
+    const fakeProcess = {
+      stdin: { write: vi.fn(), end: vi.fn() },
+      kill: vi.fn(),
+      killed: false,
+    }
+    ;(appServer as unknown as { process: unknown }).process = fakeProcess
+    ;(appServer as unknown as { processGeneration: number }).processGeneration = 2
+    ;(appServer as unknown as { activeProcessGeneration: number }).activeProcessGeneration = 2
+
+    const callPromise = (appServer as unknown as {
+      call: (method: string, params: unknown) => Promise<unknown>
+    }).call('thread/list', {})
+    ;(appServer as unknown as { handleLine: (line: string, generation: number) => void })
+      .handleLine(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { source: 'old' } }), 1)
+
+    const settled = vi.fn()
+    void callPromise.then(settled)
+    await Promise.resolve()
+    expect(settled).not.toHaveBeenCalled()
+
+    ;(appServer as unknown as { handleLine: (line: string, generation: number) => void })
+      .handleLine(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { source: 'current' } }), 2)
+    await expect(callPromise).resolves.toEqual({ source: 'current' })
+  })
+
+  it('rejects an approval reply from an older app-server generation', async () => {
+    const appServer = new AppServerProcess()
+    const fakeProcess = {
+      stdin: { write: vi.fn(), end: vi.fn() },
+      kill: vi.fn(),
+      killed: false,
+    }
+    ;(appServer as unknown as { process: unknown }).process = fakeProcess
+    ;(appServer as unknown as { processGeneration: number }).processGeneration = 2
+    ;(appServer as unknown as { activeProcessGeneration: number }).activeProcessGeneration = 2
+    ;(appServer as unknown as { initialized: boolean }).initialized = true
+    ;(appServer as unknown as { handleServerRequest: (generation: number, id: number, method: string, params: unknown) => void })
+      .handleServerRequest(2, 7, 'item/commandExecution/requestApproval', { threadId: 'thread-1' })
+
+    await expect(appServer.respondToServerRequest({ id: 7, generation: 1, result: { decision: 'accept' } }))
+      .rejects.toThrow('No pending server request')
+    expect(fakeProcess.stdin.write).not.toHaveBeenCalled()
   })
 })
 

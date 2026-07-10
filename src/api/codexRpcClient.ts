@@ -10,10 +10,14 @@ export type RpcNotification = {
   method: string
   params: unknown
   atIso: string
+  streamId?: string
+  sequence?: number
+  generation?: number
 }
 
 type ServerRequestReplyBody = {
   id: number
+  generation: number
   result?: unknown
   error?: {
     code?: number
@@ -142,6 +146,9 @@ function toNotification(value: unknown): RpcNotification | null {
     method: record.method,
     params: record.params ?? null,
     atIso,
+    streamId: typeof record.streamId === 'string' ? record.streamId : undefined,
+    sequence: typeof record.sequence === 'number' && Number.isInteger(record.sequence) ? record.sequence : undefined,
+    generation: typeof record.generation === 'number' && Number.isInteger(record.generation) ? record.generation : undefined,
   }
 }
 
@@ -164,6 +171,8 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
   let cleanup: (() => void) | null = null
   let closed = false
   let reconnectTimer: number | null = null
+  let activeStreamId = ''
+  let lastSequence = 0
 
   const clearReconnectTimer = () => {
     if (reconnectTimer === null) return
@@ -181,17 +190,46 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
     }, delayMs)
   }
 
+  const cursorQuery = () => {
+    const query = new URLSearchParams()
+    if (activeStreamId) query.set('streamId', activeStreamId)
+    if (lastSequence > 0) query.set('sequence', String(lastSequence))
+    const value = query.toString()
+    return value ? `?${value}` : ''
+  }
+
   const handleNotificationPayload = (payload: unknown) => {
     const notification = toNotification(payload)
-    if (notification) {
-      onNotification(notification)
+    if (!notification) return
+    if (notification.streamId && typeof notification.sequence === 'number') {
+      if (notification.streamId === activeStreamId && notification.sequence <= lastSequence) return
+      if (notification.streamId !== activeStreamId) {
+        activeStreamId = notification.streamId
+        lastSequence = 0
+      }
+      lastSequence = notification.sequence
     }
+    onNotification(notification)
+  }
+
+  const handleReadyPayload = (payload: unknown) => {
+    const ready = asRecord(payload)
+    const streamId = typeof ready?.streamId === 'string' ? ready.streamId : ''
+    const replayAvailable = ready?.replayAvailable === true
+    const streamChanged = Boolean(activeStreamId) && Boolean(streamId) && activeStreamId !== streamId
+    if (streamChanged) lastSequence = 0
+    if (streamId) activeStreamId = streamId
+    emitReadyNotification(onNotification, {
+      ...(ready ?? { ok: true }),
+      streamChanged,
+      replayAvailable,
+    })
   }
 
   const attachSse = (attempt = 0) => {
     if (typeof EventSource === 'undefined' || closed) return
     cleanup?.()
-    const source = new EventSource('/codex-api/events')
+    const source = new EventSource(`/codex-api/events${cursorQuery()}`)
     let isConnectionClosed = false
 
     source.onmessage = (event) => {
@@ -204,20 +242,17 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
 
     source.addEventListener('ready', (event: MessageEvent<string>) => {
       try {
-        const parsed = event.data ? JSON.parse(event.data) as unknown : { ok: true }
-        emitReadyNotification(onNotification, parsed)
+        handleReadyPayload(event.data ? JSON.parse(event.data) as unknown : { ok: true })
       } catch {
-        emitReadyNotification(onNotification)
+        handleReadyPayload({ ok: true })
       }
     })
 
     source.onerror = () => {
       if (closed || isConnectionClosed) return
-      if (source.readyState === EventSource.CLOSED) {
-        isConnectionClosed = true
-        source.close()
-        scheduleReconnect(() => attachSse(attempt + 1), attempt)
-      }
+      isConnectionClosed = true
+      source.close()
+      scheduleReconnect(() => attachSse(attempt + 1), attempt)
     }
 
     cleanup = () => {
@@ -234,7 +269,7 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
 
     cleanup?.()
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new WebSocket(`${protocol}//${window.location.host}/codex-api/ws`)
+    const socket = new WebSocket(`${protocol}//${window.location.host}/codex-api/ws${cursorQuery()}`)
     let didOpen = false
     let intentionallyClosed = false
     let fallbackTimer: number | null = window.setTimeout(() => {
@@ -255,7 +290,13 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
 
     socket.onmessage = (event) => {
       try {
-        handleNotificationPayload(JSON.parse(String(event.data)) as unknown)
+        const payload = JSON.parse(String(event.data)) as unknown
+        const notification = toNotification(payload)
+        if (notification?.method === 'ready') {
+          handleReadyPayload(notification.params)
+        } else {
+          handleNotificationPayload(payload)
+        }
       } catch {
         // Ignore malformed event payloads and keep stream alive.
       }
@@ -270,9 +311,7 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
         window.clearTimeout(fallbackTimer)
         fallbackTimer = null
       }
-      if (closed || intentionallyClosed) {
-        return
-      }
+      if (closed || intentionallyClosed) return
       if (!didOpen) {
         attachSse()
         return

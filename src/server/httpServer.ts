@@ -4,7 +4,7 @@ import type { Server as HttpServer, IncomingMessage } from 'node:http'
 import { existsSync } from 'node:fs'
 import { writeFile, stat } from 'node:fs/promises'
 import express, { type Express } from 'express'
-import { createCodexBridgeMiddleware } from './codexAppServerBridge.js'
+import { createCodexBridgeMiddleware, type BridgeNotification } from './codexAppServerBridge.js'
 import { createAuthSession } from './authMiddleware.js'
 import { createDirectoryListingHtml, createTextEditorHtml, decodeBrowsePath, getLocalDirectoryListing, isTextEditableFile, normalizeLocalPath } from './localBrowseUi.js'
 import { WebSocketServer, type WebSocket } from 'ws'
@@ -274,12 +274,18 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
         })
       })
 
-      wss.on('connection', (ws: WebSocket) => {
-        ws.send(JSON.stringify({ method: 'ready', params: { ok: true }, atIso: new Date().toISOString() }))
-        const unsubscribe = bridge.subscribeNotifications((notification) => {
+      wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+        const url = new URL(req.url ?? '', 'http://localhost')
+        const cursorStreamId = url.searchParams.get('streamId') ?? undefined
+        const parsedSequence = Number.parseInt(url.searchParams.get('sequence') ?? '0', 10)
+        const cursorSequence = Number.isInteger(parsedSequence) ? Math.max(0, parsedSequence) : 0
+        const streamState = bridge.getNotificationStreamState()
+        const replayAvailable = cursorStreamId === streamState.streamId && cursorSequence >= Math.max(0, streamState.oldestSequence - 1)
+        const unsubscribe = bridge.subscribeNotifications((notification: BridgeNotification) => {
           if (ws.readyState !== 1) return
           ws.send(JSON.stringify(notification))
-        })
+        }, { streamId: cursorStreamId, sequence: cursorSequence })
+        ws.send(JSON.stringify({ method: 'ready', params: { ok: true, ...streamState, replayAvailable }, atIso: new Date().toISOString() }))
 
         ws.on('close', unsubscribe)
         ws.on('error', unsubscribe)

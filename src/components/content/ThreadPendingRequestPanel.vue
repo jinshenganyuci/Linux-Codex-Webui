@@ -859,6 +859,7 @@ function onRespondApproval(request: UiServerRequest, decision: ApprovalDecision)
     if (decision === 'decline' || decision === 'cancel') {
       emit('respondServerRequest', {
         id: request.id,
+        generation: request.generation,
         error: {
           code: -32000,
           message: decision === 'cancel' ? 'Cancelled from CodexUI.' : 'Declined from CodexUI.',
@@ -870,6 +871,7 @@ function onRespondApproval(request: UiServerRequest, decision: ApprovalDecision)
     const permissions = asRecord(asRecord(request.params)?.permissions) ?? {}
     emit('respondServerRequest', {
       id: request.id,
+        generation: request.generation,
       result: {
         permissions,
         scope: decision === 'acceptForSession' ? 'session' : 'turn',
@@ -880,6 +882,7 @@ function onRespondApproval(request: UiServerRequest, decision: ApprovalDecision)
 
   emit('respondServerRequest', {
     id: request.id,
+        generation: request.generation,
     result: { decision },
   })
 }
@@ -895,6 +898,7 @@ function onSubmitApproval(request: UiServerRequest): void {
 
   emit('respondServerRequest', {
     id: request.id,
+        generation: request.generation,
     result: {
       decision,
     },
@@ -917,6 +921,7 @@ function onRespondMcpElicitation(request: UiServerRequest, action: 'accept' | 'd
 
   emit('respondServerRequest', {
     id: request.id,
+        generation: request.generation,
     result,
   })
 }
@@ -934,6 +939,7 @@ function onRespondToolRequestUserInput(request: UiServerRequest): void {
 
   emit('respondServerRequest', {
     id: request.id,
+        generation: request.generation,
     result: { answers },
   })
 }
@@ -941,6 +947,7 @@ function onRespondToolRequestUserInput(request: UiServerRequest): void {
 function onRespondToolCallFailure(request: UiServerRequest): void {
   emit('respondServerRequest', {
     id: request.id,
+        generation: request.generation,
     result: {
       success: false,
       contentItems: [
@@ -956,6 +963,7 @@ function onRespondToolCallFailure(request: UiServerRequest): void {
 function onRespondToolCallSuccess(request: UiServerRequest): void {
   emit('respondServerRequest', {
     id: request.id,
+        generation: request.generation,
     result: {
       success: true,
       contentItems: [],
@@ -966,6 +974,7 @@ function onRespondToolCallSuccess(request: UiServerRequest): void {
 function onRespondEmptyResult(request: UiServerRequest): void {
   emit('respondServerRequest', {
     id: request.id,
+        generation: request.generation,
     result: {},
   })
 }
@@ -973,6 +982,7 @@ function onRespondEmptyResult(request: UiServerRequest): void {
 function onRejectUnknownRequest(request: UiServerRequest): void {
   emit('respondServerRequest', {
     id: request.id,
+        generation: request.generation,
     error: {
       code: -32000,
       message: 'Rejected from CodexUI.',

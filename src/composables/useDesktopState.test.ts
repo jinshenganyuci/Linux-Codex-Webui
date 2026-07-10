@@ -1253,3 +1253,71 @@ describe('findAdjacentThreadId', () => {
     expect(findAdjacentThreadId([thread('selected-thread', '/tmp/project')], 'selected-thread')).toBe('')
   })
 })
+
+describe('notification recovery', () => {
+  it('keeps live deltas for a background thread when switching back', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.resumeThread.mockResolvedValue(null)
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      messages: [],
+      inProgress: true,
+      activeTurnId: 'turn-a',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-b')
+    state.startPolling()
+    notificationHandler!({
+      method: 'item/agentMessage/delta',
+      params: { threadId: 'thread-a', itemId: 'agent-a', delta: 'background text' },
+    })
+
+    state.primeSelectedThread('thread-a')
+    expect(state.messages.value).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'agent-a', text: 'background text' }),
+    ]))
+  })
+
+  it('forces the selected thread to reload when replay is unavailable', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.resumeThread.mockResolvedValue(null)
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      messages: [],
+      inProgress: true,
+      activeTurnId: 'turn-a',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    await state.refreshAll({ includeSelectedThreadMessages: true })
+    const callsBeforeReconnect = gatewayMocks.getThreadDetail.mock.calls.length
+    state.startPolling()
+    notificationHandler!({
+      method: 'ready',
+      params: { replayAvailable: false, streamChanged: true },
+    })
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadDetail.mock.calls.length).toBeGreaterThan(callsBeforeReconnect)
+    })
+  })
+})

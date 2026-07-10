@@ -227,6 +227,7 @@ export type UiMessage = {
 
 export type UiServerRequest = {
   id: number
+  generation: number
   method: string
   threadId: string
   turnId: string
@@ -237,6 +238,7 @@ export type UiServerRequest = {
 
 export type UiServerRequestReply = {
   id: number
+  generation?: number
   result?: unknown
   followUpMessageText?: string
   error?: {

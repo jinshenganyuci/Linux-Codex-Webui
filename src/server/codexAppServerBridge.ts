@@ -105,6 +105,7 @@ export type WorkspaceRootsState = {
 
 type PendingServerRequest = {
   id: number
+  generation: number
   method: string
   params: unknown
   receivedAtIso: string
@@ -6446,11 +6447,28 @@ async function fetchConnectorLogo(rawUrl: string): Promise<{ contentType: string
 }
 
 const STREAM_EVENT_BUFFER_LIMIT = 400
+const NOTIFICATION_REPLAY_BUFFER_LIMIT = 2000
 
 type StreamEventFrame = {
   method: string
   params: unknown
   atIso: string
+  generation: number
+}
+
+type AppServerNotification = {
+  method: string
+  params: unknown
+  generation: number
+}
+
+export type BridgeNotification = {
+  method: string
+  params: unknown
+  atIso: string
+  streamId: string
+  sequence: number
+  generation?: number
 }
 
 type CapturedItem = {
@@ -6468,14 +6486,15 @@ const MERGEABLE_ITEM_TYPES = new Set([
 
 export class AppServerProcess {
   private process: ChildProcessWithoutNullStreams | null = null
+  private processGeneration = 0
+  private activeProcessGeneration = 0
   private initialized = false
   private initializePromise: Promise<void> | null = null
-  private readBuffer = ''
   private nextId = 1
   private stopping = false
   private pendingConfigRestart = false
-  private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
-  private readonly notificationListeners = new Set<(value: { method: string; params: unknown }) => void>()
+  private readonly pending = new Map<number, { generation: number; resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
+  private readonly notificationListeners = new Set<(value: AppServerNotification) => void>()
   private readonly pendingServerRequests = new Map<number, PendingServerRequest>()
   private readonly streamEventsByThreadId = new Map<string, StreamEventFrame[]>()
   private readonly lastThreadReadSnapshotByThreadId = new Map<string, unknown>()
@@ -6596,22 +6615,26 @@ export class AppServerProcess {
       ? { ...process.env, ...config.env }
       : undefined
     const proc = spawn(invocation.command, invocation.args, { stdio: ['pipe', 'pipe', 'pipe'], ...(spawnEnv ? { env: spawnEnv } : {}) })
+    const generation = ++this.processGeneration
+    let readBuffer = ''
     this.process = proc
+    this.activeProcessGeneration = generation
 
     proc.stdout.setEncoding('utf8')
     proc.stdout.on('data', (chunk: string) => {
-      this.readBuffer += chunk
+      if (this.process !== proc || this.activeProcessGeneration !== generation) return
+      readBuffer += chunk
 
-      let lineEnd = this.readBuffer.indexOf('\n')
+      let lineEnd = readBuffer.indexOf('\n')
       while (lineEnd !== -1) {
-        const line = this.readBuffer.slice(0, lineEnd).trim()
-        this.readBuffer = this.readBuffer.slice(lineEnd + 1)
+        const line = readBuffer.slice(0, lineEnd).trim()
+        readBuffer = readBuffer.slice(lineEnd + 1)
 
         if (line.length > 0) {
-          this.handleLine(line)
+          this.handleLine(line, generation)
         }
 
-        lineEnd = this.readBuffer.indexOf('\n')
+        lineEnd = readBuffer.indexOf('\n')
       }
     })
 
@@ -6631,11 +6654,12 @@ export class AppServerProcess {
       }
 
       this.pending.clear()
+      this.invalidatePendingServerRequests(generation, failure.message)
       this.pendingServerRequests.clear()
       this.process = null
+      this.activeProcessGeneration = 0
       this.initialized = false
       this.initializePromise = null
-      this.readBuffer = ''
       this.activeTurnThreadIds.clear()
       this.optimisticTurnThreadIds.clear()
       this.turnStartRequestThreadIds.clear()
@@ -6643,15 +6667,16 @@ export class AppServerProcess {
     })
   }
 
-  private sendLine(payload: Record<string, unknown>): void {
-    if (!this.process) {
+  private sendLine(payload: Record<string, unknown>, generation = this.activeProcessGeneration): void {
+    if (!this.process || generation === 0 || generation !== this.activeProcessGeneration) {
       throw new Error('codex app-server is not running')
     }
 
     this.process.stdin.write(`${JSON.stringify(payload)}\n`)
   }
 
-  private handleLine(line: string): void {
+  private handleLine(line: string, generation = this.activeProcessGeneration): void {
+    if (generation === 0 || generation !== this.activeProcessGeneration) return
     let message: JsonRpcResponse
     try {
       message = JSON.parse(line) as JsonRpcResponse
@@ -6659,7 +6684,7 @@ export class AppServerProcess {
       return
     }
 
-    if (typeof message.id === 'number' && this.pending.has(message.id)) {
+    if (typeof message.id === 'number' && this.pending.get(message.id)?.generation === generation) {
       const pendingRequest = this.pending.get(message.id)
       this.pending.delete(message.id)
 
@@ -6684,19 +6709,21 @@ export class AppServerProcess {
       this.emitNotification({
         method: message.method,
         params: message.params ?? null,
-      })
+      }, generation)
       return
     }
 
     // Handle server-initiated JSON-RPC requests (approvals, dynamic tool calls, etc.).
     if (typeof message.id === 'number' && typeof message.method === 'string') {
-      this.handleServerRequest(message.id, message.method, message.params ?? null)
+      this.handleServerRequest(generation, message.id, message.method, message.params ?? null)
     }
   }
 
-  private emitNotification(notification: { method: string; params: unknown }): void {
+  private emitNotification(notification: { method: string; params: unknown }, generation = this.activeProcessGeneration): void {
+    if (generation === 0) return
+    const emittedNotification: AppServerNotification = { ...notification, generation }
     this.updateActiveTurnState(notification)
-    this.recordStreamEvent(notification)
+    this.recordStreamEvent(emittedNotification)
     this.captureItemFromNotification(notification)
     const nThreadId = this.extractThreadIdFromParams(notification.params)
     if (nThreadId) {
@@ -6704,7 +6731,7 @@ export class AppServerProcess {
       this.threadTurnPageReadCacheByThreadId.delete(nThreadId)
     }
     for (const listener of this.notificationListeners) {
-      listener(notification)
+      listener(emittedNotification)
     }
     this.settleIdleState()
   }
@@ -6743,13 +6770,14 @@ export class AppServerProcess {
     return ''
   }
 
-  private recordStreamEvent(notification: { method: string; params: unknown }): void {
+  private recordStreamEvent(notification: AppServerNotification): void {
     const threadId = this.extractThreadIdFromParams(notification.params)
     if (!threadId) return
     const frame: StreamEventFrame = {
       method: notification.method,
       params: notification.params,
       atIso: new Date().toISOString(),
+      generation: notification.generation,
     }
     let buffer = this.streamEventsByThreadId.get(threadId)
     if (!buffer) {
@@ -6898,13 +6926,13 @@ export class AppServerProcess {
     })
   }
 
-  private sendServerRequestReply(requestId: number, reply: ServerRequestReply): void {
+  private sendServerRequestReply(generation: number, requestId: number, reply: ServerRequestReply): void {
     if (reply.error) {
       this.sendLine({
         jsonrpc: '2.0',
         id: requestId,
         error: reply.error,
-      })
+      }, generation)
       return
     }
 
@@ -6912,17 +6940,17 @@ export class AppServerProcess {
       jsonrpc: '2.0',
       id: requestId,
       result: reply.result ?? {},
-    })
+    }, generation)
   }
 
-  private resolvePendingServerRequest(requestId: number, reply: ServerRequestReply): void {
+  private resolvePendingServerRequest(generation: number, requestId: number, reply: ServerRequestReply): void {
     const pendingRequest = this.pendingServerRequests.get(requestId)
-    if (!pendingRequest) {
+    if (!pendingRequest || pendingRequest.generation !== generation) {
       throw new Error(`No pending server request found for id ${String(requestId)}`)
     }
     this.pendingServerRequests.delete(requestId)
 
-    this.sendServerRequestReply(requestId, reply)
+    this.sendServerRequestReply(generation, requestId, reply)
     const requestParams = asRecord(pendingRequest.params)
     const threadId =
       typeof requestParams?.threadId === 'string' && requestParams.threadId.length > 0
@@ -6932,15 +6960,26 @@ export class AppServerProcess {
       method: 'server/request/resolved',
       params: {
         id: requestId,
+        generation,
         method: pendingRequest.method,
         threadId,
         mode: 'manual',
         resolvedAtIso: new Date().toISOString(),
       },
-    })
+    }, generation)
     this.settleIdleState()
   }
 
+  private invalidatePendingServerRequests(generation: number, reason: string): void {
+    const requestIds = Array.from(this.pendingServerRequests.values())
+      .filter((request) => request.generation === generation)
+      .map((request) => request.id)
+    if (requestIds.length === 0) return
+    this.emitNotification({
+      method: 'server/requests/invalidated',
+      params: { generation, requestIds, reason },
+    }, generation)
+  }
   private async refreshChatgptAuthTokens(params: ChatgptAuthTokensRefreshParams): Promise<ChatgptAuthTokensRefreshResponse> {
     if (!this.chatgptAuthRefreshPromise) {
       this.chatgptAuthRefreshPromise = refreshChatgptAuthTokensForExternalAuth(params).finally(() => {
@@ -6950,7 +6989,7 @@ export class AppServerProcess {
     return await this.chatgptAuthRefreshPromise
   }
 
-  private async handleChatgptAuthTokensRefreshRequest(requestId: number, params: unknown): Promise<void> {
+  private async handleChatgptAuthTokensRefreshRequest(generation: number, requestId: number, params: unknown): Promise<void> {
     const requestParams = asRecord(params)
     const previousAccountId = readNonEmptyString(requestParams?.previousAccountId ?? requestParams?.previous_account_id)
     try {
@@ -6958,18 +6997,21 @@ export class AppServerProcess {
         reason: readNonEmptyString(requestParams?.reason) || undefined,
         previousAccountId: previousAccountId || undefined,
       })
-      this.sendServerRequestReply(requestId, { result })
+      if (generation !== this.activeProcessGeneration) return
+      this.sendServerRequestReply(generation, requestId, { result })
       this.emitNotification({
         method: 'server/request/resolved',
         params: {
           id: requestId,
+          generation,
           method: 'account/chatgptAuthTokens/refresh',
           mode: 'automatic',
           resolvedAtIso: new Date().toISOString(),
         },
-      })
+      }, generation)
     } catch (error) {
-      this.sendServerRequestReply(requestId, {
+      if (generation !== this.activeProcessGeneration) return
+      this.sendServerRequestReply(generation, requestId, {
         error: {
           code: -32001,
           message: getErrorMessage(error, 'Failed to refresh ChatGPT auth tokens'),
@@ -6978,14 +7020,15 @@ export class AppServerProcess {
     }
   }
 
-  private handleServerRequest(requestId: number, method: string, params: unknown): void {
+  private handleServerRequest(generation: number, requestId: number, method: string, params: unknown): void {
     if (method === 'account/chatgptAuthTokens/refresh') {
-      void this.handleChatgptAuthTokensRefreshRequest(requestId, params)
+      void this.handleChatgptAuthTokensRefreshRequest(generation, requestId, params)
       return
     }
 
     const pendingRequest: PendingServerRequest = {
       id: requestId,
+      generation,
       method,
       params,
       receivedAtIso: new Date().toISOString(),
@@ -7000,24 +7043,33 @@ export class AppServerProcess {
 
   private async call(method: string, params: unknown): Promise<unknown> {
     this.start()
+    const generation = this.activeProcessGeneration
     const id = this.nextId++
     const turnStartThreadId = method === 'turn/start'
       ? this.extractThreadIdFromParams(params)
       : ''
 
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      this.pending.set(id, { generation, resolve, reject })
       if (turnStartThreadId) {
         this.turnStartRequestThreadIds.set(id, turnStartThreadId)
         this.optimisticTurnThreadIds.add(turnStartThreadId)
       }
 
-      this.sendLine({
-        jsonrpc: '2.0',
-        id,
-        method,
-        params,
-      } satisfies JsonRpcCall)
+      try {
+        this.sendLine({
+          jsonrpc: '2.0',
+          id,
+          method,
+          params,
+        } satisfies JsonRpcCall, generation)
+      } catch (error) {
+        this.pending.delete(id)
+        this.turnStartRequestThreadIds.delete(id)
+        if (turnStartThreadId) this.optimisticTurnThreadIds.delete(turnStartThreadId)
+        this.settleIdleState()
+        reject(error)
+      }
     })
   }
 
@@ -7075,6 +7127,11 @@ export class AppServerProcess {
       throw new Error('Invalid response payload: "id" must be an integer')
     }
 
+    const generation = body.generation
+    if (typeof generation !== 'number' || !Number.isInteger(generation)) {
+      throw new Error('Invalid response payload: "generation" must be an integer')
+    }
+
     const rawError = asRecord(body.error)
     if (rawError) {
       const message = typeof rawError.message === 'string' && rawError.message.trim().length > 0
@@ -7083,7 +7140,7 @@ export class AppServerProcess {
       const code = typeof rawError.code === 'number' && Number.isFinite(rawError.code)
         ? Math.trunc(rawError.code)
         : -32000
-      this.resolvePendingServerRequest(id, { error: { code, message } })
+      this.resolvePendingServerRequest(generation, id, { error: { code, message } })
       return
     }
 
@@ -7091,7 +7148,7 @@ export class AppServerProcess {
       throw new Error('Invalid response payload: expected "result" or "error"')
     }
 
-    this.resolvePendingServerRequest(id, { result: body.result })
+    this.resolvePendingServerRequest(generation, id, { result: body.result })
   }
 
   listPendingServerRequests(): PendingServerRequest[] {
@@ -7102,18 +7159,20 @@ export class AppServerProcess {
     if (!this.process) return
 
     const proc = this.process
+    const generation = this.activeProcessGeneration
     this.stopping = true
     this.process = null
+    this.activeProcessGeneration = 0
     this.initialized = false
     this.initializePromise = null
     this.activeConfigSignature = ''
-    this.readBuffer = ''
 
     const failure = new Error('codex app-server stopped')
     for (const request of this.pending.values()) {
       request.reject(failure)
     }
     this.pending.clear()
+    this.invalidatePendingServerRequests(generation, failure.message)
     this.pendingServerRequests.clear()
     this.activeTurnThreadIds.clear()
     this.optimisticTurnThreadIds.clear()
@@ -7514,7 +7573,8 @@ class MethodCatalog {
 type CodexBridgeMiddleware = ((req: IncomingMessage, res: ServerResponse, next: () => void) => Promise<void>) & {
   dispose: () => void
   disposeGracefully: () => Promise<void>
-  subscribeNotifications: (listener: (value: { method: string; params: unknown; atIso: string }) => void) => () => void
+  subscribeNotifications: (listener: (value: BridgeNotification) => void, cursor?: { streamId?: string; sequence?: number }) => () => void
+  getNotificationStreamState: () => { streamId: string; latestSequence: number; oldestSequence: number }
 }
 
 type SharedBridgeState = {
@@ -7641,6 +7701,25 @@ async function buildThreadSearchIndex(appServer: AppServerProcess): Promise<Thre
 
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const { appServer, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor } = getSharedBridgeState()
+  const notificationStreamId = randomUUID()
+  let notificationSequence = 0
+  const notificationReplayBuffer: BridgeNotification[] = []
+  const notificationSubscribers = new Set<(value: BridgeNotification) => void>()
+  const publishNotification = (notification: { method: string; params: unknown; generation?: number }) => {
+    const frame: BridgeNotification = {
+      ...notification,
+      atIso: new Date().toISOString(),
+      streamId: notificationStreamId,
+      sequence: ++notificationSequence,
+    }
+    notificationReplayBuffer.push(frame)
+    if (notificationReplayBuffer.length > NOTIFICATION_REPLAY_BUFFER_LIMIT) {
+      notificationReplayBuffer.splice(0, notificationReplayBuffer.length - NOTIFICATION_REPLAY_BUFFER_LIMIT)
+    }
+    for (const listener of notificationSubscribers) listener(frame)
+  }
+  const unsubscribeAppServerNotifications = appServer.onNotification(publishNotification)
+  const unsubscribeTerminalNotifications = terminalManager.subscribe(publishNotification)
   let threadSearchIndex: ThreadSearchIndex | null = null
   let threadSearchIndexPromise: Promise<ThreadSearchIndex> | null = null
 
@@ -9840,12 +9919,24 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         res.setHeader('Connection', 'keep-alive')
         res.setHeader('X-Accel-Buffering', 'no')
 
-        const unsubscribe = middleware.subscribeNotifications((notification: { method: string; params: unknown; atIso: string }) => {
-          if (res.writableEnded || res.destroyed) return
-          res.write(`data: ${JSON.stringify(notification)}\n\n`)
-        })
+        const cursorStreamId = url.searchParams.get('streamId') ?? undefined
+        const querySequence = Number.parseInt(url.searchParams.get('sequence') ?? '0', 10)
+        const headerSequence = Number.parseInt(
+          typeof req.headers['last-event-id'] === 'string' ? req.headers['last-event-id'] : '0',
+          10,
+        )
+        const cursorSequence = Number.isInteger(headerSequence) && headerSequence > 0
+          ? headerSequence
+          : (Number.isInteger(querySequence) ? Math.max(0, querySequence) : 0)
+        const streamState = middleware.getNotificationStreamState()
+        const replayAvailable = cursorStreamId === streamState.streamId &&
+          cursorSequence >= Math.max(0, streamState.oldestSequence - 1)
 
-        res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`)
+        const unsubscribe = middleware.subscribeNotifications((notification) => {
+          if (res.writableEnded || res.destroyed) return
+          res.write(`id: ${notification.sequence}\ndata: ${JSON.stringify(notification)}\n\n`)
+        }, { streamId: cursorStreamId, sequence: cursorSequence })
+        res.write(`event: ready\ndata: ${JSON.stringify({ ok: true, ...streamState, replayAvailable })}\n\n`)
         const keepAlive = setInterval(() => {
           res.write(': ping\n\n')
         }, 15000)
@@ -9875,35 +9966,42 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     telegramBridge.stop()
     terminalManager.dispose()
     backendQueueProcessor.dispose()
+    unsubscribeAppServerNotifications()
+    unsubscribeTerminalNotifications()
+    notificationSubscribers.clear()
     appServer.dispose()
   }
   middleware.disposeGracefully = async () => {
     threadSearchIndex = null
     telegramBridge.stop()
     backendQueueProcessor.dispose()
+    unsubscribeAppServerNotifications()
+    unsubscribeTerminalNotifications()
+    notificationSubscribers.clear()
     terminalManager.dispose()
     await appServer.disposeWhenIdle()
   }
   middleware.subscribeNotifications = (
-    listener: (value: { method: string; params: unknown; atIso: string }) => void,
+    listener: (value: BridgeNotification) => void,
+    cursor: { streamId?: string; sequence?: number } = {},
   ) => {
-    const unsubscribeAppServer = appServer.onNotification((notification: { method: string; params: unknown }) => {
-      listener({
-        ...notification,
-        atIso: new Date().toISOString(),
-      })
-    })
-    const unsubscribeTerminal = terminalManager.subscribe((notification) => {
-      listener({
-        ...notification,
-        atIso: new Date().toISOString(),
-      })
-    })
+    const requestedSequence = Number.isInteger(cursor.sequence) ? Math.max(0, cursor.sequence ?? 0) : 0
+    const canReplay = cursor.streamId === notificationStreamId
+    if (canReplay && requestedSequence < notificationSequence) {
+      for (const notification of notificationReplayBuffer) {
+        if (notification.sequence > requestedSequence) listener(notification)
+      }
+    }
+    notificationSubscribers.add(listener)
     return () => {
-      unsubscribeAppServer()
-      unsubscribeTerminal()
+      notificationSubscribers.delete(listener)
     }
   }
+  middleware.getNotificationStreamState = () => ({
+    streamId: notificationStreamId,
+    latestSequence: notificationSequence,
+    oldestSequence: notificationReplayBuffer[0]?.sequence ?? notificationSequence,
+  })
 
   return middleware
 }
