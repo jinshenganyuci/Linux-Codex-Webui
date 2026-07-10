@@ -197,30 +197,66 @@ describe('getAvailableModelIds', () => {
     vi.unstubAllGlobals()
   })
 
-  it('uses provider models without waiting for model/list when provider models are required', async () => {
+  it('restricts required provider models while enriching matching Codex capabilities', async () => {
     const requests: string[] = []
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       requests.push(String(input))
       if (String(input) === '/codex-api/provider-models') {
         return new Response(JSON.stringify({
-          data: ['big-pickle', 'deepseek-v4-flash-free'],
+          data: ['gpt-5.6-sol', 'provider-custom'],
           exclusive: true,
         }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         })
       }
-      throw new Error(`unexpected request ${String(input)}`)
+
+      const body = typeof init?.body === 'string'
+        ? JSON.parse(init.body) as { method: string }
+        : { method: '' }
+      expect(body.method).toBe('model/list')
+      return new Response(JSON.stringify({
+        result: {
+          data: [
+            {
+              id: 'gpt-5.6-sol',
+              displayName: 'GPT-5.6-Sol',
+              supportedReasoningEfforts: [
+                { reasoningEffort: 'low' },
+                { reasoningEffort: 'ultra' },
+              ],
+              defaultReasoningEffort: 'low',
+            },
+            { id: 'codex-only' },
+          ],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
     }))
 
-    await expect(getAvailableModelIds({
+    await expect(getAvailableModels({
       includeProviderModels: true,
       requireProviderModels: true,
-    })).resolves.toEqual(['big-pickle', 'deepseek-v4-flash-free'])
-    expect(requests).toEqual(['/codex-api/provider-models'])
+    })).resolves.toEqual([
+      {
+        id: 'gpt-5.6-sol',
+        displayName: 'GPT-5.6-Sol',
+        supportedReasoningEfforts: ['low', 'ultra'],
+        defaultReasoningEffort: 'low',
+      },
+      {
+        id: 'provider-custom',
+        displayName: 'provider-custom',
+        supportedReasoningEfforts: [],
+        defaultReasoningEffort: null,
+      },
+    ])
+    expect(requests).toEqual(['/codex-api/provider-models', '/codex-api/rpc'])
   })
 
-  it('requests models for an explicit thread provider', async () => {
+  it('keeps explicit provider models when capability lookup fails', async () => {
     const requests: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       requests.push(String(input))
@@ -241,7 +277,7 @@ describe('getAvailableModelIds', () => {
       requireProviderModels: true,
       providerId: 'opencode-zen',
     })).resolves.toEqual(['big-pickle', 'ring-2.6-1t-free'])
-    expect(requests).toEqual(['/codex-api/provider-models?provider=opencode-zen'])
+    expect(requests).toEqual(['/codex-api/provider-models?provider=opencode-zen', '/codex-api/rpc'])
   })
 
   it('falls back to model/list when provider models are optional and unavailable', async () => {

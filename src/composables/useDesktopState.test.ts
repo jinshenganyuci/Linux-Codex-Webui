@@ -815,6 +815,37 @@ describe('live error overlay', () => {
 })
 
 describe('provider model selection', () => {
+  it('reuses a recently loaded model catalog for the same provider', async () => {
+    installTestWindow()
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.6-sol',
+      providerId: 'myproxy',
+      reasoningEffort: 'low',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities({
+      id: 'gpt-5.6-sol',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      defaultReasoningEffort: 'low',
+    }))
+
+    try {
+      const state = useDesktopState()
+      await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+      await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+
+      expect(gatewayMocks.getAvailableModels).toHaveBeenCalledTimes(1)
+      expect(state.availableModelCapabilities.value['gpt-5.6-sol']?.supportedReasoningEfforts).toContain('ultra')
+    } finally {
+      nowSpy.mockRestore()
+    }
+  })
+
   it('uses model-specific reasoning efforts and falls back to the selected model default', async () => {
     installTestWindow()
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
@@ -848,7 +879,7 @@ describe('provider model selection', () => {
       'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
     ])
 
-    state.setSelectedModelId('gpt-5.6-luna')
+    state.setSelectedModelIdForThread('__new-thread__', 'gpt-5.6-luna')
     expect(state.selectedReasoningEffort.value).toBe('medium')
   })
 

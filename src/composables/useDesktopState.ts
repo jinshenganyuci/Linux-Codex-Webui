@@ -97,6 +97,7 @@ const TURN_START_FOLLOW_UP_SYNC_DELAY_MS = 3000
 const RECENT_THREAD_MESSAGE_LOAD_REUSE_MS = 2000
 const RECENT_THREAD_LIST_LOAD_REUSE_MS = 2000
 const RECENT_SKILLS_LOAD_REUSE_MS = 2000
+const RECENT_MODEL_CATALOG_REUSE_MS = 10_000
 const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 const GLOBAL_SERVER_REQUEST_SCOPE = '__global__'
 const MODEL_FALLBACK_ID = 'gpt-5.4-mini'
@@ -1627,10 +1628,14 @@ export function useDesktopState() {
   let loadThreadsPromise: Promise<void> | null = null
   const loadMessagePromiseByThreadId = new Map<string, Promise<void>>()
   let refreshSkillsPromise: Promise<void> | null = null
+  const modelCatalogPromiseByKey = new Map<string, Promise<UiModelCapability[]>>()
   let lastThreadListLoadAt = 0
   let hasLoadedSkills = false
   let lastSkillsLoadAt = 0
   let lastSkillsLoadKey = ''
+  let lastModelCatalogAt = 0
+  let lastModelCatalogKey = ''
+  let lastModelCatalog: UiModelCapability[] = []
   let rateLimitRefreshPromise: Promise<void> | null = null
   let pendingThreadsRefresh = false
   let pendingThreadsRefreshForce = false
@@ -1835,9 +1840,10 @@ export function useDesktopState() {
       }
       selectedModelIdByContext.value = nextModelMap
     }
-    if (threadId.trim() === selectedThreadId.value) {
+    if (contextId === toThreadContextId(selectedThreadId.value)) {
       selectedModelId.value = readModelIdForThread(selectedThreadId.value)
       ensureAvailableModelIds(selectedModelId.value)
+      reconcileSelectedReasoningEffort(selectedModelId.value)
     } else {
       ensureAvailableModelIds(normalizedModelId)
     }
@@ -1846,7 +1852,6 @@ export function useDesktopState() {
 
   function setSelectedModelId(modelId: string): void {
     setSelectedModelIdForThread(selectedThreadId.value, modelId)
-    reconcileSelectedReasoningEffort(modelId)
   }
 
   function setThreadModelId(threadId: string, modelId: string): void {
@@ -2148,6 +2153,40 @@ export function useDesktopState() {
     return [`Mode: ${modeLabel}`, `Model: ${modelLabel}`, `Thinking: ${effortLabel}`, `Speed: ${speedLabel}`]
   }
 
+  async function loadAvailableModelCatalog(options: {
+    includeProviderModels: boolean
+    requireProviderModels: boolean
+    providerId?: string
+  }): Promise<UiModelCapability[]> {
+    const key = JSON.stringify([
+      options.includeProviderModels,
+      options.requireProviderModels,
+      options.providerId?.trim() ?? '',
+    ])
+    if (
+      key === lastModelCatalogKey
+      && Date.now() - lastModelCatalogAt < RECENT_MODEL_CATALOG_REUSE_MS
+    ) {
+      return lastModelCatalog
+    }
+
+    const pending = modelCatalogPromiseByKey.get(key)
+    if (pending) return await pending
+
+    const request = getAvailableModels(options)
+      .then((models) => {
+        lastModelCatalog = models
+        lastModelCatalogKey = key
+        lastModelCatalogAt = Date.now()
+        return models
+      })
+      .finally(() => {
+        modelCatalogPromiseByKey.delete(key)
+      })
+    modelCatalogPromiseByKey.set(key, request)
+    return await request
+  }
+
   async function refreshModelPreferences(options?: { providerChanged?: boolean; includeProviderModels?: boolean }): Promise<void> {
     codexCliMissingError.value = ''
     try {
@@ -2158,7 +2197,7 @@ export function useDesktopState() {
       const targetProviderId = readProviderIdForThread(selectedThreadId.value)
       const isProviderBacked = targetProviderId !== 'codex'
       const normalizedSelectedModelId = readModelIdForThread(selectedThreadId.value)
-      const models = await getAvailableModels({
+      const models = await loadAvailableModelCatalog({
         includeProviderModels: isProviderBacked || options?.includeProviderModels !== false,
         requireProviderModels: isProviderBacked,
         providerId: isProviderBacked ? targetProviderId : undefined,
