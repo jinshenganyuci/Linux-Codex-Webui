@@ -455,6 +455,7 @@ import type {
   CodexPermissionMode,
   ReasoningEffort,
   SpeedMode,
+  UiModelCapability,
   UiRateLimitSnapshot,
   UiRateLimitWindow,
   UiThreadTokenUsage,
@@ -502,6 +503,7 @@ const props = defineProps<{
   collaborationModes?: CollaborationModeOption[]
   selectedCollaborationMode: CollaborationModeKind
   models: string[]
+  modelCapabilities?: Record<string, UiModelCapability>
   selectedModel: string
   selectedReasoningEffort: ReasoningEffort | ''
   selectedSpeedMode: SpeedMode
@@ -654,20 +656,21 @@ const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.
 const DRAFT_STORAGE_PREFIX = 'codex-web-local.thread-draft.v1.'
 let lastActiveThreadId = ''
 
-const reasoningOptions = computed<Array<{ value: ReasoningEffort; label: string }>>(() => [
-  { value: 'none', label: t('None') },
-  { value: 'minimal', label: t('Minimal') },
-  { value: 'low', label: t('Low') },
-  { value: 'medium', label: t('Medium') },
-  { value: 'high', label: t('High') },
-  { value: 'xhigh', label: t('Extra high') },
-])
+const fallbackReasoningEfforts: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+const reasoningOptions = computed<Array<{ value: ReasoningEffort; label: string }>>(() => {
+  const supported = props.modelCapabilities?.[props.selectedModel]?.supportedReasoningEfforts ?? []
+  const efforts = supported.length > 0 ? supported : fallbackReasoningEfforts
+  return efforts.map((value) => ({ value, label: value }))
+})
 function formatModelLabel(modelId: string): string {
   return modelId.trim().replace(/^gpt/i, 'GPT')
 }
 
 const modelOptions = computed(() =>
-  props.models.map((modelId) => ({ value: modelId, label: formatModelLabel(modelId) })),
+  props.models.map((modelId) => ({
+    value: modelId,
+    label: formatModelLabel(props.modelCapabilities?.[modelId]?.displayName || modelId),
+  })),
 )
 const isPlanModeSelected = computed(() => props.selectedCollaborationMode === 'plan')
 

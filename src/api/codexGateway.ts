@@ -11,8 +11,6 @@ import type {
   CollaborationModeListResponse,
   ConfigReadResponse,
   GetAccountRateLimitsResponse,
-  ModelListResponse,
-  ReasoningEffort,
   ThreadForkResponse,
   ThreadListResponse,
   ThreadReadResponse,
@@ -29,6 +27,7 @@ import {
   readThreadInProgressFromResponse,
 } from './normalizers/v2'
 import type {
+  ReasoningEffort,
   SpeedMode,
   UiAccountEntry,
   UiAccountQuotaStatus,
@@ -38,6 +37,7 @@ import type {
   UiCreditsSnapshot,
   UiFileChange,
   UiMessage,
+  UiModelCapability,
   UiProjectGroup,
   UiThread,
   UiReviewAction,
@@ -710,7 +710,7 @@ async function enrichThreadMessagesWithFallback(threadId: string, messages: UiMe
 }
 
 function normalizeReasoningEffort(value: unknown): ReasoningEffort | '' {
-  const allowed: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+  const allowed: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
   return typeof value === 'string' && allowed.includes(value as ReasoningEffort)
     ? (value as ReasoningEffort)
     : ''
@@ -2213,28 +2213,66 @@ async function fetchProviderModelIds(providerId?: string): Promise<{ ids: string
   return null
 }
 
-export async function getAvailableModelIds(options: { includeProviderModels?: boolean; requireProviderModels?: boolean; providerId?: string } = {}): Promise<string[]> {
+function providerModelCapability(id: string): UiModelCapability {
+  return {
+    id,
+    displayName: id,
+    supportedReasoningEfforts: [],
+    defaultReasoningEffort: null,
+  }
+}
+
+function normalizeModelCapability(value: unknown): UiModelCapability | null {
+  const row = asRecord(value)
+  if (!row) return null
+  const id = readString(row.id) || readString(row.model)
+  if (!id) return null
+
+  const supportedReasoningEfforts = Array.isArray(row.supportedReasoningEfforts)
+    ? row.supportedReasoningEfforts.flatMap((option) => {
+        const optionRecord = asRecord(option)
+        const effort = normalizeReasoningEffort(optionRecord?.reasoningEffort ?? option)
+        return effort ? [effort] : []
+      })
+    : []
+  const defaultReasoningEffort = normalizeReasoningEffort(row.defaultReasoningEffort) || null
+
+  return {
+    id,
+    displayName: readString(row.displayName) || id,
+    supportedReasoningEfforts: Array.from(new Set(supportedReasoningEfforts)),
+    defaultReasoningEffort,
+  }
+}
+
+export async function getAvailableModels(options: { includeProviderModels?: boolean; requireProviderModels?: boolean; providerId?: string } = {}): Promise<UiModelCapability[]> {
   const shouldIncludeProviderModels = options.includeProviderModels !== false
   const providerModels = shouldIncludeProviderModels ? await fetchProviderModelIds(options.providerId) : null
 
   if (providerModels?.exclusive || options.requireProviderModels) {
-    return providerModels?.ids ?? []
+    return (providerModels?.ids ?? []).map(providerModelCapability)
   }
 
-  const payload = await callRpc<ModelListResponse>('model/list', {})
-  const ids: string[] = []
-  for (const row of payload.data) {
-    const candidate = row.id || row.model
-    if (!candidate || ids.includes(candidate)) continue
-    ids.push(candidate)
+  const payload = await callRpc<unknown>('model/list', {})
+  const payloadRecord = asRecord(payload)
+  const rows = Array.isArray(payloadRecord?.data) ? payloadRecord.data : []
+  const models: UiModelCapability[] = []
+  for (const row of rows) {
+    const model = normalizeModelCapability(row)
+    if (!model || models.some((candidate) => candidate.id === model.id)) continue
+    models.push(model)
   }
 
-  if (!shouldIncludeProviderModels || !providerModels) return ids
+  if (!shouldIncludeProviderModels || !providerModels) return models
 
   for (const candidate of providerModels.ids) {
-    if (!ids.includes(candidate)) ids.push(candidate)
+    if (!models.some((model) => model.id === candidate)) models.push(providerModelCapability(candidate))
   }
-  return ids
+  return models
+}
+
+export async function getAvailableModelIds(options: { includeProviderModels?: boolean; requireProviderModels?: boolean; providerId?: string } = {}): Promise<string[]> {
+  return (await getAvailableModels(options)).map((model) => model.id)
 }
 
 export async function getCurrentModelConfig(): Promise<CurrentModelConfig> {

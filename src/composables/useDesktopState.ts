@@ -7,7 +7,7 @@ import {
   getAccountRateLimits,
   getCodexRuntimeConfig,
   renameThread,
-  getAvailableModelIds,
+  getAvailableModels,
   getCurrentModelConfig,
   getPendingServerRequests,
   getSkillsList,
@@ -53,6 +53,7 @@ import type {
   UiFileChange,
   UiLiveOverlay,
   UiMessage,
+  UiModelCapability,
   UiPlanData,
   UiPlanStep,
   UiProjectGroup,
@@ -96,7 +97,7 @@ const TURN_START_FOLLOW_UP_SYNC_DELAY_MS = 3000
 const RECENT_THREAD_MESSAGE_LOAD_REUSE_MS = 2000
 const RECENT_THREAD_LIST_LOAD_REUSE_MS = 2000
 const RECENT_SKILLS_LOAD_REUSE_MS = 2000
-const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 const GLOBAL_SERVER_REQUEST_SCOPE = '__global__'
 const MODEL_FALLBACK_ID = 'gpt-5.4-mini'
 const OPENCODE_ZEN_DEFAULT_MODEL = 'big-pickle'
@@ -1524,6 +1525,7 @@ export function useDesktopState() {
   let hasLoadedPersistedQueueState = false
   const eventUnreadByThreadId = ref<Record<string, boolean>>({})
   const availableModelIds = ref<string[]>([])
+  const availableModelCapabilities = ref<Record<string, UiModelCapability>>({})
   const availableCollaborationModes = ref<CollaborationModeOption[]>([
     { value: 'default', label: 'Default' },
     { value: 'plan', label: 'Plan' },
@@ -1784,6 +1786,16 @@ export function useDesktopState() {
     return availableModelIds.value[0] ?? ''
   }
 
+  function reconcileSelectedReasoningEffort(modelId: string): void {
+    const capability = availableModelCapabilities.value[modelId.trim()]
+    const supported = capability?.supportedReasoningEfforts ?? []
+    if (supported.length === 0 || supported.includes(selectedReasoningEffort.value as ReasoningEffort)) return
+
+    selectedReasoningEffort.value = capability.defaultReasoningEffort && supported.includes(capability.defaultReasoningEffort)
+      ? capability.defaultReasoningEffort
+      : supported[0] ?? ''
+  }
+
   function setSelectedThreadId(nextThreadId: string, options: { persist?: boolean } = {}): void {
     if (selectedThreadId.value === nextThreadId) return
     selectedThreadId.value = nextThreadId
@@ -1791,6 +1803,7 @@ export function useDesktopState() {
       saveSelectedThreadId(nextThreadId)
     }
     selectedModelId.value = readProviderCompatibleSelectedModel(readModelIdForThread(nextThreadId))
+    reconcileSelectedReasoningEffort(selectedModelId.value)
     selectedCollaborationMode.value = readSelectedCollaborationMode(
       selectedCollaborationModeByContext.value,
       nextThreadId,
@@ -1833,6 +1846,7 @@ export function useDesktopState() {
 
   function setSelectedModelId(modelId: string): void {
     setSelectedModelIdForThread(selectedThreadId.value, modelId)
+    reconcileSelectedReasoningEffort(modelId)
   }
 
   function setThreadModelId(threadId: string, modelId: string): void {
@@ -2144,11 +2158,13 @@ export function useDesktopState() {
       const targetProviderId = readProviderIdForThread(selectedThreadId.value)
       const isProviderBacked = targetProviderId !== 'codex'
       const normalizedSelectedModelId = readModelIdForThread(selectedThreadId.value)
-      const modelIds = await getAvailableModelIds({
+      const models = await getAvailableModels({
         includeProviderModels: isProviderBacked || options?.includeProviderModels !== false,
         requireProviderModels: isProviderBacked,
         providerId: isProviderBacked ? targetProviderId : undefined,
       })
+      const modelIds = models.map((model) => model.id)
+      availableModelCapabilities.value = Object.fromEntries(models.map((model) => [model.id, model]))
       const providerModelContextId = toProviderModelContextId(targetProviderId)
       const providerScopedModelId = providerModelContextId
         ? normalizeStoredModelId(selectedModelIdByContext.value[providerModelContextId])
@@ -2206,6 +2222,7 @@ export function useDesktopState() {
       ) {
         selectedReasoningEffort.value = currentConfig.reasoningEffort
       }
+      reconcileSelectedReasoningEffort(selectedModelId.value)
       selectedSpeedMode.value = currentConfig.speedMode
     } catch (unknownError) {
       if (isCodexCliMissingError(unknownError)) {
@@ -5895,6 +5912,7 @@ export function useDesktopState() {
     selectedThreadId,
     availableCollaborationModes,
     availableModelIds,
+    availableModelCapabilities,
     selectedCollaborationMode,
     selectedModelId,
     selectedReasoningEffort,

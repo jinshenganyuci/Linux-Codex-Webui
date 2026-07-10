@@ -2,7 +2,25 @@ export type RpcEnvelope<T> = {
   result: T
 }
 
-export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+export const REASONING_EFFORT_VALUES = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
+] as const
+
+export type ReasoningEffort = typeof REASONING_EFFORT_VALUES[number]
+
+export type UiModelCapability = {
+  id: string
+  displayName: string
+  supportedReasoningEfforts: ReasoningEffort[]
+  defaultReasoningEffort: ReasoningEffort | null
+}
 export type SpeedMode = 'standard' | 'fast'
 export type CollaborationModeKind = 'default' | 'plan'
 export type CodexPermissionMode = 'request-approval' | 'auto-approve' | 'full-access'

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getAvailableModelIds, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startThread, startThreadTurn, startThreadWithTurn } from './codexGateway'
+import { getAvailableModelIds, getAvailableModels, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startThread, startThreadTurn, startThreadWithTurn } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -84,6 +84,32 @@ describe('startThreadTurn collaboration mode payloads', () => {
     })
     expect(requests[1].params.serviceTier).toBe('fast')
     expect(requests[2].params.serviceTier).toBeNull()
+  })
+
+  it('passes max and ultra reasoning efforts through unchanged', async () => {
+    const { requests } = mockRpcFetch()
+
+    await startThreadTurn('thread-1', 'hard task', [], 'gpt-5.6-sol', 'max', undefined, [], 'default')
+    await startThreadTurn('thread-1', 'delegate task', [], 'gpt-5.6-sol', 'ultra', undefined, [], 'default')
+
+    expect(requests.map((request) => request.params.collaborationMode)).toEqual([
+      {
+        mode: 'default',
+        settings: {
+          model: 'gpt-5.6-sol',
+          reasoning_effort: 'max',
+          developer_instructions: null,
+        },
+      },
+      {
+        mode: 'default',
+        settings: {
+          model: 'gpt-5.6-sol',
+          reasoning_effort: 'ultra',
+          developer_instructions: null,
+        },
+      },
+    ])
   })
 
   it('starts a new thread and first turn through one backend request', async () => {
@@ -250,6 +276,36 @@ describe('getAvailableModelIds', () => {
       includeProviderModels: true,
     })).resolves.toEqual(['gpt-5.5', 'gpt-5.4-mini'])
     expect(requests).toEqual(['/codex-api/provider-models', '/codex-api/rpc'])
+  })
+
+  it('preserves the official reasoning capabilities returned by model/list', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      result: {
+        data: [{
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT-5.6-Sol',
+          supportedReasoningEfforts: [
+            { reasoningEffort: 'low' },
+            { reasoningEffort: 'medium' },
+            { reasoningEffort: 'high' },
+            { reasoningEffort: 'xhigh' },
+            { reasoningEffort: 'max' },
+            { reasoningEffort: 'ultra' },
+          ],
+          defaultReasoningEffort: 'low',
+        }],
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    await expect(getAvailableModels({ includeProviderModels: false })).resolves.toEqual([{
+      id: 'gpt-5.6-sol',
+      displayName: 'GPT-5.6-Sol',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      defaultReasoningEffort: 'low',
+    }])
   })
 })
 
