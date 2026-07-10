@@ -21,9 +21,9 @@ The composer uses Codex model capabilities for reasoning choices and presents pe
 
 #### Expected Results
 - The empty composer is approximately 104-112px tall and no control overlaps, clips, or changes toolbar height.
-- The model trigger reads as one summary such as `5.6-sol · ultra`; long summaries truncate as a unit instead of truncating model and effort separately.
-- Sol exposes exactly `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`, using lowercase official identifiers.
-- Luna only exposes efforts returned for Luna and does not inherit Sol-only `ultra`.
+- The model trigger reads as one summary such as `5.6-sol · Ultra`; long summaries truncate as a unit instead of truncating model and effort separately.
+- Sol exposes exactly `Low`, `Medium`, `High`, `XHigh`, `Max`, and `Ultra`, using the official Codex display casing.
+- Luna only exposes efforts returned for Luna and does not inherit Sol-only `Ultra`.
 - Fast mode displays the bolt without hiding the model or reasoning summary.
 - The context ring remains 32px and the send button remains 36px, aligned to the same toolbar row.
 - Menus close after a model or reasoning selection and remain fully inside the viewport.

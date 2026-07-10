@@ -661,10 +661,20 @@ const DRAFT_STORAGE_PREFIX = 'codex-web-local.thread-draft.v1.'
 let lastActiveThreadId = ''
 
 const fallbackReasoningEfforts: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+const reasoningEffortLabels: Record<ReasoningEffort, string> = {
+  none: 'None',
+  minimal: 'Minimal',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'XHigh',
+  max: 'Max',
+  ultra: 'Ultra',
+}
 const reasoningOptions = computed<Array<{ value: ReasoningEffort; label: string }>>(() => {
   const supported = props.modelCapabilities?.[props.selectedModel]?.supportedReasoningEfforts ?? []
   const efforts = supported.length > 0 ? supported : fallbackReasoningEfforts
-  return efforts.map((value) => ({ value, label: value }))
+  return efforts.map((value) => ({ value, label: reasoningEffortLabels[value] }))
 })
 function formatModelLabel(modelId: string): string {
   return modelId.trim().replace(/^gpt/i, 'GPT')
