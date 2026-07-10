@@ -134,6 +134,7 @@
           ref="inputRef"
           v-model="draft"
           class="thread-composer-input"
+          rows="1"
           :placeholder="placeholderText"
           :disabled="isInteractionDisabled"
           @input="onInputChange"
@@ -158,7 +159,8 @@
         class="thread-composer-controls"
         :class="{ 'thread-composer-controls--recording': isDictationRecording }"
       >
-        <div ref="attachMenuRootRef" class="thread-composer-attach">
+        <div class="thread-composer-leading-controls">
+          <div ref="attachMenuRootRef" class="thread-composer-attach">
           <button
             class="thread-composer-attach-trigger"
             type="button"
@@ -260,49 +262,51 @@
                 :class="{ 'is-on': isPlanModeSelected }"
               />
             </button>
+            </div>
           </div>
+
+          <template v-if="!isDictationRecording">
+            <ComposerDropdown
+              class="thread-composer-control thread-composer-permission-control"
+              :model-value="selectedCodexPermissionMode"
+              :options="permissionModeOptions"
+              :placeholder="t('Codex permissions')"
+              open-direction="up"
+              :disabled="isPermissionModeDisabled"
+              @update:model-value="onPermissionModeSelect"
+            />
+
+            <ComposerSearchDropdown
+              class="thread-composer-control thread-composer-skill-control"
+              :options="skillDropdownOptions"
+              :selected-values="selectedSkillPaths"
+              :placeholder="t('Skills')"
+              :search-placeholder="t('Search skills and prompts...')"
+              :create-label="t('Add new prompt')"
+              :allow-remove="true"
+              :remove-label="t('Remove prompt')"
+              open-direction="up"
+              :disabled="isComposerConfigDisabled"
+              @toggle="onSkillDropdownToggle"
+              @create="onCreatePrompt"
+              @remove="onRemovePrompt"
+            />
+          </template>
         </div>
 
-        <template v-if="!isDictationRecording">
-          <ComposerDropdown
-            class="thread-composer-control thread-composer-permission-control"
-            :model-value="selectedCodexPermissionMode"
-            :options="permissionModeOptions"
-            :placeholder="t('Codex permissions')"
-            open-direction="up"
-            :disabled="isPermissionModeDisabled"
-            @update:model-value="onPermissionModeSelect"
-          />
-
-          <ComposerSearchDropdown
-            class="thread-composer-control"
-            :options="skillDropdownOptions"
-            :selected-values="selectedSkillPaths"
-            :placeholder="t('Skills')"
-            :search-placeholder="t('Search skills and prompts...')"
-            :create-label="t('Add new prompt')"
-            :allow-remove="true"
-            :remove-label="t('Remove prompt')"
-            open-direction="up"
-            :disabled="isComposerConfigDisabled"
-            @toggle="onSkillDropdownToggle"
-            @create="onCreatePrompt"
-            @remove="onRemovePrompt"
-          />
-
-          <ComposerModelReasoningDropdown
-            class="thread-composer-control thread-composer-model-reasoning-control"
-            :selected-model="selectedModel"
-            :selected-reasoning-effort="selectedReasoningEffort"
-            :selected-speed-mode="selectedSpeedMode"
-            :model-options="modelOptions"
-            :reasoning-options="reasoningOptions"
-            open-direction="up"
-            :disabled="isComposerConfigDisabled"
-            @update:selected-model="onModelSelect"
-            @update:selected-reasoning-effort="onReasoningEffortSelect"
-          />
-        </template>
+        <ComposerModelReasoningDropdown
+          v-if="!isDictationRecording"
+          class="thread-composer-control thread-composer-model-reasoning-control"
+          :selected-model="selectedModel"
+          :selected-reasoning-effort="selectedReasoningEffort"
+          :selected-speed-mode="selectedSpeedMode"
+          :model-options="modelOptions"
+          :reasoning-options="reasoningOptions"
+          open-direction="up"
+          :disabled="isComposerConfigDisabled"
+          @update:selected-model="onModelSelect"
+          @update:selected-reasoning-effort="onReasoningEffortSelect"
+        />
 
         <div
           class="thread-composer-actions"
@@ -2027,7 +2031,7 @@ watch(
 }
 
 .thread-composer-shell {
-  @apply relative rounded-2xl border border-zinc-300 bg-white p-2 sm:p-3 shadow-sm;
+  @apply relative rounded-xl border border-zinc-300/90 bg-white p-2 shadow-sm;
 }
 
 .thread-composer:has(.thread-composer-input-wrap--expanded) .thread-composer-shell {
@@ -2233,7 +2237,7 @@ watch(
 }
 
 .thread-composer-input {
-  @apply w-full min-w-0 min-h-10 sm:min-h-11 max-h-40 rounded-xl border-0 bg-transparent px-1 py-2 pr-10 text-sm text-zinc-900 outline-none transition resize-none overflow-y-auto;
+  @apply w-full min-w-0 min-h-11 max-h-40 rounded-xl border-0 bg-transparent px-1 py-2 pr-10 text-sm text-zinc-900 outline-none transition resize-none overflow-y-auto;
 }
 
 .thread-composer-input-wrap--expanded .thread-composer-input {
@@ -2257,11 +2261,15 @@ watch(
 }
 
 .thread-composer-controls {
-  @apply relative mt-2 sm:mt-3 flex items-center gap-1 sm:gap-4 overflow-visible pb-px;
+  @apply relative mt-1.5 flex min-w-0 items-center gap-1.5 overflow-visible pb-px;
 }
 
 .thread-composer-controls--recording {
-  @apply gap-1 sm:gap-2;
+  @apply gap-1.5;
+}
+
+.thread-composer-leading-controls {
+  @apply flex min-w-0 items-center gap-1.5;
 }
 
 .thread-composer-attach {
@@ -2269,7 +2277,7 @@ watch(
 }
 
 .thread-composer-attach-trigger {
-  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-none border-0 bg-transparent pb-px text-xl leading-tight text-zinc-700 transition hover:text-zinc-900 disabled:cursor-not-allowed disabled:text-zinc-400;
+  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border-0 bg-transparent pb-px text-xl leading-tight text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-900 disabled:cursor-not-allowed disabled:text-zinc-400;
 }
 
 .thread-composer-attach-menu {
@@ -2350,15 +2358,19 @@ watch(
 }
 
 .thread-composer-permission-control {
-  @apply max-w-24 shrink-0 sm:max-w-28;
+  @apply max-w-[4.75rem] shrink sm:max-w-28;
 }
 
 .thread-composer-permission-control :deep(.composer-dropdown-menu) {
   @apply min-w-[9rem];
 }
 
+.thread-composer-skill-control {
+  @apply max-w-12 shrink sm:max-w-24;
+}
+
 .thread-composer-model-reasoning-control {
-  @apply ml-auto max-w-[5.75rem] shrink-0;
+  @apply ml-auto w-[6.5rem] shrink-0 sm:w-[clamp(7.5rem,18vw,10rem)];
 }
 
 .thread-composer-control :deep(.composer-dropdown-value) {
@@ -2367,7 +2379,7 @@ watch(
 
 
 .thread-composer-actions {
-  @apply flex shrink-0 items-center gap-1 sm:gap-2;
+  @apply flex shrink-0 items-center gap-1.5;
 }
 
 .thread-composer-actions--recording {

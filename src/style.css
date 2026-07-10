@@ -320,6 +320,39 @@
   @apply bg-zinc-700;
 }
 
+:root.dark .model-reasoning-trigger {
+  @apply text-zinc-400 hover:text-zinc-200;
+}
+
+:root.dark .model-reasoning-menu,
+:root.dark .model-reasoning-model-menu {
+  @apply border-zinc-600 bg-zinc-800;
+}
+
+:root.dark .model-reasoning-menu-label,
+:root.dark .model-reasoning-model-row-chevron {
+  @apply text-zinc-500;
+}
+
+:root.dark .model-reasoning-option,
+:root.dark .model-reasoning-model-row {
+  @apply text-zinc-300 hover:bg-zinc-700;
+}
+
+:root.dark .model-reasoning-option.is-selected,
+:root.dark .model-reasoning-model-row.is-open {
+  @apply bg-zinc-700 text-zinc-100;
+}
+
+:root.dark .model-reasoning-divider {
+  @apply bg-zinc-700;
+}
+
+:root.dark .model-reasoning-check,
+:root.dark .model-reasoning-empty {
+  @apply text-zinc-400;
+}
+
 :root.dark .content-header {
   @apply border-zinc-800 bg-zinc-950;
 }

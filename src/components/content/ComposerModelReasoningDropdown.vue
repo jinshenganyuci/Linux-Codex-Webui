@@ -9,8 +9,9 @@
       @click="toggleMenu"
     >
       <IconTablerBolt v-if="isFastModeSelected" class="model-reasoning-trigger-fast-icon" />
-      <span class="model-reasoning-trigger-model">{{ compactSelectedModelLabel }}</span>
-      <span class="model-reasoning-trigger-effort">{{ selectedReasoningLabel }}</span>
+      <span class="model-reasoning-trigger-summary">
+        {{ compactSelectedModelLabel }} <span aria-hidden="true">·</span> {{ selectedReasoningLabel }}
+      </span>
       <IconTablerChevronDown class="model-reasoning-trigger-chevron" />
     </button>
 
@@ -161,8 +162,8 @@ function updateMenuPosition(): void {
   const mobile = viewportWidth < 640
   isMobileLayout.value = mobile
 
-  const mainWidth = mobile ? Math.min(292, viewportWidth - viewportPadding * 2) : 260
-  const modelWidth = mobile ? mainWidth : 252
+  const mainWidth = mobile ? Math.min(292, viewportWidth - viewportPadding * 2) : 196
+  const modelWidth = mobile ? mainWidth : 232
   const modelSide = rect.right + gap + modelWidth + viewportPadding <= viewportWidth ? 'right' : 'left'
   modelMenuSide.value = modelSide
 
@@ -274,20 +275,19 @@ onBeforeUnmount(() => {
 @reference "tailwindcss";
 
 .model-reasoning-dropdown {
-  @apply relative inline-flex min-w-0;
+  @apply relative inline-flex min-w-0 w-full;
 }
 
 .model-reasoning-trigger {
-  @apply inline-flex min-h-7 min-w-0 items-center gap-1 border-0 bg-transparent px-0 py-0.5 text-sm leading-tight text-zinc-500 outline-none transition hover:text-zinc-800 disabled:cursor-not-allowed disabled:text-zinc-400;
+  @apply inline-flex min-h-7 w-full min-w-0 items-center gap-1 border-0 bg-transparent px-0 py-0.5 text-sm leading-tight text-zinc-500 outline-none transition hover:text-zinc-800 disabled:cursor-not-allowed disabled:text-zinc-400;
 }
 
 .model-reasoning-trigger-fast-icon {
   @apply -ml-0.5 h-3.5 w-3.5 shrink-0 text-orange-500;
 }
 
-.model-reasoning-trigger-model,
-.model-reasoning-trigger-effort {
-  @apply max-w-12 truncate whitespace-nowrap pb-px;
+.model-reasoning-trigger-summary {
+  @apply min-w-0 flex-1 truncate whitespace-nowrap pb-px text-left;
 }
 
 .model-reasoning-trigger-chevron {
@@ -300,7 +300,7 @@ onBeforeUnmount(() => {
 
 .model-reasoning-menu,
 .model-reasoning-model-menu {
-  @apply rounded-xl border border-zinc-200 bg-white p-1 shadow-lg;
+  @apply rounded-lg border border-zinc-200 bg-white p-1 shadow-lg;
 }
 
 .model-reasoning-menu-label {
@@ -313,7 +313,7 @@ onBeforeUnmount(() => {
 
 .model-reasoning-option,
 .model-reasoning-model-row {
-  @apply flex min-h-9 w-full items-center justify-between gap-3 rounded-lg border-0 bg-transparent px-2 py-1.5 text-left text-sm text-zinc-700 transition hover:bg-zinc-100;
+  @apply flex min-h-8 w-full items-center justify-between gap-3 rounded-lg border-0 bg-transparent px-2 py-1 text-left text-sm text-zinc-700 transition hover:bg-zinc-100;
 }
 
 .model-reasoning-option.is-selected,
@@ -338,7 +338,7 @@ onBeforeUnmount(() => {
 }
 
 .model-reasoning-model-menu {
-  @apply w-[15.75rem];
+  @apply w-[14.5rem];
 }
 
 .model-reasoning-layer:not(.is-mobile-layout) .model-reasoning-model-menu {
