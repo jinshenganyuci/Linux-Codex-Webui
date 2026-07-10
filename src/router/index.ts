@@ -28,6 +28,11 @@ const router = createRouter({
       component: EmptyRouteView,
     },
     {
+      path: '/archived',
+      name: 'archived',
+      component: EmptyRouteView,
+    },
+    {
       path: '/new-thread',
       redirect: { name: 'home' },
     },

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getAvailableModelIds, getAvailableModels, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, persistThreadModelPreference, resumeThread, startThread, startThreadTurn, startThreadWithTurn } from './codexGateway'
+import { getArchivedThreadsPage, getAvailableModelIds, getAvailableModels, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, permanentlyDeleteThread, persistThreadModelPreference, resumeThread, startThread, startThreadTurn, startThreadWithTurn, unarchiveThread } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -227,6 +227,68 @@ describe('thread model preferences', () => {
       model: 'gpt-5.5',
       reasoningEffort: 'xhigh',
     })).rejects.toThrow('disk full')
+  })
+})
+
+describe('archived thread management', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('lists archived threads and uses the official restore and delete methods', async () => {
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = typeof init?.body === 'string'
+        ? JSON.parse(init.body) as { method: string; params: Record<string, unknown> }
+        : { method: '', params: {} }
+      requests.push(body)
+
+      const result = body.method === 'thread/list'
+        ? {
+            data: [{
+              id: 'archived-thread',
+              preview: 'Archived conversation',
+              modelProvider: 'openai',
+              createdAt: 1_783_650_000,
+              updatedAt: 1_783_651_000,
+              path: '/root/.codex/archived_sessions/archived-thread.jsonl',
+              cwd: '/tmp/archive-project',
+              cliVersion: '0.144.0',
+              source: 'vscode',
+              gitInfo: null,
+              turns: [],
+            }],
+            nextCursor: 'next-page',
+          }
+        : {}
+      return new Response(JSON.stringify({ result }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    const page = await getArchivedThreadsPage('cursor-1', 25)
+    await unarchiveThread('archived-thread')
+    await permanentlyDeleteThread('archived-thread')
+
+    expect(page).toMatchObject({
+      threads: [{ id: 'archived-thread', title: 'Archived conversation', projectName: 'archive-project' }],
+      nextCursor: 'next-page',
+    })
+    expect(requests).toEqual([
+      {
+        method: 'thread/list',
+        params: {
+          archived: true,
+          limit: 25,
+          sortKey: 'updated_at',
+          modelProviders: [],
+          cursor: 'cursor-1',
+        },
+      },
+      { method: 'thread/unarchive', params: { threadId: 'archived-thread' } },
+      { method: 'thread/delete', params: { threadId: 'archived-thread' } },
+    ])
   })
 })
 

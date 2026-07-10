@@ -6210,6 +6210,7 @@ export function useDesktopState() {
 
     error,
     refreshAll,
+    loadThreads,
     refreshSkills,
     selectThread,
     loadMessages,

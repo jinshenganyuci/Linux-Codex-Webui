@@ -51,6 +51,22 @@
           <button
             v-if="!isSidebarCollapsed"
             class="sidebar-skills-link"
+            :class="{ 'is-active': isArchivedRoute }"
+            type="button"
+            @click="router.push({ name: 'archived' }); isMobile && setSidebarCollapsed(true)"
+          >
+            <span class="sidebar-skills-link-icon sidebar-archived-link-icon" aria-hidden="true">
+              <IconTablerArchive />
+            </span>
+            <span class="sidebar-skills-link-copy">
+              <span class="sidebar-skills-link-title">{{ t('Archived') }}</span>
+              <span class="sidebar-skills-link-subtitle">{{ t('Conversation history') }}</span>
+            </span>
+          </button>
+
+          <button
+            v-if="!isSidebarCollapsed"
+            class="sidebar-skills-link"
             :class="{ 'is-active': isSkillsRoute }"
             type="button"
             @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
@@ -509,7 +525,7 @@
         :style="contentStyle"
       >
         <span v-if="isVirtualKeyboardOpen" class="content-keyboard-spacer" aria-hidden="true" />
-        <ContentHeader :title="contentTitle" :accent="isSkillsRoute || isAutomationsRoute">
+        <ContentHeader :title="contentTitle" :accent="isArchivedRoute || isSkillsRoute || isAutomationsRoute">
           <template #leading>
             <SidebarThreadControls
               v-if="isSidebarCollapsed || isMobile"
@@ -519,7 +535,10 @@
               @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
               @start-new-thread="onStartNewThreadFromToolbar"
             />
-            <span v-if="isSkillsRoute" class="skills-route-header-icon" aria-hidden="true">
+            <span v-if="isArchivedRoute" class="skills-route-header-icon archived-route-header-icon" aria-hidden="true">
+              <IconTablerArchive />
+            </span>
+            <span v-else-if="isSkillsRoute" class="skills-route-header-icon" aria-hidden="true">
               <IconTablerBolt />
             </span>
             <span v-else-if="isAutomationsRoute" class="skills-route-header-icon automations-route-header-icon" aria-hidden="true">
@@ -573,7 +592,10 @@
         </ContentHeader>
 
         <section class="content-body">
-          <template v-if="isSkillsRoute">
+          <template v-if="isArchivedRoute">
+            <ArchivedThreadsPanel @changed="onArchivedThreadsChanged" />
+          </template>
+          <template v-else-if="isSkillsRoute">
             <DirectoryHub
               :cwd="directoryCwd"
               :thread-id="routeThreadId"
@@ -1174,6 +1196,7 @@ import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import HeaderGitBranchDropdown from './components/content/HeaderGitBranchDropdown.vue'
 import ComposerRuntimeDropdown from './components/content/ComposerRuntimeDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
+import IconTablerArchive from './components/icons/IconTablerArchive.vue'
 import IconTablerBolt from './components/icons/IconTablerBolt.vue'
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerSettings from './components/icons/IconTablerSettings.vue'
@@ -1231,6 +1254,7 @@ const ThreadTerminalPanel = defineAsyncComponent(() => import('./components/cont
 const ReviewPane = defineAsyncComponent(() => import('./components/content/ReviewPane.vue'))
 const DirectoryHub = defineAsyncComponent(() => import('./components/content/DirectoryHub.vue'))
 const AutomationsPanel = defineAsyncComponent(() => import('./components/content/AutomationsPanel.vue'))
+const ArchivedThreadsPanel = defineAsyncComponent(() => import('./components/content/ArchivedThreadsPanel.vue'))
 const { t, uiLanguage, uiLanguageOptions, setUiLanguage } = useUiLanguage()
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
@@ -1434,6 +1458,7 @@ const {
   isUpdatingPermissionMode,
   error: desktopError,
   refreshAll,
+  loadThreads,
   refreshSkills,
   selectThread,
   ensureThreadMessagesLoaded,
@@ -1727,6 +1752,7 @@ const routeThreadId = computed(() => {
 })
 
 const isHomeRoute = computed(() => route.name === 'home')
+const isArchivedRoute = computed(() => route.name === 'archived')
 const isSkillsRoute = computed(() => route.name === 'skills')
 const isAutomationsRoute = computed(() => route.name === 'automations')
 const routeAutomationId = computed(() => {
@@ -1734,6 +1760,7 @@ const routeAutomationId = computed(() => {
   return typeof raw === 'string' ? raw : ''
 })
 const contentTitle = computed(() => {
+  if (isArchivedRoute.value) return t('Archived')
   if (isAutomationsRoute.value) return t('Automations')
   if (isSkillsRoute.value) return t('Skills')
   if (isHomeRoute.value) return t('Start new thread')
@@ -2680,6 +2707,10 @@ async function onRemoveAccount(storageId: string): Promise<void> {
 
 function onArchiveThread(threadId: string): void {
   void archiveThreadById(threadId)
+}
+
+function onArchivedThreadsChanged(): void {
+  void loadThreads({ force: true })
 }
 
 async function onForkThread(threadId: string): Promise<void> {
@@ -4145,7 +4176,7 @@ function onImplementPlan(payload: { turnId: string }): void {
 
 
 async function copySelectedThreadChat(): Promise<void> {
-  if (isHomeRoute.value || isSkillsRoute.value || isAutomationsRoute.value) return
+  if (isHomeRoute.value || isArchivedRoute.value || isSkillsRoute.value || isAutomationsRoute.value) return
   if (!selectedThread.value || filteredMessages.value.length === 0) return
   const markdown = buildThreadMarkdown()
   try {
@@ -4671,7 +4702,7 @@ watch(
   async (threadId) => {
     if (!hasInitialized.value) return
     if (isRouteSyncInProgress.value) return
-    if (isHomeRoute.value || isSkillsRoute.value || isAutomationsRoute.value) return
+    if (isHomeRoute.value || isArchivedRoute.value || isSkillsRoute.value || isAutomationsRoute.value) return
 
     if (!threadId) {
       if (route.name !== 'home') {
@@ -5000,6 +5031,10 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
   @apply bg-amber-500;
 }
 
+.sidebar-archived-link-icon {
+  @apply bg-zinc-700;
+}
+
 .sidebar-skills-link-icon :deep(svg) {
   @apply h-5 w-5;
 }
@@ -5026,6 +5061,10 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 
 .automations-route-header-icon {
   @apply bg-amber-500 shadow-[0_16px_32px_-20px_rgba(245,158,11,0.9)];
+}
+
+.archived-route-header-icon {
+  @apply bg-zinc-700 shadow-[0_16px_32px_-20px_rgba(63,63,70,0.8)];
 }
 
 .skills-route-header-icon :deep(svg) {

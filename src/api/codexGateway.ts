@@ -739,6 +739,11 @@ export type ThreadGroupsPage = {
   nextCursor: string | null
 }
 
+export type ArchivedThreadsPage = {
+  threads: UiThread[]
+  nextCursor: string | null
+}
+
 export type ThreadTurnPage = {
   messages: UiMessage[]
   inProgress: boolean
@@ -852,6 +857,34 @@ export async function getThreadGroupsPage(
     return await getThreadGroupsPageV2(cursor, limit)
   } catch (error) {
     throw normalizeCodexApiError(error, 'Failed to load thread groups', 'thread/list')
+  }
+}
+
+export async function getArchivedThreadsPage(
+  cursor: string | null = null,
+  limit = INITIAL_THREAD_LIST_LIMIT,
+): Promise<ArchivedThreadsPage> {
+  try {
+    const payload = await callRpc<ThreadListResponse>('thread/list', {
+      archived: true,
+      limit,
+      sortKey: 'updated_at',
+      modelProviders: [],
+      cursor,
+    })
+    const threads = normalizeThreadGroupsV2(payload)
+      .flatMap((group) => group.threads)
+      .sort((first, second) => (
+        new Date(second.updatedAtIso).getTime() - new Date(first.updatedAtIso).getTime()
+      ))
+    return {
+      threads,
+      nextCursor: typeof payload.nextCursor === 'string' && payload.nextCursor.length > 0
+        ? payload.nextCursor
+        : null,
+    }
+  } catch (error) {
+    throw normalizeCodexApiError(error, 'Failed to load archived threads', 'thread/list')
   }
 }
 
@@ -1631,6 +1664,22 @@ export async function resumeThread(threadId: string): Promise<ResumedThread> {
 
 export async function archiveThread(threadId: string): Promise<void> {
   await callRpc('thread/archive', { threadId })
+}
+
+export async function unarchiveThread(threadId: string): Promise<void> {
+  try {
+    await callRpc('thread/unarchive', { threadId })
+  } catch (error) {
+    throw normalizeCodexApiError(error, `Failed to restore thread ${threadId}`, 'thread/unarchive')
+  }
+}
+
+export async function permanentlyDeleteThread(threadId: string): Promise<void> {
+  try {
+    await callRpc('thread/delete', { threadId })
+  } catch (error) {
+    throw normalizeCodexApiError(error, `Failed to permanently delete thread ${threadId}`, 'thread/delete')
+  }
 }
 
 export async function renameThread(threadId: string, threadName: string): Promise<void> {
