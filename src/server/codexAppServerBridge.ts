@@ -47,6 +47,7 @@ import { handleOpenRouterProxyRequest } from './openRouterProxy.js'
 import { handleZenProxyRequest } from './zenProxy.js'
 import { handleCustomEndpointProxyRequest } from './customEndpointProxy.js'
 import { ThreadTerminalManager } from './terminalManager.js'
+import { ThreadRuntimeState } from './threadRuntimeState.js'
 import {
   deleteThreadModelPreference,
   normalizeThreadModelPreference,
@@ -6522,6 +6523,8 @@ export class AppServerProcess {
   private chatgptAuthRefreshPromise: Promise<ChatgptAuthTokensRefreshResponse> | null = null
   private activeConfigSignature = ''
 
+  constructor(private readonly threadRuntimeState: ThreadRuntimeState | null = null) {}
+
 
   private getCodexCommand(): string {
     const codexCommand = resolveCodexCommand()
@@ -6676,6 +6679,7 @@ export class AppServerProcess {
       this.activeTurnThreadIds.clear()
       this.optimisticTurnThreadIds.clear()
       this.turnStartRequestThreadIds.clear()
+      this.threadRuntimeState?.clearLocalActivity()
       this.notifyIdleWaitersIfIdle()
     })
   }
@@ -6735,6 +6739,7 @@ export class AppServerProcess {
   private emitNotification(notification: { method: string; params: unknown }, generation = this.activeProcessGeneration): void {
     if (generation === 0) return
     const emittedNotification: AppServerNotification = { ...notification, generation }
+    this.threadRuntimeState?.observeNotification(notification.method, notification.params)
     this.updateActiveTurnState(notification)
     this.recordStreamEvent(emittedNotification)
     this.captureItemFromNotification(notification)
@@ -7117,7 +7122,18 @@ export class AppServerProcess {
   async rpc(method: string, params: unknown): Promise<unknown> {
     this.disposeIfConfigChanged()
     await this.ensureInitialized()
-    return this.call(method, params)
+    const threadId = method === 'turn/start' ? this.extractThreadIdFromParams(params) : ''
+    const pendingRuntimeTurnId = threadId ? this.threadRuntimeState?.beginTurn(threadId) ?? '' : ''
+    try {
+      const result = await this.call(method, params)
+      this.threadRuntimeState?.observeRpcResult(method, params, result, pendingRuntimeTurnId)
+      return result
+    } catch (error) {
+      if (threadId && pendingRuntimeTurnId) {
+        this.threadRuntimeState?.rejectTurnStart(threadId, pendingRuntimeTurnId)
+      }
+      throw error
+    }
   }
 
   onNotification(listener: (value: { method: string; params: unknown }) => void): () => void {
@@ -7190,6 +7206,7 @@ export class AppServerProcess {
     this.activeTurnThreadIds.clear()
     this.optimisticTurnThreadIds.clear()
     this.turnStartRequestThreadIds.clear()
+    this.threadRuntimeState?.clearLocalActivity()
     this.notifyIdleWaitersIfIdle()
 
     try {
@@ -7616,10 +7633,11 @@ type SharedBridgeState = {
   methodCatalog: MethodCatalog
   telegramBridge: TelegramThreadBridge
   backendQueueProcessor: BackendQueueProcessor
+  threadRuntimeState: ThreadRuntimeState
 }
 
 const SHARED_BRIDGE_KEY = '__codexRemoteSharedBridge__'
-const SHARED_BRIDGE_VERSION = 'experimental-api-v2'
+const SHARED_BRIDGE_VERSION = 'experimental-api-v3'
 
 function getSharedBridgeState(): SharedBridgeState {
   const globalScope = globalThis as typeof globalThis & {
@@ -7634,9 +7652,11 @@ function getSharedBridgeState(): SharedBridgeState {
     existing.appServer.dispose()
     existing.backendQueueProcessor?.dispose()
     existing.terminalManager?.dispose()
+    void existing.threadRuntimeState?.dispose()
   }
 
-  const appServer = new AppServerProcess()
+  const threadRuntimeState = new ThreadRuntimeState()
+  const appServer = new AppServerProcess(threadRuntimeState)
   const terminalManager = new ThreadTerminalManager()
   const backendQueueProcessor = new BackendQueueProcessor(appServer)
   const created: SharedBridgeState = {
@@ -7645,6 +7665,7 @@ function getSharedBridgeState(): SharedBridgeState {
     terminalManager,
     methodCatalog: new MethodCatalog(),
     backendQueueProcessor,
+    threadRuntimeState,
     telegramBridge: new TelegramThreadBridge(appServer, {
       onChatSeen: (chatId) => {
         void rememberTelegramChatId(chatId).catch(() => {})
@@ -7732,7 +7753,7 @@ async function buildThreadSearchIndex(appServer: AppServerProcess): Promise<Thre
 }
 
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
-  const { appServer, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor } = getSharedBridgeState()
+  const { appServer, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor, threadRuntimeState } = getSharedBridgeState()
   const notificationStreamId = randomUUID()
   let notificationSequence = 0
   const notificationReplayBuffer: BridgeNotification[] = []
@@ -8298,6 +8319,30 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
 
         setJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/thread-runtime-state') {
+        const body = asRecord(await readJsonBody(req))
+        const threadIds = Array.from(new Set(
+          (Array.isArray(body?.threadIds) ? body.threadIds : [])
+            .map((value) => readNonEmptyString(value))
+            .filter(Boolean),
+        )).slice(0, 500)
+        if (threadIds.length === 0) {
+          setJson(res, 200, {
+            data: [],
+            instanceId: threadRuntimeState.instanceId,
+            checkedAtIso: new Date().toISOString(),
+          })
+          return
+        }
+        const data = await threadRuntimeState.getStates(threadIds)
+        setJson(res, 200, {
+          data,
+          instanceId: threadRuntimeState.instanceId,
+          checkedAtIso: new Date().toISOString(),
+        })
         return
       }
 

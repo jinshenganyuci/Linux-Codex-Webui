@@ -7,7 +7,7 @@ import express, { type Express } from 'express'
 import { createCodexBridgeMiddleware, type BridgeNotification } from './codexAppServerBridge.js'
 import { createAuthSession } from './authMiddleware.js'
 import { createDirectoryListingHtml, createTextEditorHtml, decodeBrowsePath, getLocalDirectoryListing, isTextEditableFile, normalizeLocalPath } from './localBrowseUi.js'
-import { WebSocketServer, type WebSocket } from 'ws'
+import { WebSocket, WebSocketServer } from 'ws'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const distDir = join(__dirname, '..', 'dist')
@@ -77,6 +77,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
   const app = express()
   const bridge = createCodexBridgeMiddleware()
   const authSession = options.password ? createAuthSession(options.password) : null
+  let disposeWebSocketServer = () => {}
 
   // 1. Auth middleware (if password is set)
   if (authSession) {
@@ -252,10 +253,19 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
 
   return {
     app,
-    dispose: () => bridge.dispose(),
-    disposeGracefully: () => bridge.disposeGracefully(),
+    dispose: () => {
+      disposeWebSocketServer()
+      bridge.dispose()
+    },
+    disposeGracefully: async () => {
+      disposeWebSocketServer()
+      await bridge.disposeGracefully()
+    },
     attachWebSocket: (server: HttpServer) => {
+      disposeWebSocketServer()
       const wss = new WebSocketServer({ noServer: true })
+      const responsiveClients = new WeakSet<WebSocket>()
+      let disposed = false
 
       server.on('upgrade', (req: IncomingMessage, socket, head) => {
         const url = new URL(req.url ?? '', 'http://localhost')
@@ -275,6 +285,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       })
 
       wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+        responsiveClients.add(ws)
         const url = new URL(req.url ?? '', 'http://localhost')
         const cursorStreamId = url.searchParams.get('streamId') ?? undefined
         const parsedSequence = Number.parseInt(url.searchParams.get('sequence') ?? '0', 10)
@@ -282,14 +293,46 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
         const streamState = bridge.getNotificationStreamState()
         const replayAvailable = cursorStreamId === streamState.streamId && cursorSequence >= Math.max(0, streamState.oldestSequence - 1)
         const unsubscribe = bridge.subscribeNotifications((notification: BridgeNotification) => {
-          if (ws.readyState !== 1) return
+          if (ws.readyState !== WebSocket.OPEN) return
           ws.send(JSON.stringify(notification))
         }, { streamId: cursorStreamId, sequence: cursorSequence })
         ws.send(JSON.stringify({ method: 'ready', params: { ok: true, ...streamState, replayAvailable }, atIso: new Date().toISOString() }))
 
+        ws.on('pong', () => responsiveClients.add(ws))
         ws.on('close', unsubscribe)
         ws.on('error', unsubscribe)
       })
+
+      const heartbeat = setInterval(() => {
+        const heartbeatFrame = JSON.stringify({
+          method: 'heartbeat',
+          params: { ok: true },
+          atIso: new Date().toISOString(),
+        })
+        for (const ws of wss.clients) {
+          if (!responsiveClients.has(ws)) {
+            ws.terminate()
+            continue
+          }
+          responsiveClients.delete(ws)
+          try {
+            ws.ping()
+            if (ws.readyState === WebSocket.OPEN) ws.send(heartbeatFrame)
+          } catch {
+            ws.terminate()
+          }
+        }
+      }, 10_000)
+      heartbeat.unref()
+
+      disposeWebSocketServer = () => {
+        if (disposed) return
+        disposed = true
+        clearInterval(heartbeat)
+        for (const ws of wss.clients) ws.terminate()
+        wss.close()
+        disposeWebSocketServer = () => {}
+      }
     },
   }
 }

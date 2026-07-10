@@ -23,6 +23,7 @@ const gatewayMocks = vi.hoisted(() => ({
   getThreadDetail: vi.fn(),
   getThreadGroupsPage: vi.fn(),
   getThreadModelPreferences: vi.fn(),
+  getThreadRuntimeStates: vi.fn(),
   getThreadQueueState: vi.fn(),
   getThreadTitleCache: vi.fn(),
   getWorkspaceRootsState: vi.fn(),
@@ -97,6 +98,15 @@ function installTestWindow(initialStorage: Record<string, string> = {}) {
     },
     setTimeout: vi.fn(),
     clearTimeout: vi.fn(),
+    setInterval: vi.fn(),
+    clearInterval: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  })
+  vi.stubGlobal('document', {
+    visibilityState: 'visible',
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
   })
 }
 
@@ -104,6 +114,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
   gatewayMocks.getThreadModelPreferences.mockResolvedValue({})
+  gatewayMocks.getThreadRuntimeStates.mockResolvedValue([])
   gatewayMocks.persistThreadModelPreference.mockImplementation(async (_threadId, preference) => preference)
   gatewayMocks.setThreadQueueState.mockResolvedValue(undefined)
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
@@ -694,8 +705,8 @@ describe('startup request deduplication', () => {
 
   it('bypasses recent thread-list reuse for event-driven thread refreshes', async () => {
     installTestWindow()
-    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler) => {
-      if (typeof callback === 'function') {
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function' && delay !== 2_000 && delay !== 15_000) {
         void Promise.resolve().then(() => callback())
       }
       return 1
@@ -1327,8 +1338,8 @@ describe('provider model selection', () => {
 
   it('loads provider models for a selected provider-backed thread during scheduled refreshes', async () => {
     installTestWindow()
-    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler) => {
-      if (typeof callback === 'function') {
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function' && delay !== 2_000 && delay !== 15_000) {
         void Promise.resolve().then(() => callback())
       }
       return 1
@@ -1514,8 +1525,8 @@ describe('provider model selection', () => {
 
   it('refreshes a loaded optimistic thread when completion events arrive', async () => {
     installTestWindow()
-    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler) => {
-      if (typeof callback === 'function') {
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function' && delay !== 2_000 && delay !== 15_000) {
         void Promise.resolve().then(() => callback())
       }
       return 1
@@ -1711,6 +1722,115 @@ describe('notification recovery', () => {
     })
     await vi.waitFor(() => {
       expect(gatewayMocks.getThreadDetail.mock.calls.length).toBeGreaterThan(callsBeforeReconnect)
+    })
+  })
+})
+
+describe('authoritative thread runtime reconciliation', () => {
+  it('clears a silent-WebSocket spinner on the next active runtime poll', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    gatewayMocks.subscribeCodexNotifications.mockReturnValue(vi.fn())
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.resumeThread.mockResolvedValue(null)
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      messages: [{ id: 'final', role: 'assistant', text: 'done', messageType: 'agentMessage' }],
+      inProgress: false,
+      activeTurnId: '',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+    gatewayMocks.getThreadRuntimeStates
+      .mockResolvedValueOnce([{
+        threadId: 'thread-a',
+        turnId: 'turn-a',
+        state: 'running',
+        isRunning: true,
+        source: 'local',
+        startedAtIso: '2026-07-10T00:00:00.000Z',
+        completedAtIso: null,
+        owner: null,
+      }])
+      .mockResolvedValueOnce([{
+        threadId: 'thread-a',
+        turnId: 'turn-a',
+        state: 'completed',
+        isRunning: false,
+        source: 'session',
+        startedAtIso: '2026-07-10T00:00:00.000Z',
+        completedAtIso: '2026-07-10T00:00:02.000Z',
+        owner: null,
+      }])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    await state.loadThreads()
+    state.startPolling()
+
+    const initialPoll = timers.find((timer) => timer.delay === 0)
+    expect(initialPoll).toBeDefined()
+    initialPoll?.callback()
+    await vi.waitFor(() => expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1))
+
+    const activePoll = timers.find((timer) => timer.delay === 2_000)
+    expect(activePoll).toBeDefined()
+    activePoll?.callback()
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(2)
+      expect(state.projectGroups.value[0]?.threads[0]?.inProgress).toBe(false)
+      expect(state.messages.value).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'final', text: 'done' }),
+      ]))
+    })
+    state.stopPolling()
+  })
+
+  it('treats no-active-turn interrupt errors as stale UI when runtime is terminal', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      messages: [{ id: 'final', role: 'assistant', text: 'done', messageType: 'agentMessage' }],
+      inProgress: false,
+      activeTurnId: 'turn-a',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+    gatewayMocks.resumeThread.mockResolvedValue(null)
+    gatewayMocks.interruptThreadTurn.mockRejectedValue(new Error('no active turn to interrupt'))
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'completed',
+      isRunning: false,
+      source: 'session',
+      startedAtIso: '2026-07-10T00:00:00.000Z',
+      completedAtIso: '2026-07-10T00:00:02.000Z',
+      owner: null,
+    }])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    await state.loadThreads()
+    await state.interruptSelectedThreadTurn()
+
+    await vi.waitFor(() => {
+      expect(state.projectGroups.value[0]?.threads[0]?.inProgress).toBe(false)
+      expect(state.error.value).toBe('')
     })
   })
 })

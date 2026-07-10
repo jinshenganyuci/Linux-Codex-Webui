@@ -10,6 +10,8 @@
 >  
 > **Yes, that is your Codex desktop app experience exposed over web UI. Yes, it runs cross-platform.**
 
+版本变化和每次推送的详细中文说明请查看 [更新日志](./CHANGELOG.md)。
+
 ```text
  ██████╗ ██████╗ ██████╗ ███████╗██╗  ██╗██╗   ██╗██╗
 ██╔════╝██╔═══██╗██╔══██╗██╔════╝╚██╗██╔╝██║   ██║██║

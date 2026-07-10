@@ -22,6 +22,9 @@
 - Commit after each discrete task or sub-task.
 - Do not batch unrelated tasks into one commit.
 - Use a specific commit message describing the change.
+- 面向本仓库的提交和推送统一使用中文：提交标题必须是简洁、明确的中文，提交正文必须详细说明改动原因、核心实现、用户可见变化、兼容性或部署影响以及验证结果；代码标识符、命令和协议名称可以保留英文。
+- 每次推送前都必须更新根目录 `CHANGELOG.md`，用中文按日期记录本次推送包含的全部提交。日志至少包括“问题或目标、实现内容、用户影响、测试验证、部署或回滚注意事项”，不得只写一行标题或笼统描述。
+- 如果一次推送包含多个尚未发布的提交，`CHANGELOG.md` 必须逐项说明每个功能或修复，不能只描述最后一个提交。
 
 ## PR Review Bots
 

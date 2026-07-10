@@ -12,6 +12,7 @@ import {
   getPendingServerRequests,
   getSkillsList,
   getThreadDetail,
+  getThreadRuntimeStates,
   getThreadModelPreferences,
   getOlderThreadMessages,
   getBackgroundThreadListLimit,
@@ -42,6 +43,7 @@ import {
   type ThreadQueueState,
   type ThreadModelPreference,
   type ThreadModelPreferenceState,
+  type ThreadRuntimeState,
   type WorkspaceRootsState,
 } from '../api/codexGateway'
 import { CodexApiError } from '../api/codexErrors'
@@ -95,9 +97,12 @@ const CODEX_PERMISSION_MODE_STORAGE_KEY = 'codex-web-local.codex-permission-mode
 const NEW_THREAD_COLLABORATION_MODE_CONTEXT = '__new-thread__'
 const NEW_THREAD_PROVIDER_MODEL_CONTEXT_PREFIX = '__new-thread-provider__::'
 const EVENT_SYNC_DEBOUNCE_MS = 220
+const EVENT_SYNC_RETRY_DELAY_MS = 1_000
 const BACKGROUND_THREAD_PAGINATION_DELAY_MS = 10_000
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 500
 const TURN_START_FOLLOW_UP_SYNC_DELAY_MS = 3000
+const ACTIVE_RUNTIME_STATE_POLL_INTERVAL_MS = 2_000
+const IDLE_RUNTIME_STATE_POLL_INTERVAL_MS = 15_000
 const RECENT_THREAD_MESSAGE_LOAD_REUSE_MS = 2000
 const RECENT_THREAD_LIST_LOAD_REUSE_MS = 2000
 const RECENT_SKILLS_LOAD_REUSE_MS = 2000
@@ -118,6 +123,11 @@ function isThreadNotFoundError(error: unknown): boolean {
   if (error instanceof CodexApiError && error.status === 404) return true
   const message = error instanceof Error ? error.message : String(error ?? '')
   return /\b404\b|thread.*not found|conversation.*not found|no such thread|no rollout found for thread id/i.test(message)
+}
+
+function isNoActiveTurnError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return /no active turn|turn is not active|active turn not found|cannot interrupt.*(?:completed|inactive)/iu.test(message)
 }
 
 function loadReadStateMap(): Record<string, string> {
@@ -1630,6 +1640,13 @@ export function useDesktopState() {
   }
   let stopNotificationStream: (() => void) | null = null
   let eventSyncTimer: number | null = null
+  let runtimeStatePollTimer: number | null = null
+  let runtimeStatePollInFlight = false
+  let runtimeStatePollingGeneration = 0
+  let removeRuntimeStateLifecycleListeners: (() => void) | null = null
+  const terminalRuntimeRefreshThreadIds = new Set<string>()
+  const latestRuntimeStateByThreadId = new Map<string, ThreadRuntimeState>()
+  const optimisticTurnStartedAtByThreadId = new Map<string, number>()
   let rateLimitRefreshTimer: number | null = null
   const delayedTurnSyncTimerByThreadId = new Map<string, number>()
   let loadThreadsPromise: Promise<void> | null = null
@@ -2631,6 +2648,12 @@ export function useDesktopState() {
     if (currentThreadId) {
       activeThreadIds.add(currentThreadId)
     }
+    for (const threadId of latestRuntimeStateByThreadId.keys()) {
+      if (!activeThreadIds.has(threadId)) latestRuntimeStateByThreadId.delete(threadId)
+    }
+    for (const threadId of optimisticTurnStartedAtByThreadId.keys()) {
+      if (!activeThreadIds.has(threadId)) optimisticTurnStartedAtByThreadId.delete(threadId)
+    }
     const nextSelectedModelMap = pruneThreadContextStateMap(selectedModelIdByContext.value, activeThreadIds)
     if (nextSelectedModelMap !== selectedModelIdByContext.value) {
       selectedModelIdByContext.value = nextSelectedModelMap
@@ -2738,6 +2761,9 @@ export function useDesktopState() {
       clearInterruptPersistenceGate(threadId)
     }
     applyThreadFlags()
+    if (nextInProgress && stopNotificationStream) {
+      scheduleRuntimeStatePoll(0, true)
+    }
     if (!nextInProgress && !hasActiveInProgressThreads() && threadListNextCursor) {
       scheduleRemainingThreadPages()
     }
@@ -4198,6 +4224,8 @@ export function useDesktopState() {
 
     const startedTurn = readTurnStartedInfo(notification)
     if (startedTurn) {
+      latestRuntimeStateByThreadId.delete(startedTurn.threadId)
+      optimisticTurnStartedAtByThreadId.delete(startedTurn.threadId)
       pendingTurnStartsById.set(startedTurn.turnId, startedTurn)
       setTurnIndexForThread(startedTurn.threadId, startedTurn.turnId, inferNextTurnIndex(startedTurn.threadId))
       activeTurnIdByThreadId.value = {
@@ -4226,6 +4254,7 @@ export function useDesktopState() {
       completedThreadModelId !== MODEL_FALLBACK_ID &&
       isUnsupportedChatGptModelError(new Error(turnErrorMessage))
     if (completedTurn) {
+      optimisticTurnStartedAtByThreadId.delete(completedTurn.threadId)
       const pendingTurnRequest = pendingTurnRequestByThreadId.value[completedTurn.threadId]
       const startedTurnState = pendingTurnStartsById.get(completedTurn.turnId)
       if (startedTurnState) {
@@ -4584,8 +4613,19 @@ export function useDesktopState() {
     }
 
     const orderedGroups = orderGroupsByProjectOrder(visibleGroups, projectOrder.value)
-    markServerListedThreads(new Set(flattenThreads(orderedGroups).map((thread) => thread.id)))
+    const orderedThreadIds = new Set(flattenThreads(orderedGroups).map((thread) => thread.id))
+    markServerListedThreads(orderedThreadIds)
     inProgressById.value = syncIncomingInProgressState(inProgressById.value, orderedGroups)
+    for (const [threadId, runtimeState] of latestRuntimeStateByThreadId) {
+      if (!orderedThreadIds.has(threadId) && threadId !== selectedThreadId.value) continue
+      if (runtimeState.isRunning) {
+        if (inProgressById.value[threadId] !== true) {
+          inProgressById.value = { ...inProgressById.value, [threadId]: true }
+        }
+      } else if (inProgressById.value[threadId] === true) {
+        inProgressById.value = omitKey(inProgressById.value, threadId)
+      }
+    }
     const mergedWithInProgress = mergeIncomingWithLocalInProgressThreads(
       sourceGroups.value,
       orderedGroups,
@@ -4847,6 +4887,14 @@ export function useDesktopState() {
       }
 
       const { messages: nextMessages, inProgress, activeTurnId, turnIndexByTurnId } = detail
+      const knownRuntimeState = latestRuntimeStateByThreadId.get(threadId)
+      const hasOptimisticTurnStart = optimisticTurnStartedAtByThreadId.has(threadId)
+      const resolvedInProgress = hasOptimisticTurnStart
+        ? true
+        : (knownRuntimeState ? knownRuntimeState.isRunning : inProgress)
+      const resolvedActiveTurnId = knownRuntimeState?.isRunning && knownRuntimeState.turnId
+        ? knownRuntimeState.turnId
+        : (resolvedInProgress ? activeTurnId : '')
       hasMoreOlderMessagesByThreadId.value = {
         ...hasMoreOlderMessagesByThreadId.value,
         [threadId]: detail.hasMoreOlder === true,
@@ -4861,7 +4909,7 @@ export function useDesktopState() {
       setPersistedMessagesForThread(threadId, mergedMessages)
 
       const previousLiveAgent = liveAgentMessagesByThreadId.value[threadId] ?? []
-      if (inProgress) {
+      if (resolvedInProgress) {
         const nextLiveAgent = removeRedundantLiveAgentMessages(previousLiveAgent, nextMessages)
         setLiveAgentMessagesForThread(threadId, nextLiveAgent)
       } else {
@@ -4883,17 +4931,17 @@ export function useDesktopState() {
           [threadId]: version,
         }
       }
-      setThreadInProgress(threadId, inProgress)
+      setThreadInProgress(threadId, resolvedInProgress)
       clearTransientTurnErrorForThread(threadId)
-      if (activeTurnId) {
+      if (resolvedActiveTurnId) {
         activeTurnIdByThreadId.value = {
           ...activeTurnIdByThreadId.value,
-          [threadId]: activeTurnId,
+          [threadId]: resolvedActiveTurnId,
         }
       } else if (activeTurnIdByThreadId.value[threadId]) {
         activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, threadId)
       }
-      if (!inProgress) {
+      if (!resolvedInProgress) {
         clearCompletedTurnLiveState(threadId)
       }
       markThreadAsRead(threadId)
@@ -5358,6 +5406,8 @@ export function useDesktopState() {
 
     error.value = ''
     shouldAutoScrollOnNextAgentEvent = true
+    latestRuntimeStateByThreadId.delete(threadId)
+    optimisticTurnStartedAtByThreadId.set(threadId, Date.now())
     setTurnSummaryForThread(threadId, null)
     setTurnActivityForThread(
       threadId,
@@ -5389,6 +5439,7 @@ export function useDesktopState() {
       )
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false
+      optimisticTurnStartedAtByThreadId.delete(threadId)
       setThreadInProgress(threadId, false)
       setTurnActivityForThread(threadId, null)
       const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
@@ -5690,23 +5741,34 @@ export function useDesktopState() {
     if (interruptBlockedUntilPersistedByThreadId.value[threadId] === true) return
     let turnId = activeTurnIdByThreadId.value[threadId]
     if (!turnId) {
-      const { activeTurnId } = await getThreadDetail(threadId)
-      turnId = activeTurnId
-      if (turnId) {
-        activeTurnIdByThreadId.value = {
-          ...activeTurnIdByThreadId.value,
-          [threadId]: turnId,
+      try {
+        const { activeTurnId } = await getThreadDetail(threadId)
+        turnId = activeTurnId
+        if (turnId) {
+          activeTurnIdByThreadId.value = {
+            ...activeTurnIdByThreadId.value,
+            [threadId]: turnId,
+          }
         }
+      } catch {
+        // Runtime reconciliation below handles stale or externally-owned turns.
       }
     }
     if (!turnId) {
-      throw new Error('Could not determine active turn id for interrupt')
+      const runtimeState = await reconcileThreadRuntimeState(threadId)
+      if (runtimeState && !runtimeState.isRunning) {
+        error.value = ''
+        return
+      }
+      error.value = 'Could not determine active turn id for interrupt'
+      return
     }
 
     isInterruptingTurn.value = true
     error.value = ''
     try {
       await interruptThreadTurn(threadId, turnId)
+      optimisticTurnStartedAtByThreadId.delete(threadId)
       setThreadInProgress(threadId, false)
       setTurnActivityForThread(threadId, null)
       setTurnErrorForThread(threadId, null)
@@ -5717,6 +5779,17 @@ export function useDesktopState() {
       pendingThreadsRefresh = true
       await syncFromNotifications()
     } catch (unknownError) {
+      if (isNoActiveTurnError(unknownError)) {
+        const runtimeState = await reconcileThreadRuntimeState(threadId)
+        if (runtimeState && !runtimeState.isRunning) {
+          setThreadInProgress(threadId, false)
+          clearCompletedTurnLiveState(threadId)
+          setTurnActivityForThread(threadId, null)
+          setTurnErrorForThread(threadId, null)
+          error.value = ''
+          return
+        }
+      }
       const errorMessage = unknownError instanceof Error ? unknownError.message : 'Failed to interrupt active turn'
       setTurnErrorForThread(threadId, errorMessage)
       error.value = errorMessage
@@ -5931,6 +6004,168 @@ export function useDesktopState() {
     }
   }
 
+  function collectRuntimeStateThreadIds(): string[] {
+    const threadIds = new Set<string>()
+    for (const thread of allThreads.value) threadIds.add(thread.id)
+    for (const threadId of Object.keys(inProgressById.value)) threadIds.add(threadId)
+    const selected = selectedThreadId.value.trim()
+    if (selected) threadIds.add(selected)
+    return Array.from(threadIds)
+  }
+
+  function isUuidV7TurnId(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)
+  }
+
+  function shouldIgnoreOlderTerminalRuntimeState(state: ThreadRuntimeState): boolean {
+    const optimisticStartedAtMs = optimisticTurnStartedAtByThreadId.get(state.threadId)
+    if (optimisticStartedAtMs) {
+      const runtimeStartedAtMs = state.startedAtIso ? Date.parse(state.startedAtIso) : NaN
+      if (!Number.isFinite(runtimeStartedAtMs)) {
+        return Date.now() - optimisticStartedAtMs < 60_000
+      }
+      if (runtimeStartedAtMs + 1_000 < optimisticStartedAtMs) return true
+    }
+    const currentTurnId = activeTurnIdByThreadId.value[state.threadId]?.trim() ?? ''
+    if (!currentTurnId || !state.turnId || currentTurnId === state.turnId) return false
+    if (!isUuidV7TurnId(currentTurnId) || !isUuidV7TurnId(state.turnId)) return false
+    return currentTurnId.localeCompare(state.turnId) > 0
+  }
+
+  function refreshTerminalThreadFromServer(state: ThreadRuntimeState): void {
+    const threadId = state.threadId
+    if (!threadId || terminalRuntimeRefreshThreadIds.has(threadId)) return
+    terminalRuntimeRefreshThreadIds.add(threadId)
+    void (async () => {
+      try {
+        await loadMessages(threadId, { silent: true, force: true })
+        if (!shouldIgnoreOlderTerminalRuntimeState(state)) {
+          setThreadInProgress(threadId, false)
+          clearCompletedTurnLiveState(threadId)
+        }
+        await loadThreads({ force: true })
+        if (!shouldIgnoreOlderTerminalRuntimeState(state)) {
+          setThreadInProgress(threadId, false)
+          clearCompletedTurnLiveState(threadId)
+        }
+        await loadPendingServerRequestsFromBridge()
+      } catch {
+        pendingThreadMessageRefresh.add(threadId)
+        pendingThreadsRefresh = true
+      } finally {
+        terminalRuntimeRefreshThreadIds.delete(threadId)
+      }
+    })()
+  }
+
+  function applyThreadRuntimeStates(states: ThreadRuntimeState[]): void {
+    for (const state of states) {
+      const threadId = state.threadId
+      if (!threadId) continue
+
+      if (state.isRunning && state.state === 'running') {
+        latestRuntimeStateByThreadId.set(threadId, state)
+        optimisticTurnStartedAtByThreadId.delete(threadId)
+        setThreadInProgress(threadId, true)
+        if (state.turnId && !state.turnId.startsWith('pending:')) {
+          activeTurnIdByThreadId.value = {
+            ...activeTurnIdByThreadId.value,
+            [threadId]: state.turnId,
+          }
+          maybeUnblockInterruptForActiveTurn(threadId, state.turnId)
+        }
+        continue
+      }
+
+      if (shouldIgnoreOlderTerminalRuntimeState(state)) continue
+      latestRuntimeStateByThreadId.set(threadId, state)
+      const hadRuntimeState = inProgressById.value[threadId] === true || Boolean(activeTurnIdByThreadId.value[threadId])
+      if (!hadRuntimeState) continue
+
+      optimisticTurnStartedAtByThreadId.delete(threadId)
+      clearDelayedTurnSync(threadId)
+      if (state.turnId) pendingTurnStartsById.delete(state.turnId)
+      setThreadInProgress(threadId, false)
+      clearCompletedTurnLiveState(threadId)
+      setTurnActivityForThread(threadId, null)
+      if (state.state === 'completed') markThreadUnreadByEvent(threadId)
+      refreshTerminalThreadFromServer(state)
+    }
+  }
+
+  function scheduleRuntimeStatePoll(delayMs: number, replaceExisting = false): void {
+    if (typeof window === 'undefined' || !stopNotificationStream) return
+    if (runtimeStatePollTimer !== null) {
+      if (!replaceExisting) return
+      window.clearTimeout(runtimeStatePollTimer)
+      runtimeStatePollTimer = null
+    }
+    const generation = runtimeStatePollingGeneration
+    runtimeStatePollTimer = window.setTimeout(() => {
+      runtimeStatePollTimer = null
+      void pollThreadRuntimeStates(generation)
+    }, Math.max(0, delayMs))
+  }
+
+  async function pollThreadRuntimeStates(generation: number): Promise<void> {
+    if (generation !== runtimeStatePollingGeneration || !stopNotificationStream) return
+    if (runtimeStatePollInFlight) {
+      scheduleRuntimeStatePoll(250, true)
+      return
+    }
+
+    const threadIds = collectRuntimeStateThreadIds()
+    if (threadIds.length === 0) {
+      scheduleRuntimeStatePoll(IDLE_RUNTIME_STATE_POLL_INTERVAL_MS)
+      return
+    }
+
+    runtimeStatePollInFlight = true
+    let anyRunning = hasActiveInProgressThreads()
+    try {
+      const states = await getThreadRuntimeStates(threadIds)
+      if (generation !== runtimeStatePollingGeneration || !stopNotificationStream) return
+      applyThreadRuntimeStates(states)
+      anyRunning = states.some((state) => state.isRunning) || hasActiveInProgressThreads()
+    } catch {
+      anyRunning = hasActiveInProgressThreads()
+    } finally {
+      runtimeStatePollInFlight = false
+      if (generation === runtimeStatePollingGeneration) {
+        scheduleRuntimeStatePoll(
+          anyRunning ? ACTIVE_RUNTIME_STATE_POLL_INTERVAL_MS : IDLE_RUNTIME_STATE_POLL_INTERVAL_MS,
+        )
+      }
+    }
+  }
+
+  async function reconcileThreadRuntimeState(threadId: string): Promise<ThreadRuntimeState | null> {
+    try {
+      const state = (await getThreadRuntimeStates([threadId]))[0] ?? null
+      if (state) applyThreadRuntimeStates([state])
+      return state
+    } catch {
+      return null
+    }
+  }
+
+  function installRuntimeStateLifecycleListeners(): void {
+    if (typeof window === 'undefined' || removeRuntimeStateLifecycleListeners) return
+    const requestImmediatePoll = () => scheduleRuntimeStatePoll(0, true)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') requestImmediatePoll()
+    }
+    window.addEventListener('focus', requestImmediatePoll)
+    window.addEventListener('online', requestImmediatePoll)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    removeRuntimeStateLifecycleListeners = () => {
+      window.removeEventListener('focus', requestImmediatePoll)
+      window.removeEventListener('online', requestImmediatePoll)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      removeRuntimeStateLifecycleListeners = null
+    }
+  }
+
   async function syncThreadStatus(): Promise<void> {
     if (isPolling.value) return
     isPolling.value = true
@@ -5974,6 +6209,7 @@ export function useDesktopState() {
     pendingThreadsRefresh = false
     pendingThreadsRefreshForce = false
     pendingThreadMessageRefresh.clear()
+    let syncFailed = false
 
     try {
       if (shouldRefreshThreads) {
@@ -5999,7 +6235,10 @@ export function useDesktopState() {
         await loadMessages(threadId, { silent: true, force: true })
       }
     } catch {
-      // Keep UI stable on transient event sync failures.
+      syncFailed = true
+      if (shouldRefreshThreads) pendingThreadsRefresh = true
+      if (shouldForceThreadRefresh) pendingThreadsRefreshForce = true
+      for (const threadId of threadIdsToRefresh) pendingThreadMessageRefresh.add(threadId)
     } finally {
       isPolling.value = false
       if (
@@ -6010,7 +6249,7 @@ export function useDesktopState() {
         eventSyncTimer = window.setTimeout(() => {
           eventSyncTimer = null
           void syncFromNotifications()
-        }, EVENT_SYNC_DEBOUNCE_MS)
+        }, syncFailed ? EVENT_SYNC_RETRY_DELAY_MS : EVENT_SYNC_DEBOUNCE_MS)
       }
     }
   }
@@ -6029,17 +6268,22 @@ export function useDesktopState() {
   function startPolling(): void {
     if (typeof window === 'undefined') return
     if (stopNotificationStream) return
+    runtimeStatePollingGeneration += 1
     void loadPendingServerRequestsFromBridge()
     stopNotificationStream = subscribeCodexNotifications((notification) => {
       if (notification.method === 'ready') {
         clearAllTransientTurnErrors()
         const params = asRecord(notification.params)
         void recoverBridgeState(params?.replayAvailable !== true || params?.streamChanged === true)
+        scheduleRuntimeStatePoll(0, true)
         return
       }
+      if (notification.method === 'heartbeat') return
       applyRealtimeUpdates(notification)
       queueEventDrivenSync(notification)
     })
+    installRuntimeStateLifecycleListeners()
+    scheduleRuntimeStatePoll(0, true)
   }
 
   async function loadPendingServerRequestsFromBridge(): Promise<void> {
@@ -6072,10 +6316,20 @@ export function useDesktopState() {
   }
 
   function stopPolling(): void {
+    runtimeStatePollingGeneration += 1
     if (stopNotificationStream) {
       stopNotificationStream()
       stopNotificationStream = null
     }
+
+    if (runtimeStatePollTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(runtimeStatePollTimer)
+      runtimeStatePollTimer = null
+    }
+    removeRuntimeStateLifecycleListeners?.()
+    terminalRuntimeRefreshThreadIds.clear()
+    latestRuntimeStateByThreadId.clear()
+    optimisticTurnStartedAtByThreadId.clear()
 
     pendingThreadsRefresh = false
     pendingThreadMessageRefresh.clear()

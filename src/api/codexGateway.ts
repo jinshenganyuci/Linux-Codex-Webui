@@ -753,6 +753,85 @@ export type ThreadTurnPage = {
   turnIndexByTurnId: ThreadTurnIndexById
 }
 
+export type ThreadRuntimeState = {
+  threadId: string
+  turnId: string
+  state: 'running' | 'completed' | 'interrupted' | 'idle'
+  isRunning: boolean
+  source: 'session' | 'local' | 'external' | 'none'
+  startedAtIso: string | null
+  completedAtIso: string | null
+  owner: {
+    instanceId: string
+    processId: number
+    processIdentity: string
+    port: number | null
+    local: boolean
+    heartbeatAtIso: string
+  } | null
+}
+
+function normalizeThreadRuntimeState(value: unknown): ThreadRuntimeState | null {
+  const row = asRecord(value)
+  const threadId = readString(row?.threadId)
+  const state = readString(row?.state)
+  if (!threadId || !state || !['running', 'completed', 'interrupted', 'idle'].includes(state)) return null
+  const source = readString(row?.source)
+  const ownerRow = asRecord(row?.owner)
+  const ownerInstanceId = readString(ownerRow?.instanceId)
+  const owner = ownerInstanceId
+    ? {
+        instanceId: ownerInstanceId,
+        processId: typeof ownerRow?.processId === 'number' ? ownerRow.processId : 0,
+        processIdentity: readString(ownerRow?.processIdentity) ?? '',
+        port: typeof ownerRow?.port === 'number' ? ownerRow.port : null,
+        local: ownerRow?.local === true,
+        heartbeatAtIso: readString(ownerRow?.heartbeatAtIso) ?? '',
+      }
+    : null
+  return {
+    threadId,
+    turnId: readString(row?.turnId) ?? '',
+    state: state as ThreadRuntimeState['state'],
+    isRunning: row?.isRunning === true,
+    source: source && ['session', 'local', 'external', 'none'].includes(source)
+      ? source as ThreadRuntimeState['source']
+      : 'none',
+    startedAtIso: readString(row?.startedAtIso) || null,
+    completedAtIso: readString(row?.completedAtIso) || null,
+    owner,
+  }
+}
+
+export async function getThreadRuntimeStates(threadIds: string[]): Promise<ThreadRuntimeState[]> {
+  const normalizedThreadIds = Array.from(new Set(threadIds.map((threadId) => threadId.trim()).filter(Boolean)))
+  if (normalizedThreadIds.length === 0) return []
+  let response: Response
+  try {
+    response = await fetch('/codex-api/thread-runtime-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ threadIds: normalizedThreadIds }),
+    })
+  } catch (error) {
+    throw normalizeCodexApiError(error, 'Failed to read thread runtime state', 'thread-runtime-state')
+  }
+
+  let payload: unknown = null
+  try {
+    payload = await response.json()
+  } catch {
+    payload = null
+  }
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(payload, `Thread runtime state request failed with HTTP ${response.status}`))
+  }
+  const rows = Array.isArray(asRecord(payload)?.data) ? asRecord(payload)?.data as unknown[] : []
+  return rows
+    .map(normalizeThreadRuntimeState)
+    .filter((state): state is ThreadRuntimeState => state !== null)
+}
+
 async function getThreadGroupsPageV2(cursor: string | null, limit: number): Promise<ThreadGroupsPage> {
   const payload = await callRpc<ThreadListResponse>('thread/list', {
     archived: false,

@@ -272,6 +272,9 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
     const socket = new WebSocket(`${protocol}//${window.location.host}/codex-api/ws${cursorQuery()}`)
     let didOpen = false
     let intentionallyClosed = false
+    let watchdogTriggered = false
+    let lastFrameAt = Date.now()
+    let watchdogTimer: number | null = null
     let fallbackTimer: number | null = window.setTimeout(() => {
       if (didOpen || closed || intentionallyClosed) return
       intentionallyClosed = true
@@ -279,16 +282,32 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
       attachSse()
     }, 2500)
 
+    const clearWatchdog = () => {
+      if (watchdogTimer === null) return
+      window.clearInterval(watchdogTimer)
+      watchdogTimer = null
+    }
+
     socket.onopen = () => {
       didOpen = true
+      lastFrameAt = Date.now()
       clearReconnectTimer()
       if (fallbackTimer !== null) {
         window.clearTimeout(fallbackTimer)
         fallbackTimer = null
       }
+      watchdogTimer = window.setInterval(() => {
+        if (closed || intentionallyClosed || watchdogTriggered) return
+        if (Date.now() - lastFrameAt < 25_000) return
+        watchdogTriggered = true
+        clearWatchdog()
+        socket.close()
+        scheduleReconnect(() => attachWebSocket(0), 0)
+      }, 5_000)
     }
 
     socket.onmessage = (event) => {
+      lastFrameAt = Date.now()
       try {
         const payload = JSON.parse(String(event.data)) as unknown
         const notification = toNotification(payload)
@@ -307,11 +326,13 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
     }
 
     socket.onclose = () => {
+      clearWatchdog()
       if (fallbackTimer !== null) {
         window.clearTimeout(fallbackTimer)
         fallbackTimer = null
       }
       if (closed || intentionallyClosed) return
+      if (watchdogTriggered) return
       if (!didOpen) {
         attachSse()
         return
@@ -321,6 +342,7 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
 
     cleanup = () => {
       intentionallyClosed = true
+      clearWatchdog()
       if (fallbackTimer !== null) {
         window.clearTimeout(fallbackTimer)
         fallbackTimer = null
