@@ -1,4 +1,7 @@
 import { existsSync } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   BackendQueueProcessor,
@@ -7,6 +10,7 @@ import {
   sanitizeThreadTurnsInlinePayloads,
   toAutomationApiRecord,
 } from './codexAppServerBridge'
+import { writeThreadModelPreference } from './threadModelPreferences'
 
 const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
 const pngDataUrl = `data:image/png;base64,${pngBase64}`
@@ -374,6 +378,94 @@ describe('backend queue scheduling', () => {
     expect(processThreadQueue).toHaveBeenCalledTimes(1)
 
     processor.dispose()
+  })
+
+  it('uses the queued or persisted per-thread model preference instead of global config', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-queued-thread-preference-'))
+    const previousCodexHome = process.env.CODEX_HOME
+    process.env.CODEX_HOME = codexHome
+    try {
+      await writeThreadModelPreference('thread-1', {
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'max',
+      })
+      const rpc = vi.fn(async () => {
+        throw new Error('global config must not be read when a thread preference exists')
+      })
+      const processor = new BackendQueueProcessor({
+        onNotification: () => () => undefined,
+        rpc,
+      } as never)
+      const buildQueuedTurnParams = (processor as unknown as {
+        buildQueuedTurnParams: (turn: {
+          threadId: string
+          message: {
+            id: string
+            text: string
+            imageUrls: string[]
+            skills: Array<{ name: string; path: string }>
+            fileAttachments: Array<{ label: string; path: string; fsPath: string }>
+            collaborationMode: 'default' | 'plan'
+            model?: string
+            reasoningEffort?: 'high' | 'max'
+          }
+        }) => Promise<Record<string, unknown>>
+      }).buildQueuedTurnParams.bind(processor)
+
+      const persistedParams = await buildQueuedTurnParams({
+        threadId: 'thread-1',
+        message: {
+          id: 'queued-1',
+          text: 'persisted preference',
+          imageUrls: [],
+          skills: [],
+          fileAttachments: [],
+          collaborationMode: 'default',
+        },
+      })
+      expect(persistedParams).toMatchObject({
+        model: 'gpt-5.6-sol',
+        effort: 'max',
+        collaborationMode: {
+          mode: 'default',
+          settings: {
+            model: 'gpt-5.6-sol',
+            reasoning_effort: 'max',
+          },
+        },
+      })
+
+      const capturedParams = await buildQueuedTurnParams({
+        threadId: 'thread-1',
+        message: {
+          id: 'queued-2',
+          text: 'captured preference',
+          imageUrls: [],
+          skills: [],
+          fileAttachments: [],
+          collaborationMode: 'plan',
+          model: 'gpt-5.5',
+          reasoningEffort: 'high',
+        },
+      })
+      expect(capturedParams).toMatchObject({
+        model: 'gpt-5.5',
+        effort: 'high',
+        collaborationMode: {
+          mode: 'plan',
+          settings: {
+            model: 'gpt-5.5',
+            reasoning_effort: 'high',
+          },
+        },
+      })
+      expect(rpc).not.toHaveBeenCalled()
+      processor.dispose()
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = previousCodexHome
+      await rm(codexHome, { recursive: true, force: true })
+    }
   })
 })
 

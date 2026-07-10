@@ -22,12 +22,14 @@ const gatewayMocks = vi.hoisted(() => ({
   getSkillsList: vi.fn(),
   getThreadDetail: vi.fn(),
   getThreadGroupsPage: vi.fn(),
+  getThreadModelPreferences: vi.fn(),
   getThreadQueueState: vi.fn(),
   getThreadTitleCache: vi.fn(),
   getWorkspaceRootsState: vi.fn(),
   generateThreadTitle: vi.fn(),
   interruptThreadTurn: vi.fn(),
   persistThreadTitle: vi.fn(),
+  persistThreadModelPreference: vi.fn(),
   renameThread: vi.fn(),
   replyToServerRequest: vi.fn(),
   resumeThread: vi.fn(),
@@ -101,6 +103,8 @@ function installTestWindow(initialStorage: Record<string, string> = {}) {
 beforeEach(() => {
   vi.clearAllMocks()
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
+  gatewayMocks.getThreadModelPreferences.mockResolvedValue({})
+  gatewayMocks.persistThreadModelPreference.mockImplementation(async (_threadId, preference) => preference)
   gatewayMocks.setThreadQueueState.mockResolvedValue(undefined)
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
   gatewayMocks.getWorkspaceRootsState.mockRejectedValue(new Error('no workspace roots state'))
@@ -561,6 +565,44 @@ describe('startup request deduplication', () => {
     expect(state.selectedThreadQueuedMessages.value).toHaveLength(1)
   })
 
+  it('captures the thread model and reasoning effort in queued messages', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-running', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadModelPreferences.mockResolvedValue({
+      'thread-running': { model: 'gpt-5.6-sol', reasoningEffort: 'max' },
+    })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: '',
+      reasoningEffort: 'xhigh',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities({
+      id: 'gpt-5.6-sol',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      defaultReasoningEffort: 'xhigh',
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-running')
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    await state.sendMessageToSelectedThread('queued follow-up', [], [], 'queue')
+
+    expect(gatewayMocks.setThreadQueueState).toHaveBeenLastCalledWith({
+      'thread-running': [expect.objectContaining({
+        text: 'queued follow-up',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'max',
+      })],
+    })
+  })
+
   it('reuses a just-loaded thread list during startup refresh bursts', async () => {
     installTestWindow()
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)
@@ -883,6 +925,216 @@ describe('provider model selection', () => {
     expect(state.selectedReasoningEffort.value).toBe('medium')
   })
 
+  it('keeps model and reasoning preferences independent across threads', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{
+        projectName: 'Project',
+        threads: [thread('thread-a', '/tmp/project'), thread('thread-b', '/tmp/project')],
+      }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadModelPreferences.mockResolvedValue({
+      'thread-a': { model: 'gpt-5.6-sol', reasoningEffort: 'max' },
+      'thread-b': { model: 'gpt-5.6-luna', reasoningEffort: 'high' },
+    })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: '',
+      reasoningEffort: 'xhigh',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities(
+      {
+        id: 'gpt-5.6-sol',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        defaultReasoningEffort: 'xhigh',
+      },
+      {
+        id: 'gpt-5.6-luna',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        defaultReasoningEffort: 'high',
+      },
+      'gpt-5.5',
+    ))
+    gatewayMocks.resumeThread.mockImplementation(async (threadId: string) => ({
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+      threadId,
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    await state.refreshAll({ includeSelectedThreadMessages: true, awaitAncillaryRefreshes: true })
+
+    expect(state.selectedModelId.value).toBe('gpt-5.6-sol')
+    expect(state.selectedReasoningEffort.value).toBe('max')
+
+    const modelWrite = state.updateSelectedModelIdForThread('thread-a', 'gpt-5.6-luna')
+    const reasoningWrite = state.updateSelectedReasoningEffort('ultra')
+    await Promise.all([modelWrite, reasoningWrite])
+
+    await expect(state.selectThread('thread-b')).resolves.toBe('ok')
+    expect(state.selectedModelId.value).toBe('gpt-5.6-luna')
+    expect(state.selectedReasoningEffort.value).toBe('high')
+
+    await expect(state.selectThread('thread-a')).resolves.toBe('ok')
+    expect(state.selectedModelId.value).toBe('gpt-5.6-luna')
+    expect(state.selectedReasoningEffort.value).toBe('ultra')
+    expect(gatewayMocks.persistThreadModelPreference.mock.calls.slice(-2)).toEqual([
+      ['thread-a', { model: 'gpt-5.6-luna', reasoningEffort: 'max' }],
+      ['thread-a', { model: 'gpt-5.6-luna', reasoningEffort: 'ultra' }],
+    ])
+  })
+
+  it('restores server preferences in a fresh browser state despite changed CLI and thread defaults', async () => {
+    installTestWindow()
+    const persisted = {
+      'thread-a': { model: 'gpt-5.6-sol', reasoningEffort: 'xhigh' as ReasoningEffort },
+    }
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project')] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadModelPreferences.mockImplementation(async () => structuredClone(persisted))
+    gatewayMocks.persistThreadModelPreference.mockImplementation(async (threadId: string, preference: typeof persisted['thread-a']) => {
+      persisted[threadId as 'thread-a'] = { ...preference }
+      return preference
+    })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities(
+      {
+        id: 'gpt-5.6-sol',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        defaultReasoningEffort: 'xhigh',
+      },
+      'gpt-5.5',
+    ))
+    gatewayMocks.resumeThread.mockResolvedValue({
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: '',
+      reasoningEffort: 'low',
+      speedMode: 'standard',
+    })
+
+    const firstState = useDesktopState()
+    firstState.primeSelectedThread('thread-a')
+    await firstState.refreshAll({ includeSelectedThreadMessages: true, awaitAncillaryRefreshes: true })
+    await firstState.updateSelectedReasoningEffort('max')
+    expect(persisted['thread-a']).toEqual({ model: 'gpt-5.6-sol', reasoningEffort: 'max' })
+
+    installTestWindow()
+    const restartedState = useDesktopState()
+    restartedState.primeSelectedThread('thread-a')
+    await restartedState.refreshAll({ includeSelectedThreadMessages: true, awaitAncillaryRefreshes: true })
+
+    expect(restartedState.selectedModelId.value).toBe('gpt-5.6-sol')
+    expect(restartedState.selectedReasoningEffort.value).toBe('max')
+  })
+
+  it('migrates an existing browser-scoped thread model before backend hydration can overwrite it', async () => {
+    installTestWindow({
+      'codex-web-local.selected-model-by-context.v1': JSON.stringify({
+        'thread-a': 'gpt-5.6-sol',
+      }),
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project')] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadModelPreferences.mockResolvedValue({})
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: '',
+      reasoningEffort: 'xhigh',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities('gpt-5.5', 'gpt-5.6-sol'))
+    gatewayMocks.resumeThread.mockResolvedValue({
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    await state.refreshAll({ includeSelectedThreadMessages: true, awaitAncillaryRefreshes: true })
+
+    expect(state.selectedModelId.value).toBe('gpt-5.6-sol')
+    expect(state.selectedReasoningEffort.value).toBe('xhigh')
+    await vi.waitFor(() => {
+      expect(gatewayMocks.persistThreadModelPreference).toHaveBeenCalledWith('thread-a', {
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'xhigh',
+      })
+    })
+  })
+
+  it('keeps a persisted thread model even when a refreshed catalog temporarily omits it', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project')] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadModelPreferences.mockResolvedValue({
+      'thread-a': { model: 'gpt-5.6-sol', reasoningEffort: 'max' },
+    })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: '',
+      reasoningEffort: 'xhigh',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities('gpt-5.5'))
+    gatewayMocks.resumeThread.mockResolvedValue({
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    await state.refreshAll({ includeSelectedThreadMessages: true, awaitAncillaryRefreshes: true })
+
+    expect(state.selectedModelId.value).toBe('gpt-5.6-sol')
+    expect(state.selectedReasoningEffort.value).toBe('max')
+    expect(state.availableModelIds.value).toContain('gpt-5.6-sol')
+    expect(gatewayMocks.persistThreadModelPreference).not.toHaveBeenCalled()
+  })
+
   it('ignores global selected-model localStorage when OpenCode Zen is the active provider', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
@@ -921,13 +1173,11 @@ describe('provider model selection', () => {
     ])
     expect(state.selectedModelId.value).toBe('big-pickle')
     expect(state.readModelIdForThread('').trim()).toBe('big-pickle')
-    expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({
-      '__new-thread-provider__::opencode-zen': 'big-pickle',
-    })
+    expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({})
     expect(window.localStorage.getItem('codex-web-local.selected-model-id.v1')).toBe(null)
   })
 
-  it('restores a valid provider-scoped OpenCode Zen selected model from localStorage', async () => {
+  it('uses the CLI default instead of a stale provider-scoped new-thread model', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
         '__new-thread-provider__::opencode-zen': 'ring-2.6-1t-free',
@@ -957,14 +1207,12 @@ describe('provider model selection', () => {
       'deepseek-v4-flash-free',
       'ring-2.6-1t-free',
     ])
-    expect(state.selectedModelId.value).toBe('ring-2.6-1t-free')
-    expect(state.readModelIdForThread('').trim()).toBe('ring-2.6-1t-free')
-    expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({
-      '__new-thread-provider__::opencode-zen': 'ring-2.6-1t-free',
-    })
+    expect(state.selectedModelId.value).toBe('big-pickle')
+    expect(state.readModelIdForThread('').trim()).toBe('big-pickle')
+    expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({})
   })
 
-  it('stores the new-thread Codex model in a provider-scoped slot', async () => {
+  it('clears stale provider-scoped defaults for the new-thread composer', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
         '__new-thread-provider__::openrouter-free': 'openrouter/free',
@@ -990,10 +1238,7 @@ describe('provider model selection', () => {
 
     expect(state.selectedModelId.value).toBe('gpt-5.5')
     expect(state.readModelIdForThread('').trim()).toBe('gpt-5.5')
-    expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({
-      '__new-thread-provider__::openrouter-free': 'openrouter/free',
-      '__new-thread-provider__::codex': 'gpt-5.5',
-    })
+    expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({})
   })
 
   it('drops stale non-Codex selected models from the Codex model list', async () => {
@@ -1027,9 +1272,7 @@ describe('provider model selection', () => {
     expect(state.availableModelIds.value).not.toContain('big-pickle')
     expect(state.selectedModelId.value).toBe('gpt-5.5')
     expect(state.readModelIdForThread('').trim()).toBe('gpt-5.5')
-    expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({
-      '__new-thread-provider__::codex': 'gpt-5.5',
-    })
+    expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({})
   })
 
   it('keeps an existing OpenCode Zen thread locked to Zen models after Codex auth becomes active', async () => {
@@ -1188,6 +1431,12 @@ describe('provider model selection', () => {
     expect(gatewayMocks.startThread).not.toHaveBeenCalled()
     expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
     expect(state.readModelIdForThread('codex-thread')).toBe('gpt-5.5')
+    await vi.waitFor(() => {
+      expect(gatewayMocks.persistThreadModelPreference).toHaveBeenCalledWith('codex-thread', {
+        model: 'gpt-5.5',
+        reasoningEffort: 'medium',
+      })
+    })
     expect(state.messages.value.some((message) => (
       message.role === 'user' &&
       message.text === 'hi' &&
@@ -1203,6 +1452,64 @@ describe('provider model selection', () => {
       'user:hi',
       'assistant:Hi.',
     ])
+  })
+
+  it('persists a manually selected new-thread combination and resets the next draft to CLI defaults', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: '',
+      reasoningEffort: 'medium',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities(
+      'gpt-5.5',
+      {
+        id: 'gpt-5.6-sol',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        defaultReasoningEffort: 'xhigh',
+      },
+    ))
+    gatewayMocks.startThreadWithTurn.mockResolvedValue({
+      threadId: 'custom-thread',
+      model: 'gpt-5.6-sol',
+      modelProvider: 'openai',
+      turnId: 'turn-1',
+    })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    await state.updateSelectedModelIdForThread('__new-thread__', 'gpt-5.6-sol')
+    await state.updateSelectedReasoningEffort('max')
+    expect(gatewayMocks.persistThreadModelPreference).not.toHaveBeenCalled()
+
+    await state.sendMessageToNewThread('use custom settings', '/tmp/project')
+    expect(gatewayMocks.startThreadWithTurn).toHaveBeenCalledWith(
+      '/tmp/project',
+      'use custom settings',
+      [],
+      'gpt-5.6-sol',
+      'max',
+      undefined,
+      [],
+      'default',
+      null,
+    )
+    await vi.waitFor(() => {
+      expect(gatewayMocks.persistThreadModelPreference).toHaveBeenCalledWith('custom-thread', {
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'max',
+      })
+    })
+
+    state.primeSelectedThread('')
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    expect(state.selectedModelId.value).toBe('gpt-5.5')
+    expect(state.selectedReasoningEffort.value).toBe('medium')
   })
 
   it('refreshes a loaded optimistic thread when completion events arrive', async () => {

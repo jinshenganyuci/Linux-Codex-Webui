@@ -47,6 +47,13 @@ import { handleOpenRouterProxyRequest } from './openRouterProxy.js'
 import { handleZenProxyRequest } from './zenProxy.js'
 import { handleCustomEndpointProxyRequest } from './customEndpointProxy.js'
 import { ThreadTerminalManager } from './terminalManager.js'
+import {
+  deleteThreadModelPreference,
+  normalizeThreadModelPreference,
+  readThreadModelPreferences,
+  writeThreadModelPreference,
+  type ThreadModelPreference,
+} from './threadModelPreferences.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import {
   resolveCodexCommand,
@@ -5628,6 +5635,8 @@ type StoredQueuedMessage = {
   fileAttachments: Array<{ label: string; path: string; fsPath: string }>
   collaborationMode: 'default' | 'plan'
   speedMode?: 'standard' | 'fast'
+  model?: string
+  reasoningEffort?: ReasoningEffort
 }
 
 type ThreadQueueState = Record<string, StoredQueuedMessage[]>
@@ -5653,6 +5662,8 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
 
   const id = typeof record.id === 'string' ? record.id.trim() : ''
   if (!id) return null
+  const model = readNonEmptyString(record.model)
+  const reasoningEffort = normalizeReasoningEffort(record.reasoningEffort)
 
   const normalizeNamedPathItems = (items: unknown): Array<{ name: string; path: string }> => {
     if (!Array.isArray(items)) return []
@@ -5685,6 +5696,8 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
     fileAttachments: normalizeFileAttachments(record.fileAttachments),
     collaborationMode: record.collaborationMode === 'plan' ? 'plan' : 'default',
     ...(record.speedMode === 'fast' || record.speedMode === 'standard' ? { speedMode: record.speedMode } : {}),
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
   }
 }
 
@@ -7348,7 +7361,22 @@ export class BackendQueueProcessor {
     })
   }
 
-  private async resolveCollaborationModeSettings(mode: CollaborationModeKind): Promise<ResolvedCollaborationModeSettings> {
+  private async resolveCollaborationModeSettings(turn: BackendQueuedTurn): Promise<ResolvedCollaborationModeSettings> {
+    let storedPreference: ThreadModelPreference | null = null
+    try {
+      storedPreference = (await readThreadModelPreferences())[turn.threadId] ?? null
+    } catch {
+      storedPreference = null
+    }
+    const preferredModel = turn.message.model?.trim() || storedPreference?.model || ''
+    const preferredReasoningEffort = turn.message.reasoningEffort || storedPreference?.reasoningEffort || null
+    if (preferredModel) {
+      return {
+        model: preferredModel,
+        reasoningEffort: preferredReasoningEffort,
+      }
+    }
+
     let currentConfig: Record<string, unknown> | null = null
     try {
       const configPayload = asRecord(await this.appServer.rpc('config/read', {}))
@@ -7382,7 +7410,7 @@ export class BackendQueueProcessor {
       // Fall through to no collaboration-mode payload.
     }
 
-    throw new Error(`${mode === 'plan' ? 'Plan' : 'Default'} mode requires an available model.`)
+    throw new Error(`${turn.message.collaborationMode === 'plan' ? 'Plan' : 'Default'} mode requires an available model.`)
   }
 
   private async buildQueuedTurnParams(turn: BackendQueuedTurn): Promise<Record<string, unknown>> {
@@ -7435,7 +7463,11 @@ export class BackendQueueProcessor {
     }
 
     try {
-      const settings = await this.resolveCollaborationModeSettings(turn.message.collaborationMode)
+      const settings = await this.resolveCollaborationModeSettings(turn)
+      params.model = settings.model
+      if (settings.reasoningEffort) {
+        params.effort = settings.reasoningEffort
+      }
       params.collaborationMode = {
         mode: turn.message.collaborationMode,
         settings: {
@@ -8231,6 +8263,44 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
+      if (url.pathname === '/codex-api/thread-model-preferences') {
+        if (req.method === 'GET') {
+          setJson(res, 200, { data: await readThreadModelPreferences() })
+          return
+        }
+
+        if (req.method === 'PUT') {
+          const body = asRecord(await readJsonBody(req))
+          const threadId = readNonEmptyString(body?.threadId)
+          const preference = normalizeThreadModelPreference(body)
+          if (!threadId) {
+            setJson(res, 400, { error: 'Missing threadId' })
+            return
+          }
+          if (!preference) {
+            setJson(res, 400, { error: 'Invalid thread model preference' })
+            return
+          }
+          const saved = await writeThreadModelPreference(threadId, preference)
+          setJson(res, 200, { data: { threadId, ...saved } })
+          return
+        }
+
+        if (req.method === 'DELETE') {
+          const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+          if (!threadId) {
+            setJson(res, 400, { error: 'Missing threadId' })
+            return
+          }
+          await deleteThreadModelPreference(threadId)
+          setJson(res, 200, { ok: true })
+          return
+        }
+
+        setJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+
       if (req.method === 'POST' && url.pathname === '/codex-api/thread/start-turn') {
         const payload = await readJsonBody(req)
         const result = await startThreadAndTurn(appServer, payload)
@@ -8239,6 +8309,20 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         const threadId = readNonEmptyString(thread?.id)
         if (threadId) {
           appServer.storeThreadReadSnapshot(threadId, result)
+          const requestRecord = asRecord(payload)
+          const requestedThread = asRecord(requestRecord?.thread)
+          const requestedTurn = asRecord(requestRecord?.turn)
+          const preference = normalizeThreadModelPreference({
+            model: readNonEmptyString(requestedTurn?.model) || readNonEmptyString(requestedThread?.model),
+            reasoningEffort: readNonEmptyString(requestedTurn?.effort),
+          })
+          if (preference) {
+            try {
+              await writeThreadModelPreference(threadId, preference)
+            } catch (error) {
+              console.warn('[thread-model-preferences] Failed to persist a new thread preference:', getErrorMessage(error, 'Unknown error'))
+            }
+          }
         }
         setJson(res, 200, { data: result })
         return

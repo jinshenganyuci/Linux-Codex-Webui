@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getAvailableModelIds, getAvailableModels, getThreadDetail, listDirectoryComposioConnectors, resumeThread, startThread, startThreadTurn, startThreadWithTurn } from './codexGateway'
+import { getAvailableModelIds, getAvailableModels, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, persistThreadModelPreference, resumeThread, startThread, startThreadTurn, startThreadWithTurn } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -162,6 +162,71 @@ describe('startThreadTurn collaboration mode payloads', () => {
         },
       },
     })
+  })
+})
+
+describe('thread model preferences', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('loads normalized per-thread preferences from the server', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      data: {
+        'thread-a': { model: 'gpt-5.5', reasoningEffort: 'high' },
+        'thread-b': { model: 'gpt-5.6-sol', reasoningEffort: 'max' },
+        broken: { model: '', reasoningEffort: 'impossible' },
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    await expect(getThreadModelPreferences()).resolves.toEqual({
+      'thread-a': { model: 'gpt-5.5', reasoningEffort: 'high' },
+      'thread-b': { model: 'gpt-5.6-sol', reasoningEffort: 'max' },
+    })
+  })
+
+  it('persists a complete model and reasoning preference', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), init })
+      return new Response(JSON.stringify({
+        data: { threadId: 'thread-a', model: 'gpt-5.6-sol', reasoningEffort: 'ultra' },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await expect(persistThreadModelPreference('thread-a', {
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'ultra',
+    })).resolves.toEqual({
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'ultra',
+    })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].url).toBe('/codex-api/thread-model-preferences')
+    expect(requests[0].init?.method).toBe('PUT')
+    expect(JSON.parse(String(requests[0].init?.body))).toEqual({
+      threadId: 'thread-a',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'ultra',
+    })
+  })
+
+  it('rejects unsuccessful preference writes', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'disk full' }), {
+      status: 507,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    await expect(persistThreadModelPreference('thread-a', {
+      model: 'gpt-5.5',
+      reasoningEffort: 'xhigh',
+    })).rejects.toThrow('disk full')
   })
 })
 

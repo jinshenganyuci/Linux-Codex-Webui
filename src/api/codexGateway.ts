@@ -74,6 +74,13 @@ export type CodexRuntimeConfig = {
   memories: boolean
 }
 
+export type ThreadModelPreference = {
+  model: string
+  reasoningEffort: ReasoningEffort
+}
+
+export type ThreadModelPreferenceState = Record<string, ThreadModelPreference>
+
 export type DirectoryPluginSummary = {
   id: string
   name: string
@@ -300,6 +307,8 @@ export type StoredQueuedMessage = {
   fileAttachments: Array<{ label: string; path: string; fsPath: string }>
   collaborationMode: CollaborationModeKind
   speedMode?: SpeedMode
+  model?: string
+  reasoningEffort?: ReasoningEffort
 }
 
 export type ThreadQueueState = Record<string, StoredQueuedMessage[]>
@@ -2299,6 +2308,48 @@ export async function getCurrentModelConfig(): Promise<CurrentModelConfig> {
   return { model, providerId, reasoningEffort, speedMode }
 }
 
+function normalizeThreadModelPreference(value: unknown): ThreadModelPreference | null {
+  const record = asRecord(value)
+  const model = readString(record?.model)
+  const reasoningEffort = normalizeReasoningEffort(record?.reasoningEffort)
+  return model && reasoningEffort ? { model, reasoningEffort } : null
+}
+
+export async function getThreadModelPreferences(): Promise<ThreadModelPreferenceState> {
+  const response = await fetch('/codex-api/thread-model-preferences')
+  const payload = await response.json().catch(() => null) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to load thread model preferences (${response.status})`))
+  }
+
+  const data = asRecord(asRecord(payload)?.data)
+  const state: ThreadModelPreferenceState = {}
+  for (const [rawThreadId, rawPreference] of Object.entries(data ?? {})) {
+    const threadId = rawThreadId.trim()
+    const preference = normalizeThreadModelPreference(rawPreference)
+    if (threadId && preference) state[threadId] = preference
+  }
+  return state
+}
+
+export async function persistThreadModelPreference(
+  threadId: string,
+  preference: ThreadModelPreference,
+): Promise<ThreadModelPreference> {
+  const response = await fetch('/codex-api/thread-model-preferences', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ threadId, ...preference }),
+  })
+  const payload = await response.json().catch(() => null) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to save thread model preference (${response.status})`))
+  }
+  const saved = normalizeThreadModelPreference(asRecord(payload)?.data)
+  if (!saved) throw new Error('Thread model preference response was invalid')
+  return saved
+}
+
 function normalizeDirectoryPluginApp(value: unknown): DirectoryPluginAppSummary | null {
   const record = asRecord(value)
   if (!record) return null
@@ -2786,6 +2837,8 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
     : record.speedMode === 'standard'
       ? 'standard'
       : undefined
+  const model = typeof record.model === 'string' ? record.model.trim() : ''
+  const reasoningEffort = normalizeReasoningEffort(record.reasoningEffort)
 
   return {
     id,
@@ -2795,6 +2848,8 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
     fileAttachments,
     collaborationMode: record.collaborationMode === 'plan' ? 'plan' : 'default',
     ...(speedMode ? { speedMode } : {}),
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
   }
 }
 

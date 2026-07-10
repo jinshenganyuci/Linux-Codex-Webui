@@ -1453,9 +1453,9 @@ const {
   steerQueuedMessage,
   setSelectedCollaborationMode,
   readModelIdForThread,
-  setSelectedModelIdForThread,
+  updateSelectedModelIdForThread,
 
-  setSelectedReasoningEffort,
+  updateSelectedReasoningEffort,
   updateSelectedSpeedMode,
   updateSelectedCodexPermissionMode,
   respondToPendingServerRequest,
@@ -4100,11 +4100,11 @@ function onReorderQueuedMessage(payload: { draggedId: string; targetId: string }
 }
 
 function onSelectModel(modelId: string): void {
-  setSelectedModelIdForThread(composerThreadContextId.value, modelId)
+  void updateSelectedModelIdForThread(composerThreadContextId.value, modelId)
 }
 
 function onSelectReasoningEffort(effort: ReasoningEffort | ''): void {
-  setSelectedReasoningEffort(effort)
+  void updateSelectedReasoningEffort(effort)
 }
 
 function onSelectSpeedMode(mode: SpeedMode): void {
