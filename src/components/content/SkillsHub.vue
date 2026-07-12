@@ -149,6 +149,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
 import SkillCard from './SkillCard.vue'
 import SkillDetailModal, { type HubSkill } from './SkillDetailModal.vue'
+import { rpcCall } from '../../api/codexRpcClient'
+import { fetchWithTimeout } from '../../api/requestClient'
 import { useGithubSkillsSync } from '../../composables/useGithubSkillsSync'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
 import { useUiLanguage } from '../../composables/useUiLanguage'
@@ -250,7 +252,7 @@ async function fetchSkills(): Promise<void> {
   isLoading.value = true
   error.value = ''
   try {
-    const resp = await fetch('/codex-api/skills-hub')
+    const resp = await fetchWithTimeout('/codex-api/skills-hub')
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     const data = (await resp.json()) as SkillsHubPayload
     applySkillsPayload(data)
@@ -274,7 +276,10 @@ async function searchSkills(): Promise<void> {
   skillSearchError.value = ''
   try {
     const params = new URLSearchParams({ q: query })
-    const resp = await fetch(`/codex-api/skills-hub/search?${params}`)
+    const resp = await fetchWithTimeout(`/codex-api/skills-hub/search?${params}`, undefined, {
+      timeout: 'long',
+      operation: 'skills-hub/search',
+    })
     const data = (await resp.json()) as SkillsSearchPayload
     if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`)
     const installedByName = new Map(installedSkills.value.map((skill) => [skill.name, skill]))
@@ -297,11 +302,11 @@ async function handleInstall(skill: HubSkill): Promise<void> {
   actionSkillKey.value = `${skill.owner}/${skill.name}`
   isInstallActionInFlight.value = true
   try {
-    const resp = await fetch('/codex-api/skills-hub/install', {
+    const resp = await fetchWithTimeout('/codex-api/skills-hub/install', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ owner: skill.owner, name: skill.name, source: skill.source }),
-    })
+    }, { timeout: 'long', operation: 'skills-hub/install' })
     const data = (await resp.json()) as { ok?: boolean; error?: string; path?: string }
     if (!data.ok) throw new Error(data.error || 'Install failed')
     if (!data.path) throw new Error('Install completed but no local skill path was returned')
@@ -325,11 +330,11 @@ async function handleUninstall(skill: HubSkill): Promise<void> {
   actionSkillKey.value = `${skill.owner}/${skill.name}`
   isUninstallActionInFlight.value = true
   try {
-    const resp = await fetch('/codex-api/skills-hub/uninstall', {
+    const resp = await fetchWithTimeout('/codex-api/skills-hub/uninstall', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: skill.name, path: skill.path }),
-    })
+    }, { timeout: 'long', operation: 'skills-hub/uninstall' })
     const data = (await resp.json()) as { ok?: boolean; error?: string }
     if (!data.ok) throw new Error(data.error || 'Uninstall failed')
     installedSkills.value = installedSkills.value.filter((s) => s.name !== skill.name)
@@ -345,13 +350,12 @@ async function handleUninstall(skill: HubSkill): Promise<void> {
 
 async function handleToggleEnabled(skill: HubSkill, enabled: boolean): Promise<void> {
   try {
-    const resp = await fetch('/codex-api/rpc', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ method: 'skills/config/write', params: { path: skill.path, enabled } }),
+    await rpcCall('skills/config/write', { path: skill.path, enabled }, { timeout: 'long' })
+    const syncResponse = await fetchWithTimeout('/codex-api/skills-sync/push', { method: 'POST' }, {
+      timeout: 'long',
+      operation: 'skills-sync/push',
     })
-    if (!resp.ok) throw new Error('Failed to update skill')
-    await fetch('/codex-api/skills-sync/push', { method: 'POST' })
+    if (!syncResponse.ok) throw new Error('Failed to sync skill state')
     showToast(`${skill.displayName || skill.name} skill ${enabled ? 'enabled' : 'disabled'}`)
     await fetchSkills()
   } catch (e) {

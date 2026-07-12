@@ -1,4 +1,5 @@
 import { onBeforeUnmount, ref } from 'vue'
+import { requestTextWithTimeout } from '../api/requestClient'
 
 export type DictationState = 'idle' | 'recording' | 'transcribing'
 const DICTATION_SILENCE_THRESHOLD = 0.0025
@@ -224,13 +225,14 @@ export function useDictation(options: {
       requestAbortController = new AbortController()
       transcribeAbortController = requestAbortController
 
-      const response = await fetch('/codex-api/transcribe', {
+      const { response, text: responseText } = await requestTextWithTimeout('/codex-api/transcribe', {
         method: 'POST',
         body: formData,
+      }, {
+        timeout: 'long',
         signal: requestAbortController.signal,
+        operation: 'transcribe',
       })
-
-      const responseText = await response.text()
       let data: { text?: string; error?: string } | null = null
       try {
         data = responseText.trim() ? (JSON.parse(responseText) as { text?: string; error?: string }) : null
@@ -251,7 +253,7 @@ export function useDictation(options: {
         options.onEmpty?.()
       }
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
+      if (error instanceof Error && (error.name === 'AbortError' || ('code' in error && error.code === 'aborted'))) {
         return
       }
       options.onError?.(error)

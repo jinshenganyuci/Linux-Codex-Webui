@@ -4,6 +4,54 @@
 
 后续提交与推送统一采用中文标题、中文详细正文和中文更新日志。代码标识符、命令、接口路径以及 Codex 协议字段保留原始英文名称，避免产生含义偏差。
 
+## 2026-07-12
+
+### 普通 HTTP 与 JSON-RPC 请求增加统一超时
+
+#### 问题与目标
+
+- 原有浏览器端大量普通 HTTP 和 `/codex-api/rpc` 请求直接调用 `fetch()`，SSH 隧道中断、Node 服务异常、Codex app-server 无响应或响应体长期不结束时，页面可能永久停留在加载状态。
+- Provider models 使用独立的 5 秒 `AbortSignal.timeout()`，文件上传又维护一套 60 秒手写 `AbortController`，不同功能的超时、取消和网络错误语义不一致。
+- 本次改动统一浏览器请求层，同时避免用短超时中断 Git、ZIP、Skills、Composio、账户验证和 Codex turn 等正常长操作。
+
+#### 核心实现
+
+- 新增 `src/api/requestClient.ts`，统一管理请求建立、响应体读取、timeout timer、调用方 `AbortSignal` 和资源清理。
+- 默认普通 HTTP 请求超时为 15 秒，普通 JSON-RPC 请求超时为 30 秒，长操作超时为 120 秒；文件上传继续保持 60 秒，Provider models 继续保持 5 秒快速回退。
+- 新增 `timeout` 和 `aborted` 两类 `CodexApiError` 错误码，明确区分请求超时、用户主动取消和普通网络失败。
+- timeout 按请求总时长计算，覆盖响应头和响应体读取；成功、失败、超时和主动取消路径都会清理 timer 与监听器。
+- timeout 只表示浏览器停止等待，不自动重试，也不声称 Git、导入、clone、worktree、Skills 或 Codex 等服务端副作用已经停止。
+- WebSocket、SSE、心跳、sequence replay 和重连逻辑保持原样，不套用普通 HTTP deadline。
+
+#### 接入范围
+
+- `rpcCall`、RPC method/notification catalog、server request 回复和 pending request 查询统一使用 RPC timeout。
+- Gateway 中的线程状态、自动化、运行配置、终端、模型偏好、工作区、Git、Review、本地目录、Telegram、prompts 等普通 HTTP 请求统一接入请求工具。
+- `thread/start-turn`、大型 thread 读取、ZIP 导入导出、GitHub clone、worktree、Git checkout/reset、Review、Skills 搜索/安装/同步、GitHub 登录完成、Composio、账户验证和语音转录使用长操作策略。
+- Skills Hub、Skill 详情、GitHub Skills Sync 和听写转录中绕过 Gateway 的直接请求也已迁移。
+- ZIP 下载保留流式进度处理；听写继续支持用户主动取消；上传继续保留 `FormData` 自动边界处理。
+
+#### 用户影响
+
+- SSH 隧道或后端服务异常时，普通页面请求不再永久转圈，而会在约 15 秒后结束等待并显示明确的 timeout 信息。
+- RPC 通信异常会在约 30 秒后返回带方法名的 timeout 错误，便于判断是哪个 Codex 操作未响应。
+- 正常的长时间 Git、ZIP、Skills、Composio、账户同步及 Codex 操作不会被 15 秒普通请求超时误伤。
+- 用户取消听写会继续被识别为主动取消，而不是显示为网络失败或 timeout。
+
+#### 测试验证
+
+- 新增 `src/api/requestClient.test.ts`，覆盖普通/RPC/长操作 timeout、显式毫秒覆盖、提前取消、运行中取消、网络错误分类、响应体读取超时、并发请求隔离以及 timer 清理。
+- timeout 与 Gateway 窄测试共 26 项全部通过。
+- TypeScript/Vue 类型检查、Vite 前端生产构建、CLI `tsup` 构建和 `git diff --check` 全部通过。
+- 真实浏览器运行验证中，刻意挂起 `/codex-api/skills-hub` 后约 17.7 秒观察到 `/codex-api/skills-hub timed out after 15000ms`，加载状态自动消失；快速成功请求仍正常显示空状态。
+- 全量单元测试中 201 项通过，另有 2 项 Windows 文件权限位断言失败：Windows 返回 `0666`，测试期望 POSIX `0600`；该失败与本次请求超时改动无关。
+
+#### 部署与回滚注意事项
+
+- 本次改动仅影响浏览器端请求等待和错误分类，不修改 Codex CLI API/Key、Session、聊天文件或服务端数据格式。
+- 有副作用的操作 timeout 后应先刷新并检查实际状态，再由用户决定是否重试，避免重复创建 turn、worktree、clone 或同步任务。
+- 回滚时可恢复原请求调用代码并删除 `src/api/requestClient.ts`；不会留下需要迁移或清理的持久化数据。
+
 ## 2026-07-10
 
 ### 修复任务已经结束但 WebUI 持续转圈
