@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue'
+import { fetchWithTimeout } from '../api/requestClient'
 
 type ToastType = 'success' | 'error'
 
@@ -77,7 +78,7 @@ export function useGithubSkillsSync(options: UseGithubSkillsSyncOptions) {
 
   async function loadSyncStatus(): Promise<void> {
     try {
-      const resp = await fetch('/codex-api/skills-sync/status')
+      const resp = await fetchWithTimeout('/codex-api/skills-sync/status')
       if (!resp.ok) return
       const payload = (await resp.json()) as { data?: SkillsSyncStatus }
       if (payload.data) syncStatus.value = payload.data
@@ -88,7 +89,7 @@ export function useGithubSkillsSync(options: UseGithubSkillsSyncOptions) {
 
   async function startGithubLogin(): Promise<void> {
     try {
-      const startResp = await fetch('/codex-api/skills-sync/github/start-login', { method: 'POST' })
+      const startResp = await fetchWithTimeout('/codex-api/skills-sync/github/start-login', { method: 'POST' })
       const startData = (await startResp.json()) as { data?: { device_code: string; user_code: string; verification_uri: string; interval?: number } }
       if (!startResp.ok || !startData.data) throw new Error('Failed to start GitHub login')
       deviceLogin.value = startData.data
@@ -97,11 +98,11 @@ export function useGithubSkillsSync(options: UseGithubSkillsSyncOptions) {
       let loggedIn = false
       for (let i = 0; i < maxAttempts; i++) {
         await new Promise((resolve) => setTimeout(resolve, waitMs))
-        const completeResp = await fetch('/codex-api/skills-sync/github/complete-login', {
+        const completeResp = await fetchWithTimeout('/codex-api/skills-sync/github/complete-login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ deviceCode: startData.data.device_code }),
-        })
+        }, { timeout: 'long', operation: 'skills-sync/github/complete-login' })
         const completeData = (await completeResp.json()) as { ok?: boolean; pending?: boolean; error?: string }
         if (!completeResp.ok) throw new Error(completeData.error || 'Failed to complete GitHub login')
         if (completeData.ok) {
@@ -134,11 +135,11 @@ export function useGithubSkillsSync(options: UseGithubSkillsSyncOptions) {
       if (!token) {
         throw new Error('GitHub access token missing from Firebase login')
       }
-      const resp = await fetch('/codex-api/skills-sync/github/token-login', {
+      const resp = await fetchWithTimeout('/codex-api/skills-sync/github/token-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token }),
-      })
+      }, { timeout: 'long', operation: 'skills-sync/github/token-login' })
       const data = (await resp.json()) as { ok?: boolean; error?: string }
       if (!resp.ok || !data.ok) {
         throw new Error(data.error || 'Failed to login with GitHub token')
@@ -156,7 +157,10 @@ export function useGithubSkillsSync(options: UseGithubSkillsSyncOptions) {
     syncActionStatus.value = 'pull-started'
     syncActionInFlight.value = 'pull'
     try {
-      const resp = await fetch('/codex-api/skills-sync/pull', { method: 'POST' })
+      const resp = await fetchWithTimeout('/codex-api/skills-sync/pull', { method: 'POST' }, {
+        timeout: 'long',
+        operation: 'skills-sync/pull',
+      })
       const data = (await resp.json()) as { ok?: boolean; error?: string }
       if (!resp.ok || !data.ok) throw new Error(data.error || 'Failed to pull synced skills')
       await options.onPulled()
@@ -177,7 +181,10 @@ export function useGithubSkillsSync(options: UseGithubSkillsSyncOptions) {
     syncActionStatus.value = 'push-started'
     syncActionInFlight.value = 'push'
     try {
-      const resp = await fetch('/codex-api/skills-sync/push', { method: 'POST' })
+      const resp = await fetchWithTimeout('/codex-api/skills-sync/push', { method: 'POST' }, {
+        timeout: 'long',
+        operation: 'skills-sync/push',
+      })
       const data = (await resp.json()) as { ok?: boolean; error?: string }
       if (!resp.ok || !data.ok) throw new Error(data.error || 'Failed to push synced skills')
       syncActionStatus.value = 'push-success'
@@ -197,7 +204,10 @@ export function useGithubSkillsSync(options: UseGithubSkillsSyncOptions) {
     syncActionStatus.value = 'startup-sync-started'
     syncActionInFlight.value = 'startup-sync'
     try {
-      const resp = await fetch('/codex-api/skills-sync/startup-sync', { method: 'POST' })
+      const resp = await fetchWithTimeout('/codex-api/skills-sync/startup-sync', { method: 'POST' }, {
+        timeout: 'long',
+        operation: 'skills-sync/startup-sync',
+      })
       const data = (await resp.json()) as { ok?: boolean; error?: string }
       if (!resp.ok || !data.ok) throw new Error(data.error || 'Failed to run startup sync')
       await options.onPulled()
@@ -216,7 +226,7 @@ export function useGithubSkillsSync(options: UseGithubSkillsSyncOptions) {
 
   async function logoutGithub(): Promise<void> {
     try {
-      const resp = await fetch('/codex-api/skills-sync/github/logout', { method: 'POST' })
+      const resp = await fetchWithTimeout('/codex-api/skills-sync/github/logout', { method: 'POST' })
       const data = (await resp.json()) as { ok?: boolean; error?: string }
       if (!resp.ok || !data.ok) throw new Error(data.error || 'Failed to logout GitHub')
       await loadSyncStatus()

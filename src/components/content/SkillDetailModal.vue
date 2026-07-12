@@ -91,6 +91,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { fetchWithTimeout } from '../../api/requestClient'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import IconTablerX from '../icons/IconTablerX.vue'
 
@@ -173,7 +174,7 @@ async function fetchReadme(): Promise<void> {
     const params = new URLSearchParams({ owner: props.skill.owner, name: props.skill.name })
     if (props.skill.installed) params.set('installed', 'true')
     if (props.skill.path) params.set('path', props.skill.path)
-    const resp = await fetch(`/codex-api/skills-hub/readme?${params}`)
+    const resp = await fetchWithTimeout(`/codex-api/skills-hub/readme?${params}`)
     if (!resp.ok) return
     const data = (await resp.json()) as { content?: string; description?: string }
     readmeContent.value = data.content ?? ''

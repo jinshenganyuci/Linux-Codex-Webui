@@ -8,6 +8,8 @@ export type CodexErrorCode =
   | 'http_error'
   | 'rpc_error'
   | 'network_error'
+  | 'timeout'
+  | 'aborted'
   | 'invalid_response'
   | 'unknown_error'
 
@@ -15,13 +17,15 @@ export class CodexApiError extends Error {
   code: CodexErrorCode
   method?: string
   status?: number
+  timeoutMs?: number
 
-  constructor(message: string, options: { code: CodexErrorCode; method?: string; status?: number }) {
+  constructor(message: string, options: { code: CodexErrorCode; method?: string; status?: number; timeoutMs?: number }) {
     super(message)
     this.name = 'CodexApiError'
     this.code = options.code
     this.method = options.method
     this.status = options.status
+    this.timeoutMs = options.timeoutMs
   }
 }
 

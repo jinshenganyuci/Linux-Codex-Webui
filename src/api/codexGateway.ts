@@ -19,6 +19,7 @@ import type {
   Turn,
 } from './appServerDtos'
 import { extractErrorMessage, normalizeCodexApiError } from './codexErrors'
+import { fetchWithTimeout, requestWithTimeout } from './requestClient'
 import {
   readActiveTurnIdFromResponse,
   normalizeThreadGroupsV2,
@@ -566,9 +567,24 @@ export function pickCodexRateLimitSnapshot(payload: unknown): UiRateLimitSnapsho
   return normalizeRateLimitSnapshot(record.rateLimits ?? record.rate_limits)
 }
 
+const LONG_RPC_METHODS = new Set([
+  'thread/read',
+  'thread/resume',
+  'thread/start',
+  'thread/fork',
+  'turn/start',
+  'review/start',
+  'plugin/install',
+  'plugin/uninstall',
+  'config/mcpServer/reload',
+  'mcpServer/oauth/login',
+])
+
 async function callRpc<T>(method: string, params?: unknown): Promise<T> {
   try {
-    return await rpcCall<T>(method, params)
+    return await rpcCall<T>(method, params, {
+      timeout: LONG_RPC_METHODS.has(method) ? 'long' : 'rpc',
+    })
   } catch (error) {
     throw normalizeCodexApiError(error, `RPC ${method} failed`, method)
   }
@@ -639,7 +655,10 @@ function readThreadTurnStartIndex(payload: ThreadReadResponse): number {
 }
 
 async function fetchThreadFileChangeFallback(threadId: string): Promise<ThreadFileChangeFallbackEntry[]> {
-  const response = await fetch(`/codex-api/thread-file-change-fallback?threadId=${encodeURIComponent(threadId)}`)
+  const response = await fetchWithTimeout(`/codex-api/thread-file-change-fallback?threadId=${encodeURIComponent(threadId)}`, undefined, {
+    timeout: 'long',
+    operation: 'thread-file-change-fallback',
+  })
   if (!response.ok) {
     throw new Error(`Fallback request failed with ${response.status}`)
   }
@@ -808,7 +827,7 @@ export async function getThreadRuntimeStates(threadIds: string[]): Promise<Threa
   if (normalizedThreadIds.length === 0) return []
   let response: Response
   try {
-    response = await fetch('/codex-api/thread-runtime-state', {
+    response = await fetchWithTimeout('/codex-api/thread-runtime-state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ threadIds: normalizedThreadIds }),
@@ -896,7 +915,10 @@ async function getOlderThreadMessagesV2(threadId: string, beforeTurnId: string, 
     beforeTurnId,
     limit: String(limit),
   })
-  const response = await fetch(`/codex-api/thread-turn-page?${params.toString()}`)
+  const response = await fetchWithTimeout(`/codex-api/thread-turn-page?${params.toString()}`, undefined, {
+    timeout: 'long',
+    operation: 'thread-turn-page',
+  })
   if (!response.ok) {
     throw new Error(`Older thread page request failed with ${response.status}`)
   }
@@ -1283,7 +1305,7 @@ function asAutomationArray(value: unknown): UiThreadAutomation[] {
 }
 
 export async function getThreadAutomationMap(): Promise<Record<string, UiThreadAutomation[]>> {
-  const response = await fetch('/codex-api/thread-automations')
+  const response = await fetchWithTimeout('/codex-api/thread-automations')
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
     throw new Error(extractErrorMessage(payload, 'Failed to load thread automations'))
@@ -1299,7 +1321,7 @@ export async function getThreadAutomationMap(): Promise<Record<string, UiThreadA
 }
 
 export async function getProjectAutomationMap(): Promise<Record<string, UiThreadAutomation[]>> {
-  const response = await fetch('/codex-api/project-automations')
+  const response = await fetchWithTimeout('/codex-api/project-automations')
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
     throw new Error(extractErrorMessage(payload, 'Failed to load project automations'))
@@ -1317,7 +1339,7 @@ export async function getProjectAutomationMap(): Promise<Record<string, UiThread
 export async function getThreadAutomation(threadId: string, automationId?: string): Promise<UiThreadAutomation | null> {
   const query = new URLSearchParams({ threadId })
   if (automationId) query.set('automationId', automationId)
-  const response = await fetch(`/codex-api/thread-automation?${query.toString()}`)
+  const response = await fetchWithTimeout(`/codex-api/thread-automation?${query.toString()}`)
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
     throw new Error(extractErrorMessage(payload, 'Failed to load thread automation'))
@@ -1335,7 +1357,7 @@ export async function upsertThreadAutomation(input: {
   rrule: string
   status: UiThreadAutomationStatus
 }): Promise<UiThreadAutomation> {
-  const response = await fetch('/codex-api/thread-automation', {
+  const response = await fetchWithTimeout('/codex-api/thread-automation', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
@@ -1357,7 +1379,7 @@ export async function upsertProjectAutomation(input: {
   rrule: string
   status: UiThreadAutomationStatus
 }): Promise<UiThreadAutomation> {
-  const response = await fetch('/codex-api/project-automation', {
+  const response = await fetchWithTimeout('/codex-api/project-automation', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
@@ -1374,7 +1396,7 @@ export async function upsertProjectAutomation(input: {
 export async function deleteThreadAutomation(threadId: string, automationId?: string): Promise<void> {
   const query = new URLSearchParams({ threadId })
   if (automationId) query.set('automationId', automationId)
-  const response = await fetch(`/codex-api/thread-automation?${query.toString()}`, {
+  const response = await fetchWithTimeout(`/codex-api/thread-automation?${query.toString()}`, {
     method: 'DELETE',
   })
   const payload = await response.json().catch(() => null)
@@ -1386,7 +1408,7 @@ export async function deleteThreadAutomation(threadId: string, automationId?: st
 export async function deleteProjectAutomation(projectName: string, automationId?: string): Promise<void> {
   const query = new URLSearchParams({ projectName })
   if (automationId) query.set('automationId', automationId)
-  const response = await fetch(`/codex-api/project-automation?${query.toString()}`, {
+  const response = await fetchWithTimeout(`/codex-api/project-automation?${query.toString()}`, {
     method: 'DELETE',
   })
   const payload = await response.json().catch(() => null)
@@ -1396,11 +1418,11 @@ export async function deleteProjectAutomation(projectName: string, automationId?
 }
 
 export async function runThreadAutomationNow(threadId: string, automationId: string): Promise<void> {
-  const response = await fetch('/codex-api/thread-automation/run', {
+  const response = await fetchWithTimeout('/codex-api/thread-automation/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ threadId, automationId }),
-  })
+  }, { timeout: 'long', operation: 'thread-automation/run' })
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
     throw new Error(extractErrorMessage(payload, 'Failed to run thread automation'))
@@ -1471,7 +1493,7 @@ function normalizeCodexRuntimeConfig(value: unknown): CodexRuntimeConfig {
 }
 
 async function fetchRuntimeConfigJson(path: string, init?: RequestInit): Promise<unknown> {
-  const response = await fetch(path, init)
+  const response = await fetchWithTimeout(path, init)
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
     throw new Error(extractErrorMessage(payload, `Runtime config request failed with HTTP ${response.status}`))
@@ -1494,7 +1516,7 @@ export async function setCodexRuntimeConfig(input: Pick<CodexRuntimeConfig, 'san
 }
 
 async function fetchTerminalJson(path: string, init?: RequestInit): Promise<unknown> {
-  const response = await fetch(path, init)
+  const response = await fetchWithTimeout(path, init)
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
     throw new Error(extractErrorMessage(payload, `Terminal request failed with HTTP ${response.status}`))
@@ -1607,7 +1629,7 @@ function normalizeAccountsListResult(payload: unknown): AccountsListResult {
 }
 
 export async function getAccounts(): Promise<AccountsListResult> {
-  const response = await fetch('/codex-api/accounts')
+  const response = await fetchWithTimeout('/codex-api/accounts')
   const payload = (await response.json()) as unknown
   if (!response.ok) {
     throw new Error(getErrorMessageFromPayload(payload, 'Failed to load accounts'))
@@ -1617,9 +1639,9 @@ export async function getAccounts(): Promise<AccountsListResult> {
 }
 
 export async function refreshAccountsFromAuth(): Promise<AccountsListResult> {
-  const response = await fetch('/codex-api/accounts/refresh', {
+  const response = await fetchWithTimeout('/codex-api/accounts/refresh', {
     method: 'POST',
-  })
+  }, { timeout: 'long', operation: 'accounts/refresh' })
   const payload = (await response.json()) as unknown
   if (!response.ok) {
     throw new Error(getErrorMessageFromPayload(payload, 'Failed to refresh accounts'))
@@ -1629,7 +1651,7 @@ export async function refreshAccountsFromAuth(): Promise<AccountsListResult> {
 }
 
 export async function startCodexLogin(): Promise<string> {
-  const response = await fetch('/codex-api/accounts/login/start', {
+  const response = await fetchWithTimeout('/codex-api/accounts/login/start', {
     method: 'POST',
   })
   const payload = (await response.json()) as unknown
@@ -1646,11 +1668,11 @@ export async function startCodexLogin(): Promise<string> {
 }
 
 export async function completeCodexLogin(callbackUrl: string): Promise<AccountsListResult> {
-  const response = await fetch('/codex-api/accounts/login/complete', {
+  const response = await fetchWithTimeout('/codex-api/accounts/login/complete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ callbackUrl }),
-  })
+  }, { timeout: 'long', operation: 'accounts/login/complete' })
   const payload = (await response.json()) as unknown
   if (!response.ok) {
     throw new Error(getErrorMessageFromPayload(payload, 'Failed to complete Codex login'))
@@ -1660,11 +1682,11 @@ export async function completeCodexLogin(callbackUrl: string): Promise<AccountsL
 }
 
 export async function switchAccount(storageId: string): Promise<UiAccountEntry> {
-  const response = await fetch('/codex-api/accounts/switch', {
+  const response = await fetchWithTimeout('/codex-api/accounts/switch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ storageId }),
-  })
+  }, { timeout: 'long', operation: 'accounts/switch' })
   const payload = (await response.json()) as unknown
   if (!response.ok) {
     throw new Error(getErrorMessageFromPayload(payload, 'Failed to switch account'))
@@ -1679,11 +1701,11 @@ export async function switchAccount(storageId: string): Promise<UiAccountEntry> 
 }
 
 export async function removeAccount(storageId: string): Promise<AccountsListResult> {
-  const response = await fetch('/codex-api/accounts/remove', {
+  const response = await fetchWithTimeout('/codex-api/accounts/remove', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ storageId }),
-  })
+  }, { timeout: 'long', operation: 'accounts/remove' })
   const payload = (await response.json()) as unknown
   if (!response.ok) {
     throw new Error(getErrorMessageFromPayload(payload, 'Failed to remove account'))
@@ -1779,11 +1801,11 @@ export async function updateThreadFileChanges(
   scope?: 'single_turn' | 'turn_and_later',
 ): Promise<{ changed: number; errors: string[]; message?: string; revertedPatchIds?: string[]; appliedPatchIds?: string[] }> {
   try {
-    const response = await fetch('/codex-api/thread/rollback-files', {
+    const response = await fetchWithTimeout('/codex-api/thread/rollback-files', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ threadId, turnId, cwd, action, patchIds, scope }),
-    })
+    }, { timeout: 'long', operation: 'thread/rollback-files' })
     const payload = (await response.json().catch(() => ({}))) as {
       changed?: number
       reverted?: number
@@ -2199,11 +2221,11 @@ export async function startThreadWithTurn(
       collaborationMode,
       serviceTier,
     )
-    const response = await fetch('/codex-api/thread/start-turn', {
+    const response = await fetchWithTimeout('/codex-api/thread/start-turn', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ thread, turn }),
-    })
+    }, { timeout: 'long', operation: 'thread/start-turn' })
     const payload = (await response.json().catch(() => null)) as unknown
     if (!response.ok) {
       throw new Error(getErrorMessageFromPayload(payload, `Failed to start thread turn (${response.status})`))
@@ -2279,12 +2301,12 @@ export interface FreeModeStatus {
 }
 
 export async function getFreeModeStatus(): Promise<FreeModeStatus> {
-  const response = await fetch('/codex-api/free-mode/status')
+  const response = await fetchWithTimeout('/codex-api/free-mode/status')
   return await response.json() as FreeModeStatus
 }
 
 export async function setFreeMode(enable: boolean): Promise<{ ok: boolean; enabled: boolean; model?: string; models?: string[] }> {
-  const response = await fetch('/codex-api/free-mode', {
+  const response = await fetchWithTimeout('/codex-api/free-mode', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enable }),
@@ -2293,7 +2315,7 @@ export async function setFreeMode(enable: boolean): Promise<{ ok: boolean; enabl
 }
 
 export async function setFreeModeCustomKey(key: string): Promise<{ ok: boolean; customKey: boolean }> {
-  const response = await fetch('/codex-api/free-mode/custom-key', {
+  const response = await fetchWithTimeout('/codex-api/free-mode/custom-key', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ key }),
@@ -2306,7 +2328,7 @@ export async function setCustomProvider(
   apiKey: string,
   options?: { wireApi?: 'responses' | 'chat'; provider?: 'custom' | 'opencode-zen' | 'openrouter' },
 ): Promise<{ ok: boolean }> {
-  const response = await fetch('/codex-api/free-mode/custom-provider', {
+  const response = await fetchWithTimeout('/codex-api/free-mode/custom-provider', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -2325,8 +2347,9 @@ async function fetchProviderModelIds(providerId?: string): Promise<{ ids: string
     const url = normalizedProviderId
       ? `/codex-api/provider-models?provider=${encodeURIComponent(normalizedProviderId)}`
       : '/codex-api/provider-models'
-    const response = await fetch(url, {
-      signal: AbortSignal.timeout(PROVIDER_MODELS_FETCH_TIMEOUT_MS),
+    const response = await fetchWithTimeout(url, undefined, {
+      timeout: PROVIDER_MODELS_FETCH_TIMEOUT_MS,
+      operation: 'provider-models',
     })
     let providerPayload: ProviderModelsResponse | null = null
     try {
@@ -2444,7 +2467,7 @@ function normalizeThreadModelPreference(value: unknown): ThreadModelPreference |
 }
 
 export async function getThreadModelPreferences(): Promise<ThreadModelPreferenceState> {
-  const response = await fetch('/codex-api/thread-model-preferences')
+  const response = await fetchWithTimeout('/codex-api/thread-model-preferences')
   const payload = await response.json().catch(() => null) as unknown
   if (!response.ok) {
     throw new Error(getErrorMessageFromPayload(payload, `Failed to load thread model preferences (${response.status})`))
@@ -2464,7 +2487,7 @@ export async function persistThreadModelPreference(
   threadId: string,
   preference: ThreadModelPreference,
 ): Promise<ThreadModelPreference> {
-  const response = await fetch('/codex-api/thread-model-preferences', {
+  const response = await fetchWithTimeout('/codex-api/thread-model-preferences', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ threadId, ...preference }),
@@ -2767,7 +2790,7 @@ export async function startDirectoryMcpLogin(name: string): Promise<DirectoryMcp
 }
 
 export async function getDirectoryComposioStatus(): Promise<DirectoryComposioStatus> {
-  const response = await fetch('/codex-api/composio/status')
+  const response = await fetchWithTimeout('/codex-api/composio/status')
   if (!response.ok) {
     throw new Error(`Failed to load Composio status (${response.status})`)
   }
@@ -2784,7 +2807,7 @@ export async function listDirectoryComposioConnectors(
   if (cursor) params.set('cursor', cursor)
   if (limit && Number.isFinite(limit)) params.set('limit', String(Math.max(1, Math.floor(limit))))
   const suffix = params.toString()
-  const response = await fetch(`/codex-api/composio/connectors${suffix ? `?${suffix}` : ''}`)
+  const response = await fetchWithTimeout(`/codex-api/composio/connectors${suffix ? `?${suffix}` : ''}`)
   if (!response.ok) {
     throw new Error(`Failed to list Composio connectors (${response.status})`)
   }
@@ -2797,7 +2820,7 @@ export async function listDirectoryComposioConnectors(
 }
 
 export async function readDirectoryComposioConnector(slug: string): Promise<DirectoryComposioConnectorDetail> {
-  const response = await fetch(`/codex-api/composio/connector?slug=${encodeURIComponent(slug)}`)
+  const response = await fetchWithTimeout(`/codex-api/composio/connector?slug=${encodeURIComponent(slug)}`)
   if (!response.ok) {
     throw new Error(`Failed to load Composio connector (${response.status})`)
   }
@@ -2805,11 +2828,11 @@ export async function readDirectoryComposioConnector(slug: string): Promise<Dire
 }
 
 export async function startDirectoryComposioLogin(slug: string): Promise<DirectoryComposioLinkResult> {
-  const response = await fetch('/codex-api/composio/link', {
+  const response = await fetchWithTimeout('/codex-api/composio/link', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ slug }),
-  })
+  }, { timeout: 'long', operation: 'composio/link' })
   if (!response.ok) {
     throw new Error(`Failed to start Composio login (${response.status})`)
   }
@@ -2817,9 +2840,9 @@ export async function startDirectoryComposioLogin(slug: string): Promise<Directo
 }
 
 export async function startDirectoryComposioCliLogin(): Promise<DirectoryComposioLoginResult> {
-  const response = await fetch('/codex-api/composio/login', {
+  const response = await fetchWithTimeout('/codex-api/composio/login', {
     method: 'POST',
-  })
+  }, { timeout: 'long', operation: 'composio/login' })
   if (!response.ok) {
     throw new Error(`Failed to start Composio CLI login (${response.status})`)
   }
@@ -2827,9 +2850,9 @@ export async function startDirectoryComposioCliLogin(): Promise<DirectoryComposi
 }
 
 export async function installDirectoryComposioCli(): Promise<DirectoryComposioInstallResult> {
-  const response = await fetch('/codex-api/composio/install', {
+  const response = await fetchWithTimeout('/codex-api/composio/install', {
     method: 'POST',
-  })
+  }, { timeout: 'long', operation: 'composio/install' })
   if (!response.ok) {
     throw new Error(`Failed to install Composio CLI (${response.status})`)
   }
@@ -3016,7 +3039,7 @@ export async function getWorkspaceRootsState(): Promise<WorkspaceRootsState> {
 }
 
 async function fetchWorkspaceRootsState(): Promise<WorkspaceRootsState> {
-  const response = await fetch('/codex-api/workspace-roots-state')
+  const response = await fetchWithTimeout('/codex-api/workspace-roots-state')
   const payload = (await response.json()) as unknown
   if (!response.ok) {
     throw new Error('Failed to load workspace roots state')
@@ -3043,7 +3066,7 @@ function invalidateWorkspaceRootsStateCache(): void {
 }
 
 export async function getThreadQueueState(): Promise<ThreadQueueState> {
-  const response = await fetch('/codex-api/thread-queue-state')
+  const response = await fetchWithTimeout('/codex-api/thread-queue-state')
   const payload = (await response.json()) as unknown
   if (!response.ok) {
     throw new Error('Failed to load thread queue state')
@@ -3056,7 +3079,7 @@ export async function getThreadQueueState(): Promise<ThreadQueueState> {
 }
 
 export async function setThreadQueueState(nextState: ThreadQueueState): Promise<void> {
-  const response = await fetch('/codex-api/thread-queue-state', {
+  const response = await fetchWithTimeout('/codex-api/thread-queue-state', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(normalizeThreadQueueState(nextState)),
@@ -3068,14 +3091,14 @@ export async function setThreadQueueState(nextState: ThreadQueueState): Promise<
 
 export async function createWorktree(sourceCwd: string, baseBranch?: string): Promise<WorktreeCreateResult> {
   const normalizedBaseBranch = (baseBranch ?? '').trim()
-  const response = await fetch('/codex-api/worktree/create', {
+  const response = await fetchWithTimeout('/codex-api/worktree/create', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       sourceCwd,
       baseBranch: normalizedBaseBranch || undefined,
     }),
-  })
+  }, { timeout: 'long', operation: 'worktree/create' })
   const payload = (await response.json()) as { data?: WorktreeCreateResult; error?: string }
   if (!response.ok || !payload.data) {
     throw new Error(payload.error || 'Failed to create worktree')
@@ -3088,14 +3111,14 @@ export async function createWorktree(sourceCwd: string, baseBranch?: string): Pr
 }
 
 export async function createPermanentWorktree(sourceCwd: string, worktreeName: string): Promise<WorktreeCreateResult> {
-  const response = await fetch('/codex-api/worktree/create-permanent', {
+  const response = await fetchWithTimeout('/codex-api/worktree/create-permanent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       sourceCwd,
       worktreeName,
     }),
-  })
+  }, { timeout: 'long', operation: 'worktree/create-permanent' })
   const payload = (await response.json()) as { data?: WorktreeCreateResult; error?: string }
   if (!response.ok || !payload.data) {
     throw new Error(payload.error || 'Failed to create worktree')
@@ -3111,7 +3134,7 @@ export async function getWorktreeBranchOptions(sourceCwd: string): Promise<Workt
   const normalizedSourceCwd = sourceCwd.trim()
   if (!normalizedSourceCwd) return []
   const query = new URLSearchParams({ sourceCwd: normalizedSourceCwd })
-  const response = await fetch(`/codex-api/worktree/branches?${query.toString()}`)
+  const response = await fetchWithTimeout(`/codex-api/worktree/branches?${query.toString()}`)
   const payload = (await response.json()) as { data?: unknown; error?: string }
   if (!response.ok) {
     throw new Error(payload.error || 'Failed to load branches')
@@ -3140,7 +3163,7 @@ export async function getGitBranchState(cwd: string): Promise<GitBranchState> {
     return { currentBranch: null, headSha: null, headSubject: null, headDate: null, detached: false, dirty: false, gitRoot: '', options: [] }
   }
   const query = new URLSearchParams({ cwd: normalizedCwd })
-  const response = await fetch(`/codex-api/git/branches?${query.toString()}`)
+  const response = await fetchWithTimeout(`/codex-api/git/branches?${query.toString()}`)
   const payload = (await response.json()) as { data?: unknown; error?: string }
   if (!response.ok) {
     throw new Error(payload.error || 'Failed to load Git branch state')
@@ -3194,7 +3217,7 @@ export async function getGitRepositoryStatus(cwd: string): Promise<GitRepository
     return { isGitRepo: false, gitRoot: '' }
   }
   const query = new URLSearchParams({ cwd: normalizedCwd })
-  const response = await fetch(`/codex-api/git/repository-status?${query.toString()}`)
+  const response = await fetchWithTimeout(`/codex-api/git/repository-status?${query.toString()}`)
   const payload = (await response.json()) as { data?: unknown; error?: string }
   if (!response.ok) {
     throw new Error(payload.error || 'Failed to read Git repository status')
@@ -3209,14 +3232,14 @@ export async function getGitRepositoryStatus(cwd: string): Promise<GitRepository
 }
 
 export async function checkoutGitBranch(cwd: string, branch: string): Promise<string | null> {
-  const response = await fetch('/codex-api/git/checkout', {
+  const response = await fetchWithTimeout('/codex-api/git/checkout', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       cwd: cwd.trim(),
       branch: branch.trim(),
     }),
-  })
+  }, { timeout: 'long', operation: 'git/checkout' })
   const payload = (await response.json()) as { data?: { currentBranch?: string | null }; error?: string }
   if (!response.ok) {
     throw new Error(payload.error || 'Failed to switch branch')
@@ -3234,7 +3257,7 @@ export async function getGitBranchCommits(cwd: string, branch: string, options: 
     branch: normalizedBranch,
     includeResetHistory: options.includeResetHistory === false ? 'false' : 'true',
   })
-  const response = await fetch(`/codex-api/git/branch-commits?${query.toString()}`)
+  const response = await fetchWithTimeout(`/codex-api/git/branch-commits?${query.toString()}`)
   const payload = (await response.json()) as { data?: unknown; error?: string }
   if (!response.ok) {
     throw new Error(payload.error || 'Failed to load branch commits')
@@ -3260,7 +3283,7 @@ export async function getGitCommitFiles(cwd: string, sha: string): Promise<GitCo
     cwd: normalizedCwd,
     sha: normalizedSha,
   })
-  const response = await fetch(`/codex-api/git/commit-files?${query.toString()}`)
+  const response = await fetchWithTimeout(`/codex-api/git/commit-files?${query.toString()}`)
   const payload = (await response.json()) as { data?: unknown; error?: string }
   if (!response.ok) {
     throw new Error(payload.error || 'Failed to load commit files')
@@ -3281,7 +3304,7 @@ export async function getGitCommitFiles(cwd: string, sha: string): Promise<GitCo
 }
 
 export async function resetGitBranchToCommit(cwd: string, branch: string, sha: string): Promise<GitBranchState> {
-  const response = await fetch('/codex-api/git/reset-to-commit', {
+  const response = await fetchWithTimeout('/codex-api/git/reset-to-commit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -3289,7 +3312,7 @@ export async function resetGitBranchToCommit(cwd: string, branch: string, sha: s
       branch: branch.trim(),
       sha: sha.trim(),
     }),
-  })
+  }, { timeout: 'long', operation: 'git/reset-to-commit' })
   const payload = (await response.json()) as { data?: unknown; error?: string }
   if (!response.ok) {
     throw new Error(payload.error || 'Failed to reset branch to commit')
@@ -3323,7 +3346,10 @@ export async function getReviewSnapshot(
   if (commitSha && commitSha.trim()) {
     query.set('commitSha', commitSha.trim())
   }
-  const response = await fetch(`/codex-api/review/snapshot?${query.toString()}`)
+  const response = await fetchWithTimeout(`/codex-api/review/snapshot?${query.toString()}`, undefined, {
+    timeout: 'long',
+    operation: 'review/snapshot',
+  })
   const payload = (await response.json()) as unknown
   if (!response.ok) {
     throw new Error(getErrorMessageFromPayload(payload, 'Failed to load review snapshot'))
@@ -3336,7 +3362,10 @@ export async function getReviewSummary(
   workspaceView: UiReviewWorkspaceView,
 ): Promise<UiReviewSummary> {
   const query = new URLSearchParams({ cwd, workspaceView })
-  const response = await fetch(`/codex-api/review/summary?${query.toString()}`)
+  const response = await fetchWithTimeout(`/codex-api/review/summary?${query.toString()}`, undefined, {
+    timeout: 'long',
+    operation: 'review/summary',
+  })
   const payload = (await response.json()) as unknown
   if (!response.ok) {
     throw new Error(getErrorMessageFromPayload(payload, 'Failed to load review summary'))
@@ -3354,11 +3383,11 @@ export async function applyReviewAction(payload: {
   previousPath?: string | null
   patch?: string
 }): Promise<UiReviewSnapshot> {
-  const response = await fetch('/codex-api/review/action', {
+  const response = await fetchWithTimeout('/codex-api/review/action', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-  })
+  }, { timeout: 'long', operation: 'review/action' })
   const data = (await response.json()) as unknown
   if (!response.ok) {
     throw new Error(getErrorMessageFromPayload(data, 'Failed to apply review action'))
@@ -3367,11 +3396,11 @@ export async function applyReviewAction(payload: {
 }
 
 export async function initializeReviewGit(cwd: string): Promise<void> {
-  const response = await fetch('/codex-api/review/git/init', {
+  const response = await fetchWithTimeout('/codex-api/review/git/init', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ cwd }),
-  })
+  }, { timeout: 'long', operation: 'review/git/init' })
   const payload = (await response.json()) as unknown
   if (!response.ok) {
     throw new Error(getErrorMessageFromPayload(payload, 'Failed to initialize Git'))
@@ -3398,7 +3427,7 @@ export async function startThreadReview(
 }
 
 export async function getHomeDirectory(): Promise<string> {
-  const response = await fetch('/codex-api/home-directory')
+  const response = await fetchWithTimeout('/codex-api/home-directory')
   const payload = (await response.json()) as unknown
   if (!response.ok) {
     throw new Error('Failed to load home directory')
@@ -3419,7 +3448,7 @@ export async function listLocalDirectories(path: string, options?: { showHidden?
   if (options?.showHidden === true) {
     query.set('showHidden', '1')
   }
-  const response = await fetch(`/codex-local-directories?${query.toString()}`)
+  const response = await fetchWithTimeout(`/codex-local-directories?${query.toString()}`)
   const payload = await readJsonResponse(response)
   if (!response.ok) {
     const message = getErrorMessageFromPayload(payload, 'Failed to load local directories')
@@ -3460,7 +3489,7 @@ async function readJsonResponse(response: Response): Promise<unknown> {
 }
 
 export async function setWorkspaceRootsState(nextState: WorkspaceRootsState): Promise<void> {
-  const response = await fetch('/codex-api/workspace-roots-state', {
+  const response = await fetchWithTimeout('/codex-api/workspace-roots-state', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(nextState),
@@ -3472,7 +3501,7 @@ export async function setWorkspaceRootsState(nextState: WorkspaceRootsState): Pr
 }
 
 export async function openProjectRoot(path: string, options?: { createIfMissing?: boolean; label?: string }): Promise<string> {
-  const response = await fetch('/codex-api/project-root', {
+  const response = await fetchWithTimeout('/codex-api/project-root', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -3522,55 +3551,62 @@ export async function downloadProjectZip(
   cwd: string,
   onProgress?: (progress: { loaded: number; total: number | null }) => void,
 ): Promise<{ blob: Blob; fileName: string }> {
-  const response = await fetch(getProjectZipDownloadUrl(cwd))
-  if (!response.ok) {
-    const payload = await response.json().catch(() => null)
-    const fallback = 'Failed to export project'
-    const payloadMessage = getErrorMessageFromPayload(payload, fallback)
-    const statusLabel = [response.status ? String(response.status) : '', response.statusText].filter(Boolean).join(' ')
-    const message = payloadMessage !== fallback
-      ? payloadMessage
-      : statusLabel ? `Failed to export project: ${statusLabel}` : fallback
-    throw new Error(message)
-  }
+  const { value } = await requestWithTimeout(getProjectZipDownloadUrl(cwd), undefined, async (response) => {
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      const fallback = 'Failed to export project'
+      const payloadMessage = getErrorMessageFromPayload(payload, fallback)
+      const statusLabel = [response.status ? String(response.status) : '', response.statusText].filter(Boolean).join(' ')
+      const message = payloadMessage !== fallback
+        ? payloadMessage
+        : statusLabel ? `Failed to export project: ${statusLabel}` : fallback
+      throw new Error(message)
+    }
 
-  const totalHeader = Number(response.headers.get('content-length') ?? '')
-  const total = Number.isFinite(totalHeader) && totalHeader > 0 ? totalHeader : null
-  const fileName = readDownloadFileName(response, 'project.zip')
-  const reader = response.body?.getReader()
-  if (!reader) {
-    const blob = await response.blob()
-    onProgress?.({ loaded: blob.size, total: blob.size || total })
-    return { blob, fileName }
-  }
+    const totalHeader = Number(response.headers.get('content-length') ?? '')
+    const total = Number.isFinite(totalHeader) && totalHeader > 0 ? totalHeader : null
+    const fileName = readDownloadFileName(response, 'project.zip')
+    const reader = response.body?.getReader()
+    if (!reader) {
+      const blob = await response.blob()
+      onProgress?.({ loaded: blob.size, total: blob.size || total })
+      return { blob, fileName }
+    }
 
-  const chunks: Uint8Array[] = []
-  let loaded = 0
-  onProgress?.({ loaded, total })
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (!value) continue
-    chunks.push(new Uint8Array(value))
-    loaded += value.byteLength
+    const chunks: Uint8Array[] = []
+    let loaded = 0
     onProgress?.({ loaded, total })
-  }
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (!value) continue
+        chunks.push(new Uint8Array(value))
+        loaded += value.byteLength
+        onProgress?.({ loaded, total })
+      }
+    } catch (error) {
+      await reader.cancel().catch(() => undefined)
+      throw error
+    }
 
-  const blobParts = chunks.map((chunk) => {
-    const copy = new Uint8Array(chunk.byteLength)
-    copy.set(chunk)
-    return copy.buffer
-  })
-  return { blob: new Blob(blobParts, { type: response.headers.get('content-type') ?? 'application/zip' }), fileName }
+    const blobParts = chunks.map((chunk) => {
+      const copy = new Uint8Array(chunk.byteLength)
+      copy.set(chunk)
+      return copy.buffer
+    })
+    return { blob: new Blob(blobParts, { type: response.headers.get('content-type') ?? 'application/zip' }), fileName }
+  }, { timeout: 'long', operation: 'project-zip' })
+  return value
 }
 
 export async function importProjectZip(file: Blob, parent: string): Promise<{ path: string; importedSessions: number }> {
   const query = new URLSearchParams({ parent })
-  const response = await fetch(`/codex-api/project-import?${query.toString()}`, {
+  const response = await fetchWithTimeout(`/codex-api/project-import?${query.toString()}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/zip' },
     body: file,
-  })
+  }, { timeout: 'long', operation: 'project-import' })
   const payload = await readJsonResponse(response)
   if (!response.ok) {
     const message = getErrorMessageFromPayload(payload, 'Failed to import project')
@@ -3595,7 +3631,7 @@ export async function importProjectZip(file: Blob, parent: string): Promise<{ pa
 }
 
 export async function createLocalDirectory(path: string): Promise<string> {
-  const response = await fetch('/codex-api/local-directory', {
+  const response = await fetchWithTimeout('/codex-api/local-directory', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path }),
@@ -3621,11 +3657,11 @@ export async function createLocalDirectory(path: string): Promise<string> {
 }
 
 export async function cloneGithubRepository(url: string, basePath: string): Promise<string> {
-  const response = await fetch('/codex-api/github-clone', {
+  const response = await fetchWithTimeout('/codex-api/github-clone', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, basePath }),
-  })
+  }, { timeout: 'long', operation: 'github-clone' })
   const payload = await readJsonResponse(response)
   if (!response.ok) {
     const message = getErrorMessageFromPayload(payload, 'Failed to clone GitHub repository')
@@ -3643,7 +3679,7 @@ export async function cloneGithubRepository(url: string, basePath: string): Prom
 }
 
 export async function createProjectlessThreadDirectory(prompt?: string): Promise<{ cwd: string; outputDirectory: string; workspaceRoot: string }> {
-  const response = await fetch('/codex-api/projectless-thread-cwd', {
+  const response = await fetchWithTimeout('/codex-api/projectless-thread-cwd', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt: prompt ?? null }),
@@ -3674,7 +3710,7 @@ export async function createProjectlessThreadDirectory(prompt?: string): Promise
 
 export async function getProjectRootSuggestion(basePath: string): Promise<{ name: string; path: string }> {
   const query = new URLSearchParams({ basePath })
-  const response = await fetch(`/codex-api/project-root-suggestion?${query.toString()}`)
+  const response = await fetchWithTimeout(`/codex-api/project-root-suggestion?${query.toString()}`)
   const payload = (await response.json()) as unknown
   if (!response.ok) {
     const message = getErrorMessageFromPayload(payload, 'Failed to suggest project name')
@@ -3697,7 +3733,7 @@ export async function getProjectRootSuggestion(basePath: string): Promise<{ name
 export async function searchComposerFiles(cwd: string, query: string, limit = 20): Promise<ComposerFileSuggestion[]> {
   const trimmedCwd = cwd.trim()
   if (!trimmedCwd) return []
-  const response = await fetch('/codex-api/composer-file-search', {
+  const response = await fetchWithTimeout('/codex-api/composer-file-search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -3732,7 +3768,7 @@ export async function searchThreads(
   query: string,
   limit = 200,
 ): Promise<ThreadSearchResult> {
-  const response = await fetch('/codex-api/thread-search', {
+  const response = await fetchWithTimeout('/codex-api/thread-search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, limit }),
@@ -3748,7 +3784,7 @@ export async function configureTelegramBot(
   botToken: string,
   allowedUserIds: Array<number | '*'>,
 ): Promise<void> {
-  const response = await fetch('/codex-api/telegram/configure-bot', {
+  const response = await fetchWithTimeout('/codex-api/telegram/configure-bot', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -3764,7 +3800,7 @@ export async function configureTelegramBot(
 }
 
 export async function getTelegramConfig(): Promise<TelegramConfig> {
-  const response = await fetch('/codex-api/telegram/config')
+  const response = await fetchWithTimeout('/codex-api/telegram/config')
   const payload = await response.json()
   if (!response.ok) {
     const message = getErrorMessageFromPayload(payload, 'Failed to load Telegram configuration')
@@ -3796,7 +3832,7 @@ export async function getTelegramConfig(): Promise<TelegramConfig> {
 }
 
 export async function getTelegramStatus(): Promise<TelegramStatus> {
-  const response = await fetch('/codex-api/telegram/status')
+  const response = await fetchWithTimeout('/codex-api/telegram/status')
   const payload = await response.json()
   if (!response.ok) {
     const message = getErrorMessageFromPayload(payload, 'Failed to load Telegram status')
@@ -3839,7 +3875,7 @@ export type FirstLaunchPluginsCardPreference = { dismissed: boolean }
 
 export async function getThreadTitleCache(): Promise<ThreadTitleCache> {
   try {
-    const response = await fetch('/codex-api/thread-titles')
+    const response = await fetchWithTimeout('/codex-api/thread-titles')
     if (!response.ok) return { titles: {}, order: [] }
     const envelope = (await response.json()) as { data?: ThreadTitleCache }
     return envelope.data ?? { titles: {}, order: [] }
@@ -3850,7 +3886,7 @@ export async function getThreadTitleCache(): Promise<ThreadTitleCache> {
 
 export async function persistThreadTitle(id: string, title: string): Promise<void> {
   try {
-    await fetch('/codex-api/thread-titles', {
+    await fetchWithTimeout('/codex-api/thread-titles', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id, title }),
@@ -3862,7 +3898,7 @@ export async function persistThreadTitle(id: string, title: string): Promise<voi
 
 export async function getPinnedThreadState(): Promise<ThreadPinnedState> {
   try {
-    const response = await fetch('/codex-api/thread-pins')
+    const response = await fetchWithTimeout('/codex-api/thread-pins')
     if (!response.ok) return { threadIds: [] }
     const envelope = (await response.json()) as { data?: ThreadPinnedState }
     return envelope.data ?? { threadIds: [] }
@@ -3873,7 +3909,7 @@ export async function getPinnedThreadState(): Promise<ThreadPinnedState> {
 
 export async function persistPinnedThreadIds(threadIds: string[]): Promise<void> {
   try {
-    await fetch('/codex-api/thread-pins', {
+    await fetchWithTimeout('/codex-api/thread-pins', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ threadIds }),
@@ -3885,7 +3921,7 @@ export async function persistPinnedThreadIds(threadIds: string[]): Promise<void>
 
 export async function getFirstLaunchPluginsCardPreference(): Promise<FirstLaunchPluginsCardPreference> {
   try {
-    const response = await fetch('/codex-api/preferences/first-launch-plugins-card')
+    const response = await fetchWithTimeout('/codex-api/preferences/first-launch-plugins-card')
     if (!response.ok) return { dismissed: false }
     const envelope = (await response.json()) as { data?: FirstLaunchPluginsCardPreference }
     return { dismissed: envelope.data?.dismissed === true }
@@ -3896,7 +3932,7 @@ export async function getFirstLaunchPluginsCardPreference(): Promise<FirstLaunch
 
 export async function persistFirstLaunchPluginsCardPreference(dismissed: boolean): Promise<void> {
   try {
-    await fetch('/codex-api/preferences/first-launch-plugins-card', {
+    await fetchWithTimeout('/codex-api/preferences/first-launch-plugins-card', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dismissed }),
@@ -4021,7 +4057,7 @@ export async function getSkillsList(cwds?: string[]): Promise<SkillInfo[]> {
 
 export async function getComposerPrompts(): Promise<ComposerPromptInfo[]> {
   try {
-    const response = await fetch('/codex-api/prompts')
+    const response = await fetchWithTimeout('/codex-api/prompts')
     if (!response.ok) return []
     const payload = (await response.json()) as { data?: ComposerPromptInfo[] }
     return Array.isArray(payload.data) ? payload.data : []
@@ -4032,7 +4068,7 @@ export async function getComposerPrompts(): Promise<ComposerPromptInfo[]> {
 
 export async function createComposerPrompt(name: string, content: string): Promise<ComposerPromptInfo | null> {
   try {
-    const response = await fetch('/codex-api/prompts', {
+    const response = await fetchWithTimeout('/codex-api/prompts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, content }),
@@ -4048,7 +4084,7 @@ export async function createComposerPrompt(name: string, content: string): Promi
 export async function removeComposerPrompt(path: string): Promise<boolean> {
   try {
     const params = new URLSearchParams({ path })
-    const response = await fetch(`/codex-api/prompts?${params.toString()}`, {
+    const response = await fetchWithTimeout(`/codex-api/prompts?${params.toString()}`, {
       method: 'DELETE',
     })
     return response.ok
@@ -4060,22 +4096,20 @@ export async function removeComposerPrompt(path: string): Promise<boolean> {
 const FILE_UPLOAD_TIMEOUT_MS = 60_000
 
 export async function uploadFile(file: File): Promise<string | null> {
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), FILE_UPLOAD_TIMEOUT_MS)
   try {
     const form = new FormData()
     form.append('file', file)
-    const resp = await fetch('/codex-api/upload-file', {
+    const resp = await fetchWithTimeout('/codex-api/upload-file', {
       method: 'POST',
       body: form,
-      signal: controller.signal,
+    }, {
+      timeout: FILE_UPLOAD_TIMEOUT_MS,
+      operation: 'upload-file',
     })
     if (!resp.ok) return null
     const data = (await resp.json()) as { path?: string }
     return data.path ?? null
   } catch {
     return null
-  } finally {
-    clearTimeout(timeoutId)
   }
 }
