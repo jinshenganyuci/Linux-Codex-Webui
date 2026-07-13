@@ -1,0 +1,34 @@
+# 使用方式：
+#   1. cp .env.example .env 并按需修改
+#   2. docker compose up -d --build
+#   3. docker compose logs -f webui   # 查看访问密码（未设置 WEBUI_PASSWORD 时自动生成）
+#   4. 浏览器打开 http://localhost:${WEBUI_PORT:-5900}
+
+services:
+  webui:
+    build:
+      context: .
+      # 需要 cloudflared 隧道时改为 "true"（并在 .env 里设 WEBUI_TUNNEL=true）
+      args:
+        INSTALL_CLOUDFLARED: "false"
+    image: linux-codex-webui:latest
+    container_name: linux-codex-webui
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Codex 配置目录（auth.json、会话、密码文件都存放在这里）
+      CODEX_HOME: /data/codex
+    ports:
+      - "${WEBUI_PORT:-5900}:${WEBUI_PORT:-5900}"
+    volumes:
+      # Codex 登录凭据与会话数据（命名卷，跨重建保留）
+      - codex-data:/data
+      # 项目工作目录：在 WebUI 里打开 /workspace 下的项目
+      - ${WORKSPACE_DIR:-./workspace}:/workspace
+      # 如果宿主机已有登录好的 codex（~/.codex/auth.json），
+      # 可以注释掉上面的 codex-data 卷，改用：
+      # - ~/.codex:/data/codex
+
+volumes:
+  codex-data:
