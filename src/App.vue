@@ -105,7 +105,7 @@
             :search-query="sidebarSearchQuery"
             :search-matched-thread-ids="serverMatchedThreadIds"
             @select="onSelectThread"
-            @archive="onArchiveThread" @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
+            @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
             @browse-thread-files="onBrowseThreadFiles"
             @save-thread-project="onSaveThreadProject"
             @browse-project-files="onBrowseProjectFiles"
@@ -1465,7 +1465,6 @@ const {
   loadOlderMessages,
   setThreadTerminalOpen,
   toggleSelectedThreadTerminal,
-  archiveThreadById,
   forkThreadById,
   renameThreadById,
   forkThreadFromTurn,
@@ -2703,10 +2702,6 @@ async function onRemoveAccount(storageId: string): Promise<void> {
   } finally {
     removingAccountId.value = ''
   }
-}
-
-function onArchiveThread(threadId: string): void {
-  void archiveThreadById(threadId)
 }
 
 function onArchivedThreadsChanged(): void {
