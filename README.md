@@ -89,6 +89,45 @@ termux-wake-lock
 ```
 5. Open the shown URL in your Android browser. If the app is killed, return to Termux and run `npx linux-codex-webui` again.
 
+### Docker / Docker Compose 🐳
+
+仓库内置 `Dockerfile` 与 `docker-compose.yml`，适合在服务器 / NAS 上长期运行：
+
+```bash
+# 1. 准备配置（所有可配置项见 .env.example 内注释）
+cp .env.example .env
+
+# 2. 构建并启动
+docker compose up -d --build
+
+# 3. 查看启动日志（未设置 WEBUI_PASSWORD 时，访问密码会自动生成并打印在这里）
+docker compose logs -f webui
+
+# 4. 浏览器打开
+# http://localhost:5900
+```
+
+常用 `.env` 配置项：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `WEBUI_PORT` | `5900` | Web 服务端口 |
+| `WEBUI_PASSWORD` | 空 | 访问密码，留空则自动生成 |
+| `WEBUI_TUNNEL` | `false` | 启动 cloudflared 公网隧道（需构建时 `--build-arg INSTALL_CLOUDFLARED=true`） |
+| `CODEXUI_SANDBOX_MODE` | `workspace-write` | Codex 沙箱模式 |
+| `CODEXUI_APPROVAL_POLICY` | `on-request` | Codex 审批策略 |
+| `WORKSPACE_DIR` | `./workspace` | 宿主机项目目录，挂载到容器 `/workspace` |
+
+Codex 登录凭据二选一：
+
+1. **挂载宿主机已登录的 codex 配置**：取消 `docker-compose.yml` 中 `~/.codex:/data/codex` 挂载行的注释；
+2. **API Key 登录**：在 `.env` 中填入 `OPENAI_API_KEY`，然后执行：
+   ```bash
+   docker compose exec webui codex login --api-key "$OPENAI_API_KEY"
+   ```
+
+注意：容器内 Linux 沙箱（landlock）可能不可用，若 Codex 报沙箱错误，将 `CODEXUI_SANDBOX_MODE` 改为 `danger-full-access`（容器本身已提供一层隔离）。
+
 ---
 
 ## iPhone / iPad via Tailscale Serve
