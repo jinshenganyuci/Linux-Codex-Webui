@@ -4041,25 +4041,23 @@ export async function persistThreadTitle(id: string, title: string): Promise<voi
 }
 
 export async function getPinnedThreadState(): Promise<ThreadPinnedState> {
-  try {
-    const response = await fetchWithTimeout('/codex-api/thread-pins')
-    if (!response.ok) return { threadIds: [] }
-    const envelope = (await response.json()) as { data?: ThreadPinnedState }
-    return envelope.data ?? { threadIds: [] }
-  } catch {
-    return { threadIds: [] }
+  const response = await fetchWithTimeout('/codex-api/thread-pins')
+  const payload = await response.json().catch(() => null) as { data?: ThreadPinnedState } | null
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to load pinned chats'))
   }
+  return payload?.data ?? { threadIds: [] }
 }
 
 export async function persistPinnedThreadIds(threadIds: string[]): Promise<void> {
-  try {
-    await fetchWithTimeout('/codex-api/thread-pins', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ threadIds }),
-    })
-  } catch {
-    // Best-effort persist
+  const response = await fetchWithTimeout('/codex-api/thread-pins', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ threadIds }),
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to update pinned chats'))
   }
 }
 

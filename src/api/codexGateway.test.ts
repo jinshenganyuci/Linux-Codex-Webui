@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getArchivedThreadsPage, getAvailableModelIds, getAvailableModels, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, permanentlyDeleteThread, persistThreadModelPreference, resumeThread, startThread, startThreadTurn, startThreadWithTurn, unarchiveThread } from './codexGateway'
+import { getArchivedThreadsPage, getAvailableModelIds, getAvailableModels, getPinnedThreadState, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, permanentlyDeleteThread, persistPinnedThreadIds, persistThreadModelPreference, resumeThread, startThread, startThreadTurn, startThreadWithTurn, unarchiveThread } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -227,6 +227,44 @@ describe('thread model preferences', () => {
       model: 'gpt-5.5',
       reasoningEffort: 'xhigh',
     })).rejects.toThrow('disk full')
+  })
+})
+
+describe('pinned chats', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('loads and persists pinned chat ids', async () => {
+    const requests: Array<{ url: string; method: string; body: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+      })
+      return new Response(JSON.stringify({ data: { threadIds: ['thread-a'] }, ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await expect(getPinnedThreadState()).resolves.toEqual({ threadIds: ['thread-a'] })
+    await expect(persistPinnedThreadIds(['thread-a', 'thread-b'])).resolves.toBeUndefined()
+    expect(requests).toEqual([
+      { url: '/codex-api/thread-pins', method: 'GET', body: null },
+      { url: '/codex-api/thread-pins', method: 'PUT', body: { threadIds: ['thread-a', 'thread-b'] } },
+    ])
+  })
+
+  it('surfaces failed pinned chat reads and writes', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'disk full' }), {
+      status: 507,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    await expect(getPinnedThreadState()).rejects.toThrow('disk full')
+    await expect(persistPinnedThreadIds(['thread-a'])).rejects.toThrow('disk full')
   })
 })
 

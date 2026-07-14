@@ -1,20 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { reconcilePinnedThreadIds } from './pinnedThreadUtils'
+import { togglePinnedThreadId } from './pinnedThreadUtils'
 
-describe('reconcilePinnedThreadIds', () => {
-  it('keeps pins whose threads have not loaded while pagination is still incomplete', () => {
-    expect(
-      reconcilePinnedThreadIds(['loaded', 'not-yet-loaded'], new Set(['loaded']), {
-        canPruneMissing: false,
-      }),
-    ).toEqual(['loaded', 'not-yet-loaded'])
+describe('togglePinnedThreadId', () => {
+  it('adds a newly pinned chat to the front', () => {
+    expect(togglePinnedThreadId(['thread-b'], 'thread-a')).toEqual(['thread-a', 'thread-b'])
   })
 
-  it('prunes missing pins after the thread list is fully loaded', () => {
-    expect(
-      reconcilePinnedThreadIds(['loaded', 'missing'], new Set(['loaded']), {
-        canPruneMissing: true,
-      }),
-    ).toEqual(['loaded'])
+  it('removes an explicitly unpinned chat without pruning other saved ids', () => {
+    expect(togglePinnedThreadId(['thread-a', 'not-loaded-yet'], 'thread-a')).toEqual(['not-loaded-yet'])
   })
 })

@@ -14,15 +14,16 @@ Thread rows show an inline delete button that morphs to `Confirm`, while pin/unp
 3. Click a different thread row and verify the pending `Confirm` state clears
 4. Hover the disposable thread row again, click delete, then click `Confirm`
 5. Verify the thread is removed from the sidebar immediately and, if it was pinned, removed from the `Pinned` section too
-6. Open another thread row context menu and verify it contains `Pin thread` for an unpinned thread
-7. Click `Pin thread`, reopen the same thread menu, and verify it now shows `Unpin thread`
-8. Switch to dark theme and repeat steps 1 through 7 with another disposable thread
+6. Open another thread row context menu and verify it contains `Pin this chat` / `置顶此聊天` for an unpinned thread
+7. Click it, reopen the same thread menu, and verify it now shows `Unpin this chat` / `取消置顶`
+8. Reload the page and verify the chat remains in `Pinned chats` / `已置顶`
+9. Switch to dark theme and repeat steps 1 through 8 with another disposable thread
 
 #### Expected Results
 - The inline row action is delete, not pin
 - Delete requires two clicks: delete icon, then `Confirm`
 - Confirming archives/removes the correct thread immediately from the sidebar and clears any pinned state for that thread
-- Pin/unpin is available from the thread context menu and updates the `Pinned` section immediately
+- Pin/unpin is available from the thread context menu, updates the `Pinned chats` section immediately, and survives reload
 - Delete icon, `Confirm` button, and context menu items are readable in both light theme and dark theme
 
 #### Rollback/Cleanup

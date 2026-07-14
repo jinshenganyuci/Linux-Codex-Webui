@@ -1656,7 +1656,6 @@ export function useDesktopState() {
 
   const isLoadingThreads = ref(false)
   const isLoadingMessages = ref(false)
-  const isThreadListFullyLoaded = ref(false)
   const isSendingMessage = ref(false)
   const isInterruptingTurn = ref(false)
   const isUpdatingSpeedMode = ref(false)
@@ -5047,7 +5046,6 @@ export function useDesktopState() {
       const page = await getThreadGroupsPage(threadListNextCursor, getBackgroundThreadListLimit())
       threadListNextCursor = page.nextCursor
       hasLoadedAllThreadPages = page.nextCursor === null
-      isThreadListFullyLoaded.value = hasLoadedAllThreadPages
       loadedThreadListGroups = mergeThreadGroupPages(loadedThreadListGroups, page.groups)
       applyThreadGroups(loadedThreadListGroups, rootsState)
     } catch {
@@ -5093,7 +5091,6 @@ export function useDesktopState() {
         ? threadListNextCursor
         : page.nextCursor
       hasLoadedAllThreadPages = page.nextCursor === null
-      isThreadListFullyLoaded.value = hasLoadedAllThreadPages
       await hydrateWorkspaceRootsStateIfNeeded(groups, rootsState)
 
       applyThreadGroups(loadedThreadListGroups, rootsState)
@@ -6788,7 +6785,6 @@ export function useDesktopState() {
     messages,
     hasMoreOlderMessages,
     isLoadingThreads,
-    isThreadListFullyLoaded,
     isLoadingMessages,
     isLoadingOlderMessages,
     isSendingMessage,
