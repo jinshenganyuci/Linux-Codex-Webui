@@ -756,7 +756,7 @@ describe('startup request deduplication', () => {
 })
 
 describe('live error overlay', () => {
-  it('shows the default thinking overlay while a selected thread is in progress without activity events', async () => {
+  it('does not show an empty thinking card while live progress is still loading', async () => {
     installTestWindow()
     gatewayMocks.getPendingServerRequests.mockResolvedValue(modelCapabilities())
     gatewayMocks.resumeThread.mockResolvedValue(null)
@@ -779,8 +779,28 @@ describe('live error overlay', () => {
     state.primeSelectedThread('thread-thinking')
     await state.loadMessages('thread-thinking')
 
+    expect(state.selectedLiveOverlay.value).toBeNull()
+  })
+
+  it('shows a localized activity overlay after a real turn activity event', () => {
+    installTestWindow()
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-thinking')
+    state.startPolling()
+    notificationHandler({
+      method: 'turn/started',
+      params: { threadId: 'thread-thinking', turn: { id: 'turn-thinking' } },
+    })
+
     expect(state.selectedLiveOverlay.value).toMatchObject({
-      activityLabel: 'Thinking',
+      activityLabel: 'Thinking activity',
       reasoningText: '',
       errorText: '',
     })

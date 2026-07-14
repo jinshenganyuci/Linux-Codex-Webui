@@ -122,6 +122,7 @@ const GLOBAL_SERVER_REQUEST_SCOPE = '__global__'
 const MODEL_FALLBACK_ID = 'gpt-5.4-mini'
 const OPENCODE_ZEN_DEFAULT_MODEL = 'big-pickle'
 const CODEX_CLI_MISSING_MESSAGE = 'Codex CLI not found. Install @openai/codex or set CODEXUI_CODEX_COMMAND.'
+const THINKING_ACTIVITY_LABEL = 'Thinking activity'
 type SelectThreadResult = 'ok' | 'not-found' | 'error'
 
 export function capUtf8Tail(text: string, maxBytes: number): string {
@@ -1796,10 +1797,10 @@ export function useDesktopState() {
 
     const hasAgentProgress = Boolean(turnProgress && (turnProgress.status === 'running' || turnProgress.agents.length > 0))
     const connectionState = notificationConnectionState.value
-    const hasConnectionWarning = isInProgress && connectionState !== 'connected'
-    if (!isInProgress && !activity && !reasoningText && !errorText && !hasAgentProgress && !hasConnectionWarning) return null
+    const hasConnectionWarning = isInProgress && (connectionState === 'reconnecting' || connectionState === 'unavailable')
+    if (!activity && !reasoningText && !errorText && !hasAgentProgress && !hasConnectionWarning) return null
     return {
-      activityLabel: activity?.label || 'Thinking',
+      activityLabel: activity?.label || THINKING_ACTIVITY_LABEL,
       activityDetails: activity?.details ?? [],
       reasoningText,
       errorText,
@@ -2209,7 +2210,7 @@ export function useDesktopState() {
       error.value = ''
       setTurnSummaryForThread(threadId, null)
       setTurnActivityForThread(threadId, {
-        label: 'Thinking',
+        label: THINKING_ACTIVITY_LABEL,
         details: buildPendingTurnDetails(
           MODEL_FALLBACK_ID,
           pending.effort,
@@ -2951,7 +2952,7 @@ export function useDesktopState() {
       return
     }
 
-    const normalizedLabel = sanitizeDisplayText(activity.label) || 'Thinking'
+    const normalizedLabel = sanitizeDisplayText(activity.label) || THINKING_ACTIVITY_LABEL
     const incomingDetails = activity.details
       .map((line) => sanitizeDisplayText(line))
       .filter((line) => line.length > 0 && line !== normalizedLabel)
@@ -3084,7 +3085,9 @@ export function useDesktopState() {
         } else if (normalizedThreadId in agentProgressByThreadId.value) {
           agentProgressByThreadId.value = omitKey(agentProgressByThreadId.value, normalizedThreadId)
         }
-        lastAgentProgressLoadAtByThreadId.set(normalizedThreadId, Date.now())
+        if (snapshot || inProgressById.value[normalizedThreadId] !== true) {
+          lastAgentProgressLoadAtByThreadId.set(normalizedThreadId, Date.now())
+        }
       } catch {
         // Notification connection state communicates outages without replacing usable progress data.
       }
@@ -3889,7 +3892,7 @@ export function useDesktopState() {
       return {
         threadId,
         activity: {
-          label: 'Thinking',
+          label: THINKING_ACTIVITY_LABEL,
           details: [],
         },
       }
@@ -3903,7 +3906,7 @@ export function useDesktopState() {
         return {
           threadId,
           activity: {
-            label: 'Thinking',
+            label: THINKING_ACTIVITY_LABEL,
             details: [],
           },
         }
@@ -3969,7 +3972,7 @@ export function useDesktopState() {
       return {
         threadId,
         activity: {
-          label: 'Thinking',
+          label: THINKING_ACTIVITY_LABEL,
           details: [],
         },
       }
@@ -5708,7 +5711,7 @@ export function useDesktopState() {
     setTurnActivityForThread(
       threadId,
       {
-        label: 'Thinking',
+        label: THINKING_ACTIVITY_LABEL,
         details: buildPendingTurnDetails(
           readModelIdForThread(threadId),
           selectedReasoningEffort.value,
@@ -5852,7 +5855,7 @@ export function useDesktopState() {
       setTurnActivityForThread(
         threadId,
         {
-          label: 'Thinking',
+          label: THINKING_ACTIVITY_LABEL,
           details: buildPendingTurnDetails(
             readModelIdForThread(threadId),
             selectedEffort,
@@ -6364,6 +6367,9 @@ export function useDesktopState() {
         latestRuntimeStateByThreadId.set(threadId, state)
         optimisticTurnStartedAtByThreadId.delete(threadId)
         setThreadInProgress(threadId, true)
+        if (threadId === selectedThreadId.value && !agentProgressByThreadId.value[threadId]) {
+          void loadAgentProgressSnapshot(threadId)
+        }
         if (state.turnId && !state.turnId.startsWith('pending:')) {
           activeTurnIdByThreadId.value = {
             ...activeTurnIdByThreadId.value,

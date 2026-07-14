@@ -153,6 +153,7 @@ const zhCN: Record<string, string> = {
   'Search skills...': '搜索技能...',
   'Search skills and prompts...': '搜索技能和提示词...',
   'Thinking': '思考强度',
+  'Thinking activity': '正在思考',
   'Saving thread before stop is available': '线程保存后才能停止',
   'Stop': '停止',
   'Queue message': '加入队列',
