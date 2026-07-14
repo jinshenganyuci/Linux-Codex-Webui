@@ -1000,6 +1000,7 @@
                     :has-more-persisted-above="hasMoreOlderMessages"
                     :is-loading-persisted-above="isLoadingOlderMessages"
                     :load-earlier-messages="loadOlderMessages"
+                    :load-agent-result="loadAgentResult"
                     @fork-thread="onForkThreadFromMessage"
                     @rollback="onRollback"
                     @implement-plan="onImplementPlan"
@@ -1435,6 +1436,7 @@ const {
   selectedThreadTerminalOpen,
   selectedThreadServerRequests,
   selectedLiveOverlay,
+  loadAgentResult,
   codexQuota,
   selectedThreadId,
   availableCollaborationModes,

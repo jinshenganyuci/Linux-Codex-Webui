@@ -5,6 +5,8 @@ import {
   forkThread,
   getAvailableCollaborationModes,
   getAccountRateLimits,
+  getAgentProgress,
+  getAgentResult,
   getCodexRuntimeConfig,
   renameThread,
   getAvailableModels,
@@ -24,6 +26,7 @@ import {
   getThreadGroupsPage,
   getThreadQueueState,
   getWorkspaceRootsState,
+  normalizeAgentProgressSnapshot,
   setCodexRuntimeConfig,
   setCodexSpeedMode,
   setThreadQueueState,
@@ -60,6 +63,7 @@ import type {
   UiLiveOverlay,
   UiMessage,
   UiModelCapability,
+  UiNotificationConnectionState,
   UiPlanData,
   UiPlanStep,
   UiProjectGroup,
@@ -69,6 +73,7 @@ import type {
   UiThreadTokenUsage,
   UiTokenUsageBreakdown,
   UiThread,
+  UiTurnProgress,
 } from '../types/codex'
 import { getPathParent, isProjectlessChatPath, normalizePathForUi, toProjectName } from '../pathUtils.js'
 
@@ -97,6 +102,10 @@ const CODEX_PERMISSION_MODE_STORAGE_KEY = 'codex-web-local.codex-permission-mode
 const NEW_THREAD_COLLABORATION_MODE_CONTEXT = '__new-thread__'
 const NEW_THREAD_PROVIDER_MODEL_CONTEXT_PREFIX = '__new-thread-provider__::'
 const EVENT_SYNC_DEBOUNCE_MS = 220
+const LIVE_DELTA_FLUSH_MS = 180
+const LIVE_AGENT_TEXT_MAX_BYTES = 512 * 1024
+const LIVE_COMMAND_OUTPUT_MAX_BYTES = 256 * 1024
+const LIVE_REASONING_TEXT_MAX_BYTES = 128 * 1024
 const EVENT_SYNC_RETRY_DELAY_MS = 1_000
 const BACKGROUND_THREAD_PAGINATION_DELAY_MS = 10_000
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 500
@@ -104,6 +113,7 @@ const TURN_START_FOLLOW_UP_SYNC_DELAY_MS = 3000
 const ACTIVE_RUNTIME_STATE_POLL_INTERVAL_MS = 2_000
 const IDLE_RUNTIME_STATE_POLL_INTERVAL_MS = 15_000
 const RECENT_THREAD_MESSAGE_LOAD_REUSE_MS = 2000
+const RECENT_AGENT_PROGRESS_LOAD_REUSE_MS = 30_000
 const RECENT_THREAD_LIST_LOAD_REUSE_MS = 2000
 const RECENT_SKILLS_LOAD_REUSE_MS = 2000
 const RECENT_MODEL_CATALOG_REUSE_MS = 10_000
@@ -113,6 +123,25 @@ const MODEL_FALLBACK_ID = 'gpt-5.4-mini'
 const OPENCODE_ZEN_DEFAULT_MODEL = 'big-pickle'
 const CODEX_CLI_MISSING_MESSAGE = 'Codex CLI not found. Install @openai/codex or set CODEXUI_CODEX_COMMAND.'
 type SelectThreadResult = 'ok' | 'not-found' | 'error'
+
+export function capUtf8Tail(text: string, maxBytes: number): string {
+  if (!text || maxBytes <= 0) return ''
+  const marker = '…\n'
+  if (typeof TextEncoder === 'undefined' || typeof TextDecoder === 'undefined') {
+    if (text.length <= maxBytes) return text
+    const charLimit = Math.max(0, Math.floor((maxBytes - marker.length) / 4))
+    return `${marker}${charLimit > 0 ? text.slice(-charLimit) : ''}`
+  }
+  const encoded = new TextEncoder().encode(text)
+  if (encoded.byteLength <= maxBytes) return text
+  const markerBytes = new TextEncoder().encode(marker)
+  if (markerBytes.byteLength >= maxBytes) {
+    return new TextDecoder().decode(markerBytes.subarray(0, maxBytes)).replace(/\uFFFD+$/u, '')
+  }
+  const tailBytes = maxBytes - markerBytes.byteLength
+  const tail = new TextDecoder().decode(encoded.subarray(encoded.byteLength - tailBytes)).replace(/^\uFFFD+/u, '')
+  return `${marker}${tail}`
+}
 
 function isCodexCliMissingError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? '')
@@ -1514,7 +1543,20 @@ export function useDesktopState() {
   const liveReasoningTextByThreadId = ref<Record<string, string>>({})
   const liveCommandsByThreadId = ref<Record<string, UiMessage[]>>({})
   const liveFileChangeMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
+  const agentProgressByThreadId = ref<Record<string, UiTurnProgress>>({})
+  const notificationConnectionState = ref<UiNotificationConnectionState>('connecting')
   const inProgressById = ref<Record<string, boolean>>({})
+  type PendingLiveTextDelta = {
+    threadId: string
+    itemId: string
+    chunks: string[]
+  }
+  const pendingAgentTextDeltaByKey = new Map<string, PendingLiveTextDelta>()
+  const pendingCommandOutputDeltaByKey = new Map<string, PendingLiveTextDelta>()
+  const pendingReasoningDeltaByThreadId = new Map<string, PendingLiveTextDelta>()
+  const agentProgressLoadPromiseByThreadId = new Map<string, Promise<void>>()
+  const lastAgentProgressLoadAtByThreadId = new Map<string, number>()
+  let liveDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null
   type FileAttachment = { label: string; path: string; fsPath: string }
   type QueuedMessage = {
     id: string
@@ -1654,6 +1696,7 @@ export function useDesktopState() {
     return ''
   }
   let stopNotificationStream: (() => void) | null = null
+  let hasReceivedNotificationReady = false
   let eventSyncTimer: number | null = null
   let runtimeStatePollTimer: number | null = null
   let runtimeStatePollInFlight = false
@@ -1729,7 +1772,8 @@ export function useDesktopState() {
     const threadId = selectedThreadId.value
     if (!threadId) return null
 
-    const isInProgress = inProgressById.value[threadId] === true
+    const turnProgress = agentProgressByThreadId.value[threadId] ?? null
+    const isInProgress = inProgressById.value[threadId] === true || turnProgress?.status === 'running'
     const activity = isInProgress ? turnActivityByThreadId.value[threadId] : undefined
     const reasoningText = isInProgress
       ? (liveReasoningTextByThreadId.value[threadId] ?? '').trim()
@@ -1750,12 +1794,17 @@ export function useDesktopState() {
         ? ''
         : liveErrorText
 
-    if (!isInProgress && !activity && !reasoningText && !errorText) return null
+    const hasAgentProgress = Boolean(turnProgress && (turnProgress.status === 'running' || turnProgress.agents.length > 0))
+    const connectionState = notificationConnectionState.value
+    const hasConnectionWarning = isInProgress && connectionState !== 'connected'
+    if (!isInProgress && !activity && !reasoningText && !errorText && !hasAgentProgress && !hasConnectionWarning) return null
     return {
       activityLabel: activity?.label || 'Thinking',
       activityDetails: activity?.details ?? [],
       reasoningText,
       errorText,
+      connectionState,
+      turnProgress,
     }
   })
   const codexQuota = computed<UiRateLimitSnapshot | null>(() => codexRateLimit.value)
@@ -2720,6 +2769,7 @@ export function useDesktopState() {
     liveReasoningTextByThreadId.value = pruneThreadStateMap(liveReasoningTextByThreadId.value, activeThreadIds)
     liveCommandsByThreadId.value = pruneThreadStateMap(liveCommandsByThreadId.value, activeThreadIds)
     liveFileChangeMessagesByThreadId.value = pruneThreadStateMap(liveFileChangeMessagesByThreadId.value, activeThreadIds)
+    agentProgressByThreadId.value = pruneThreadStateMap(agentProgressByThreadId.value, activeThreadIds)
     turnSummaryByThreadId.value = pruneThreadStateMap(turnSummaryByThreadId.value, activeThreadIds)
     turnActivityByThreadId.value = pruneThreadStateMap(turnActivityByThreadId.value, activeThreadIds)
     turnErrorByThreadId.value = pruneThreadStateMap(turnErrorByThreadId.value, activeThreadIds)
@@ -2994,6 +3044,182 @@ export function useDesktopState() {
     }
   }
 
+  function setAgentProgressSnapshot(snapshot: UiTurnProgress): void {
+    const previous = agentProgressByThreadId.value[snapshot.rootThreadId]
+    const previousAgents = previous?.turnId === snapshot.turnId
+      ? new Map(previous.agents.map((agent) => [agent.threadId, agent]))
+      : new Map<string, UiTurnProgress['agents'][number]>()
+    const agents = snapshot.agents.map((agent) => {
+      const previousAgent = previousAgents.get(agent.threadId)
+      if (!previousAgent) return agent
+      return {
+        ...agent,
+        ...(previousAgent.resultText === undefined ? {} : { resultText: previousAgent.resultText }),
+        ...(previousAgent.resultTruncated === undefined ? {} : { resultTruncated: previousAgent.resultTruncated }),
+        ...(previousAgent.resultLoading === undefined ? {} : { resultLoading: previousAgent.resultLoading }),
+        ...(previousAgent.resultError === undefined ? {} : { resultError: previousAgent.resultError }),
+      }
+    })
+    agentProgressByThreadId.value = {
+      ...agentProgressByThreadId.value,
+      [snapshot.rootThreadId]: { ...snapshot, agents },
+    }
+    lastAgentProgressLoadAtByThreadId.set(snapshot.rootThreadId, Date.now())
+  }
+
+  async function loadAgentProgressSnapshot(threadId: string, options: { force?: boolean } = {}): Promise<void> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return
+    const pending = agentProgressLoadPromiseByThreadId.get(normalizedThreadId)
+    if (pending) return pending
+    if (
+      !options.force &&
+      Date.now() - (lastAgentProgressLoadAtByThreadId.get(normalizedThreadId) ?? 0) < RECENT_AGENT_PROGRESS_LOAD_REUSE_MS
+    ) return
+    const loadPromise = (async () => {
+      try {
+        const snapshot = await getAgentProgress(normalizedThreadId)
+        if (snapshot) {
+          setAgentProgressSnapshot(snapshot)
+        } else if (normalizedThreadId in agentProgressByThreadId.value) {
+          agentProgressByThreadId.value = omitKey(agentProgressByThreadId.value, normalizedThreadId)
+        }
+        lastAgentProgressLoadAtByThreadId.set(normalizedThreadId, Date.now())
+      } catch {
+        // Notification connection state communicates outages without replacing usable progress data.
+      }
+    })().finally(() => {
+      agentProgressLoadPromiseByThreadId.delete(normalizedThreadId)
+    })
+    agentProgressLoadPromiseByThreadId.set(normalizedThreadId, loadPromise)
+    return loadPromise
+  }
+
+  function patchAgentResult(agentThreadId: string, patch: Partial<UiTurnProgress['agents'][number]>): void {
+    for (const [rootThreadId, progress] of Object.entries(agentProgressByThreadId.value)) {
+      const index = progress.agents.findIndex((agent) => agent.threadId === agentThreadId)
+      if (index < 0) continue
+      const agents = [...progress.agents]
+      agents[index] = { ...agents[index], ...patch }
+      agentProgressByThreadId.value = {
+        ...agentProgressByThreadId.value,
+        [rootThreadId]: { ...progress, agents },
+      }
+      return
+    }
+  }
+
+  async function loadAgentResult(agentThreadId: string): Promise<void> {
+    const normalizedThreadId = agentThreadId.trim()
+    if (!normalizedThreadId) return
+    const agent = Object.values(agentProgressByThreadId.value)
+      .flatMap((progress) => progress.agents)
+      .find((candidate) => candidate.threadId === normalizedThreadId)
+    if (!agent?.resultAvailable || agent.resultLoading || agent.resultText !== undefined) return
+    patchAgentResult(normalizedThreadId, { resultLoading: true, resultError: '' })
+    try {
+      const result = await getAgentResult(normalizedThreadId)
+      patchAgentResult(normalizedThreadId, {
+        resultLoading: false,
+        resultText: result.text,
+        resultTruncated: result.truncated,
+        resultError: '',
+      })
+    } catch (unknownError) {
+      patchAgentResult(normalizedThreadId, {
+        resultLoading: false,
+        resultError: unknownError instanceof Error ? unknownError.message : 'Failed to load agent result',
+      })
+    }
+  }
+
+  function scheduleLiveDeltaFlush(): void {
+    if (liveDeltaFlushTimer !== null) return
+    liveDeltaFlushTimer = setTimeout(() => {
+      liveDeltaFlushTimer = null
+      flushPendingLiveDeltas()
+    }, LIVE_DELTA_FLUSH_MS)
+  }
+
+  function queuePendingLiveDelta(
+    target: Map<string, PendingLiveTextDelta>,
+    key: string,
+    threadId: string,
+    itemId: string,
+    delta: string,
+  ): void {
+    if (!threadId || !itemId || !delta) return
+    const pending = target.get(key)
+    if (pending) pending.chunks.push(delta)
+    else target.set(key, { threadId, itemId, chunks: [delta] })
+    scheduleLiveDeltaFlush()
+  }
+
+  function flushPendingLiveDeltas(threadId = '', itemId = ''): void {
+    if (liveDeltaFlushTimer !== null) {
+      clearTimeout(liveDeltaFlushTimer)
+      liveDeltaFlushTimer = null
+    }
+    const matches = (pending: PendingLiveTextDelta) => (
+      (!threadId || pending.threadId === threadId) && (!itemId || pending.itemId === itemId)
+    )
+    for (const [key, pending] of pendingAgentTextDeltaByKey) {
+      if (!matches(pending)) continue
+      pendingAgentTextDeltaByKey.delete(key)
+      const existing = (liveAgentMessagesByThreadId.value[pending.threadId] ?? [])
+        .find((message) => message.id === pending.itemId)
+      upsertLiveAgentMessage(pending.threadId, {
+        id: pending.itemId,
+        role: 'assistant',
+        text: capUtf8Tail(`${existing?.text ?? ''}${pending.chunks.join('')}`, LIVE_AGENT_TEXT_MAX_BYTES),
+        messageType: 'agentMessage.live',
+      })
+    }
+    for (const [key, pending] of pendingCommandOutputDeltaByKey) {
+      if (!matches(pending)) continue
+      pendingCommandOutputDeltaByKey.delete(key)
+      const current = (liveCommandsByThreadId.value[pending.threadId] ?? [])
+        .find((message) => message.id === pending.itemId)
+      if (!current?.commandExecution) continue
+      upsertLiveCommand(pending.threadId, {
+        ...current,
+        commandExecution: {
+          ...current.commandExecution,
+          aggregatedOutput: capUtf8Tail(
+            `${current.commandExecution.aggregatedOutput}${pending.chunks.join('')}`,
+            LIVE_COMMAND_OUTPUT_MAX_BYTES,
+          ),
+        },
+      })
+    }
+    for (const [key, pending] of pendingReasoningDeltaByThreadId) {
+      if (!matches(pending)) continue
+      pendingReasoningDeltaByThreadId.delete(key)
+      const current = liveReasoningTextByThreadId.value[pending.threadId] ?? ''
+      setLiveReasoningText(
+        pending.threadId,
+        capUtf8Tail(`${current}${pending.chunks.join('')}`, LIVE_REASONING_TEXT_MAX_BYTES),
+      )
+    }
+    if (
+      pendingAgentTextDeltaByKey.size > 0 ||
+      pendingCommandOutputDeltaByKey.size > 0 ||
+      pendingReasoningDeltaByThreadId.size > 0
+    ) {
+      scheduleLiveDeltaFlush()
+    }
+  }
+
+  function discardPendingLiveDeltasForThread(threadId: string): void {
+    for (const [key, pending] of pendingAgentTextDeltaByKey) {
+      if (pending.threadId === threadId) pendingAgentTextDeltaByKey.delete(key)
+    }
+    for (const [key, pending] of pendingCommandOutputDeltaByKey) {
+      if (pending.threadId === threadId) pendingCommandOutputDeltaByKey.delete(key)
+    }
+    pendingReasoningDeltaByThreadId.delete(threadId)
+  }
+
   function appendOptimisticUserMessage(
     threadId: string,
     text: string,
@@ -3067,9 +3293,9 @@ export function useDesktopState() {
 
   function setLiveReasoningText(threadId: string, text: string): void {
     if (!threadId) return
-    const normalized = text.trim()
+    const normalized = text
     const previous = liveReasoningTextByThreadId.value[threadId] ?? ''
-    if (normalized.length === 0) {
+    if (normalized.trim().length === 0) {
       if (!previous) return
       liveReasoningTextByThreadId.value = omitKey(liveReasoningTextByThreadId.value, threadId)
       return
@@ -3083,8 +3309,13 @@ export function useDesktopState() {
 
   function appendLiveReasoningText(threadId: string, delta: string): void {
     if (!threadId) return
-    const previous = liveReasoningTextByThreadId.value[threadId] ?? ''
-    setLiveReasoningText(threadId, `${previous}${delta}`)
+    queuePendingLiveDelta(
+      pendingReasoningDeltaByThreadId,
+      threadId,
+      threadId,
+      threadId,
+      delta,
+    )
   }
 
   function clearLiveReasoningForThread(threadId: string): void {
@@ -3107,6 +3338,7 @@ export function useDesktopState() {
 
   function clearCompletedTurnLiveState(threadId: string): void {
     if (!threadId) return
+    discardPendingLiveDeltasForThread(threadId)
     clearLivePlansForThread(threadId)
     clearLiveReasoningForThread(threadId)
     setTurnActivityForThread(threadId, null)
@@ -4258,6 +4490,11 @@ export function useDesktopState() {
 
     const startedTurn = readTurnStartedInfo(notification)
     if (startedTurn) {
+      discardPendingLiveDeltasForThread(startedTurn.threadId)
+      if (startedTurn.threadId in agentProgressByThreadId.value) {
+        agentProgressByThreadId.value = omitKey(agentProgressByThreadId.value, startedTurn.threadId)
+      }
+      lastAgentProgressLoadAtByThreadId.delete(startedTurn.threadId)
       latestRuntimeStateByThreadId.delete(startedTurn.threadId)
       optimisticTurnStartedAtByThreadId.delete(startedTurn.threadId)
       pendingTurnStartsById.set(startedTurn.turnId, startedTurn)
@@ -4313,6 +4550,25 @@ export function useDesktopState() {
       }
       setThreadInProgress(completedTurn.threadId, false)
       setTurnActivityForThread(completedTurn.threadId, null)
+      const currentProgress = agentProgressByThreadId.value[completedTurn.threadId]
+      if (currentProgress && (!currentProgress.turnId || currentProgress.turnId === completedTurn.turnId)) {
+        const rawStatus = readString(asRecord(asRecord(notification.params)?.turn)?.status).toLowerCase()
+        const phase: UiTurnProgress['phase'] = turnErrorMessage || rawStatus.includes('fail') || rawStatus.includes('error')
+          ? 'failed'
+          : rawStatus.includes('interrupt') || rawStatus.includes('cancel')
+            ? 'interrupted'
+            : 'completed'
+        agentProgressByThreadId.value = {
+          ...agentProgressByThreadId.value,
+          [completedTurn.threadId]: {
+            ...currentProgress,
+            status: phase,
+            phase,
+            lastActivityAtMs: Math.max(currentProgress.lastActivityAtMs, completedTurn.completedAtMs),
+            updatedAtMs: Math.max(currentProgress.updatedAtMs, completedTurn.completedAtMs),
+          },
+        }
+      }
       markThreadUnreadByEvent(completedTurn.threadId)
       if (!shouldRetryWithFallback) {
         clearPendingTurnRequest(completedTurn.threadId)
@@ -4378,19 +4634,18 @@ export function useDesktopState() {
 
     const liveAgentMessageDelta = readAgentMessageDelta(notification)
     if (liveAgentMessageDelta) {
-      const existing = (liveAgentMessagesByThreadId.value[notificationThreadId] ?? [])
-        .find((message) => message.id === liveAgentMessageDelta.messageId)
-      const nextText = `${existing?.text ?? ''}${liveAgentMessageDelta.delta}`
-      upsertLiveAgentMessage(notificationThreadId, {
-        id: liveAgentMessageDelta.messageId,
-        role: 'assistant',
-        text: nextText,
-        messageType: 'agentMessage.live',
-      })
+      queuePendingLiveDelta(
+        pendingAgentTextDeltaByKey,
+        `${notificationThreadId}:${liveAgentMessageDelta.messageId}`,
+        notificationThreadId,
+        liveAgentMessageDelta.messageId,
+        liveAgentMessageDelta.delta,
+      )
     }
 
     const completedAgentMessage = readAgentMessageCompleted(notification)
     if (completedAgentMessage) {
+      flushPendingLiveDeltas(notificationThreadId, completedAgentMessage.id)
       upsertLiveAgentMessage(notificationThreadId, completedAgentMessage)
     }
 
@@ -4412,6 +4667,7 @@ export function useDesktopState() {
 
     const sectionBreakMessageId = readReasoningSectionBreakMessageId(notification)
     if (sectionBreakMessageId) {
+      flushPendingLiveDeltas(notificationThreadId, notificationThreadId)
       const current = liveReasoningTextByThreadId.value[notificationThreadId] ?? ''
       if (current.trim().length > 0 && !current.endsWith('\n\n')) {
         setLiveReasoningText(notificationThreadId, `${current}\n\n`)
@@ -4433,17 +4689,18 @@ export function useDesktopState() {
 
     const commandDelta = readCommandOutputDelta(notification)
     if (commandDelta) {
-      const current = (liveCommandsByThreadId.value[notificationThreadId] ?? []).find((m) => m.id === commandDelta.itemId)
-      if (current?.commandExecution) {
-        upsertLiveCommand(notificationThreadId, {
-          ...current,
-          commandExecution: { ...current.commandExecution, aggregatedOutput: `${current.commandExecution.aggregatedOutput}${commandDelta.delta}` },
-        })
-      }
+      queuePendingLiveDelta(
+        pendingCommandOutputDeltaByKey,
+        `${notificationThreadId}:${commandDelta.itemId}`,
+        notificationThreadId,
+        commandDelta.itemId,
+        commandDelta.delta,
+      )
     }
 
     const commandCompleted = readCommandExecutionCompleted(notification)
     if (commandCompleted) {
+      flushPendingLiveDeltas(notificationThreadId, commandCompleted.id)
       upsertLiveCommand(notificationThreadId, commandCompleted)
     }
 
@@ -4454,10 +4711,12 @@ export function useDesktopState() {
 
     if (isAgentContentEvent(notification)) {
       activeReasoningItemIdByThreadId.delete(notificationThreadId)
+      pendingReasoningDeltaByThreadId.delete(notificationThreadId)
       clearLiveReasoningForThread(notificationThreadId)
     }
 
     if (notification.method === 'turn/completed') {
+      flushPendingLiveDeltas(notificationThreadId)
       activeReasoningItemIdByThreadId.delete(notificationThreadId)
       shouldAutoScrollOnNextAgentEvent = false
       clearLiveReasoningForThread(notificationThreadId)
@@ -4979,6 +5238,9 @@ export function useDesktopState() {
         clearCompletedTurnLiveState(threadId)
       }
       markThreadAsRead(threadId)
+      if (selectedThreadId.value === threadId && !agentProgressByThreadId.value[threadId]) {
+        void loadAgentProgressSnapshot(threadId)
+      }
       } catch (unknownError) {
         const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
         if (selectedThreadId.value === threadId) {
@@ -6297,19 +6559,39 @@ export function useDesktopState() {
     for (const thread of allThreads.value) {
       if (inProgressById.value[thread.id] === true) pendingThreadMessageRefresh.add(thread.id)
     }
-    await syncFromNotifications()
+    const selectedProgressRefresh = selectedThreadId.value
+      ? loadAgentProgressSnapshot(selectedThreadId.value, { force: forceRefresh })
+      : Promise.resolve()
+    await Promise.all([syncFromNotifications(), selectedProgressRefresh])
   }
 
   function startPolling(): void {
     if (typeof window === 'undefined') return
     if (stopNotificationStream) return
+    hasReceivedNotificationReady = false
     runtimeStatePollingGeneration += 1
     void loadPendingServerRequestsFromBridge()
     stopNotificationStream = subscribeCodexNotifications((notification) => {
+      if (notification.method === 'connection/status') {
+        const status = readString(asRecord(notification.params)?.status) as UiNotificationConnectionState | null
+        if (status && ['connecting', 'connected', 'reconnecting', 'unavailable'].includes(status)) {
+          notificationConnectionState.value = status
+        }
+        return
+      }
+      if (notification.method === 'codex-ui/agent-progress') {
+        const snapshot = normalizeAgentProgressSnapshot(asRecord(notification.params)?.progress)
+        if (snapshot) setAgentProgressSnapshot(snapshot)
+        return
+      }
       if (notification.method === 'ready') {
+        notificationConnectionState.value = 'connected'
         clearAllTransientTurnErrors()
         const params = asRecord(notification.params)
-        void recoverBridgeState(params?.replayAvailable !== true || params?.streamChanged === true)
+        const replayRecoveryRequired = params?.replayAvailable !== true || params?.streamChanged === true
+        const forceRefresh = hasReceivedNotificationReady && replayRecoveryRequired
+        hasReceivedNotificationReady = true
+        void recoverBridgeState(forceRefresh)
         scheduleRuntimeStatePoll(0, true)
         return
       }
@@ -6356,6 +6638,7 @@ export function useDesktopState() {
       stopNotificationStream()
       stopNotificationStream = null
     }
+    hasReceivedNotificationReady = false
 
     if (runtimeStatePollTimer !== null && typeof window !== 'undefined') {
       window.clearTimeout(runtimeStatePollTimer)
@@ -6387,6 +6670,15 @@ export function useDesktopState() {
       }
     }
     delayedTurnSyncTimerByThreadId.clear()
+    if (liveDeltaFlushTimer !== null) {
+      clearTimeout(liveDeltaFlushTimer)
+      liveDeltaFlushTimer = null
+    }
+    pendingAgentTextDeltaByKey.clear()
+    pendingCommandOutputDeltaByKey.clear()
+    pendingReasoningDeltaByThreadId.clear()
+    agentProgressLoadPromiseByThreadId.clear()
+    lastAgentProgressLoadAtByThreadId.clear()
     activeReasoningItemIdByThreadId.clear()
     shouldAutoScrollOnNextAgentEvent = false
     persistedMessagesByThreadId.value = {}
@@ -6395,6 +6687,8 @@ export function useDesktopState() {
     liveReasoningTextByThreadId.value = {}
     liveCommandsByThreadId.value = {}
     liveFileChangeMessagesByThreadId.value = {}
+    agentProgressByThreadId.value = {}
+    notificationConnectionState.value = 'connecting'
     turnIndexByTurnIdByThreadId.value = {}
     turnActivityByThreadId.value = {}
     turnSummaryByThreadId.value = {}
@@ -6504,6 +6798,7 @@ export function useDesktopState() {
     selectThread,
     loadMessages,
     loadOlderMessages,
+    loadAgentResult,
     ensureThreadMessagesLoaded,
     setThreadTerminalOpen,
     toggleSelectedThreadTerminal,

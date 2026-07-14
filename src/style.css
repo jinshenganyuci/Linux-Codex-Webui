@@ -1881,6 +1881,369 @@
   @apply bg-zinc-900 text-zinc-200;
 }
 
+.turn-progress-card {
+  @apply w-full max-w-[min(var(--chat-column-max,45rem),100%)] overflow-hidden rounded-2xl border border-slate-200 bg-white/95 shadow-sm shadow-slate-900/5;
+}
+
+.turn-progress-card[data-tone='running'] {
+  @apply border-sky-200;
+}
+
+.turn-progress-card[data-tone='stale'] {
+  @apply border-amber-300;
+}
+
+.turn-progress-card[data-tone='failed'],
+.turn-progress-card[data-tone='interrupted'],
+.turn-progress-card[data-tone='disconnected'] {
+  @apply border-rose-200;
+}
+
+.turn-progress-header {
+  @apply flex items-start justify-between gap-3 px-4 py-3;
+}
+
+.turn-progress-title-wrap,
+.turn-progress-agent-line,
+.turn-progress-agent-meta,
+.turn-progress-header-meta {
+  @apply flex min-w-0 items-center;
+}
+
+.turn-progress-title-wrap {
+  @apply gap-3;
+}
+
+.turn-progress-heading {
+  @apply min-w-0;
+}
+
+.turn-progress-title {
+  @apply m-0 text-sm font-semibold leading-5 text-slate-900;
+}
+
+.turn-progress-summary,
+.turn-progress-agent-meta {
+  @apply m-0 text-xs leading-5 text-slate-500;
+}
+
+.turn-progress-header-meta {
+  @apply shrink-0 flex-wrap justify-end gap-2 text-xs text-slate-500;
+}
+
+.turn-progress-pulse {
+  @apply h-2.5 w-2.5 shrink-0 rounded-full bg-sky-500 shadow-[0_0_0_4px_rgb(14_165_233_/_0.12)];
+  animation: turn-progress-pulse 1.8s ease-in-out infinite;
+}
+
+.turn-progress-card[data-tone='completed'] .turn-progress-pulse {
+  @apply bg-emerald-500 shadow-[0_0_0_4px_rgb(16_185_129_/_0.12)];
+  animation: none;
+}
+
+.turn-progress-card[data-tone='stale'] .turn-progress-pulse {
+  @apply bg-amber-500 shadow-[0_0_0_4px_rgb(245_158_11_/_0.12)];
+  animation-duration: 3s;
+}
+
+.turn-progress-card[data-tone='failed'] .turn-progress-pulse,
+.turn-progress-card[data-tone='interrupted'] .turn-progress-pulse,
+.turn-progress-card[data-tone='disconnected'] .turn-progress-pulse {
+  @apply bg-rose-500 shadow-[0_0_0_4px_rgb(244_63_94_/_0.12)];
+  animation: none;
+}
+
+@keyframes turn-progress-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
+.turn-progress-connection,
+.turn-progress-status {
+  @apply inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-medium leading-4;
+}
+
+.turn-progress-connection {
+  @apply bg-rose-50 text-rose-700;
+}
+
+.turn-progress-body {
+  @apply flex flex-col gap-2 border-t border-slate-100 px-4 py-3;
+}
+
+.turn-progress-mobile-sheet-header,
+.turn-progress-mobile-open,
+.turn-progress-mobile-backdrop {
+  display: none;
+}
+
+.turn-progress-tree {
+  @apply flex flex-col gap-1;
+}
+
+.turn-progress-agent-row {
+  @apply relative flex min-w-0 items-start gap-2 rounded-xl px-2 py-2;
+  padding-left: calc(0.5rem + max(0, var(--agent-depth, 1) - 1) * 1.25rem);
+}
+
+.turn-progress-agent-row:hover {
+  @apply bg-slate-50;
+}
+
+.turn-progress-agent-main {
+  padding-left: 0.5rem;
+}
+
+.turn-progress-agent-rail {
+  @apply absolute bottom-0 top-0 w-px bg-slate-200;
+  left: calc(0.75rem + max(0, var(--agent-depth, 1) - 1) * 1.25rem);
+}
+
+.turn-progress-agent-main .turn-progress-agent-rail {
+  display: none;
+}
+
+.turn-progress-agent-dot {
+  @apply relative z-[1] mt-1.5 h-2 w-2 shrink-0 rounded-full bg-sky-500 ring-4 ring-white;
+}
+
+.turn-progress-agent-dot[data-status='completed'] {
+  @apply bg-emerald-500;
+}
+
+.turn-progress-agent-dot[data-status='stale'] {
+  @apply bg-amber-500;
+}
+
+.turn-progress-agent-dot[data-status='failed'],
+.turn-progress-agent-dot[data-status='interrupted'],
+.turn-progress-agent-dot[data-status='disconnected'] {
+  @apply bg-rose-500;
+}
+
+.turn-progress-agent-copy {
+  @apply min-w-0 flex-1;
+}
+
+.turn-progress-agent-line {
+  @apply gap-2;
+}
+
+.turn-progress-agent-line strong {
+  @apply shrink-0 text-sm font-medium text-slate-800;
+}
+
+.turn-progress-agent-path {
+  @apply min-w-0 flex-1 truncate font-mono text-[10px] text-slate-400;
+}
+
+.turn-progress-agent-task {
+  @apply mb-0 mt-1 text-xs leading-5 text-slate-700;
+}
+
+.turn-progress-agent-meta {
+  @apply mt-0.5 flex-wrap gap-x-2;
+}
+
+.turn-progress-status {
+  @apply ml-auto bg-sky-50 text-sky-700;
+}
+
+.turn-progress-status[data-status='completed'] {
+  @apply bg-emerald-50 text-emerald-700;
+}
+
+.turn-progress-status[data-status='stale'] {
+  @apply bg-amber-50 text-amber-700;
+}
+
+.turn-progress-status[data-status='failed'],
+.turn-progress-status[data-status='interrupted'],
+.turn-progress-status[data-status='disconnected'] {
+  @apply bg-rose-50 text-rose-700;
+}
+
+.turn-progress-result-wrap {
+  @apply mt-1.5;
+}
+
+.turn-progress-result-button,
+.turn-progress-timeline-toggle,
+.turn-progress-mobile-open,
+.turn-progress-close {
+  @apply cursor-pointer border-0 bg-transparent text-xs font-medium text-sky-700 transition hover:text-sky-900;
+}
+
+.turn-progress-result {
+  @apply mt-2 overflow-hidden rounded-lg border border-slate-200 bg-slate-50;
+}
+
+.turn-progress-result pre {
+  @apply m-0 max-h-72 overflow-auto whitespace-pre-wrap break-words px-3 py-2 text-xs leading-5 text-slate-700;
+  overflow-wrap: anywhere;
+}
+
+.turn-progress-result-note,
+.turn-progress-result-placeholder,
+.turn-progress-result-error {
+  @apply m-0 border-b border-slate-200 px-3 py-2 text-xs leading-5;
+}
+
+.turn-progress-result-note,
+.turn-progress-result-placeholder {
+  @apply text-slate-500;
+}
+
+.turn-progress-result-error {
+  @apply text-rose-700;
+}
+
+.turn-progress-timeline-toggle {
+  @apply mt-1 flex items-center justify-between border-t border-slate-100 pt-2 text-slate-600 hover:text-slate-900;
+}
+
+.turn-progress-timeline {
+  @apply m-0 flex list-none flex-col gap-1 border-l border-slate-200 pl-3;
+}
+
+.turn-progress-timeline li {
+  @apply flex min-w-0 gap-3 text-xs leading-5 text-slate-600;
+}
+
+.turn-progress-timeline time {
+  @apply shrink-0 font-mono text-[10px] text-slate-400;
+}
+
+.turn-progress-reasoning {
+  @apply m-0 border-t border-slate-100 px-4 py-3 text-sm leading-5 text-slate-600 whitespace-pre-wrap break-words;
+  max-height: calc(1.25rem * 5 + 1.5rem);
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.turn-progress-error {
+  @apply flex items-start justify-between gap-3 border-t border-rose-100 bg-rose-50 px-4 py-3 text-sm leading-5 text-rose-700 whitespace-pre-wrap;
+}
+
+:root.dark .turn-progress-card {
+  @apply border-zinc-700 bg-zinc-900/96 shadow-black/20;
+}
+
+:root.dark .turn-progress-card[data-tone='running'] {
+  @apply border-sky-800/80;
+}
+
+:root.dark .turn-progress-card[data-tone='stale'] {
+  @apply border-amber-800;
+}
+
+:root.dark .turn-progress-card[data-tone='failed'],
+:root.dark .turn-progress-card[data-tone='interrupted'],
+:root.dark .turn-progress-card[data-tone='disconnected'] {
+  @apply border-rose-900;
+}
+
+:root.dark .turn-progress-title,
+:root.dark .turn-progress-agent-line strong {
+  @apply text-zinc-100;
+}
+
+:root.dark .turn-progress-summary,
+:root.dark .turn-progress-agent-meta,
+:root.dark .turn-progress-header-meta,
+:root.dark .turn-progress-timeline li,
+:root.dark .turn-progress-reasoning {
+  @apply text-zinc-400;
+}
+
+:root.dark .turn-progress-body,
+:root.dark .turn-progress-reasoning,
+:root.dark .turn-progress-timeline-toggle {
+  @apply border-zinc-800;
+}
+
+:root.dark .turn-progress-timeline-toggle {
+  @apply text-zinc-400 hover:text-zinc-100;
+}
+
+:root.dark .turn-progress-result-button,
+:root.dark .turn-progress-mobile-open {
+  @apply text-sky-400 hover:text-sky-300;
+}
+
+:root.dark .turn-progress-timeline-toggle {
+  @apply text-zinc-400 hover:text-zinc-200;
+}
+
+:root.dark .turn-progress-agent-row:hover {
+  @apply bg-zinc-800/70;
+}
+
+:root.dark .turn-progress-agent-rail {
+  @apply bg-zinc-700;
+}
+
+:root.dark .turn-progress-timeline {
+  @apply border-zinc-700 bg-transparent;
+}
+
+:root.dark .turn-progress-agent-dot {
+  @apply ring-zinc-900;
+}
+
+:root.dark .turn-progress-agent-path {
+  @apply text-zinc-500;
+}
+
+:root.dark .turn-progress-agent-task {
+  @apply text-zinc-300;
+}
+
+:root.dark .turn-progress-status {
+  @apply bg-sky-950 text-sky-300;
+}
+
+:root.dark .turn-progress-status[data-status='completed'] {
+  @apply bg-emerald-950 text-emerald-300;
+}
+
+:root.dark .turn-progress-status[data-status='stale'] {
+  @apply bg-amber-950 text-amber-300;
+}
+
+:root.dark .turn-progress-status[data-status='failed'],
+:root.dark .turn-progress-status[data-status='interrupted'],
+:root.dark .turn-progress-status[data-status='disconnected'],
+:root.dark .turn-progress-connection {
+  @apply bg-rose-950 text-rose-300;
+}
+
+:root.dark .turn-progress-result {
+  @apply border-zinc-700 bg-zinc-950;
+}
+
+:root.dark .turn-progress-result pre,
+:root.dark .turn-progress-result-note,
+:root.dark .turn-progress-result-placeholder {
+  @apply text-zinc-300;
+}
+
+:root.dark .turn-progress-result-note,
+:root.dark .turn-progress-result-placeholder,
+:root.dark .turn-progress-result-error {
+  @apply border-zinc-700;
+}
+
+:root.dark .turn-progress-error {
+  @apply border-rose-950 bg-rose-950/50 text-rose-300;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turn-progress-pulse {
+    animation: none;
+  }
+}
+
 @media (max-width: 768px) {
   .thread-composer-input,
   .composer-dropdown-search-input,
@@ -1890,5 +2253,64 @@
   .rename-thread-input,
   .request-input {
     font-size: 16px !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .turn-progress-header {
+    @apply px-3 py-3;
+  }
+
+  .turn-progress-header-meta {
+    @apply max-w-[42%];
+  }
+
+  .turn-progress-mobile-open {
+    @apply flex w-full items-center justify-between border-t border-slate-100 px-3 py-2.5 text-left;
+  }
+
+  .turn-progress-body {
+    display: none;
+  }
+
+  .turn-progress-body.turn-progress-body-mobile-open {
+    @apply fixed inset-x-0 bottom-0 z-[70] flex max-h-[78dvh] overflow-y-auto rounded-t-2xl border border-slate-200 bg-white px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl;
+  }
+
+  .turn-progress-mobile-sheet-header {
+    @apply sticky top-0 z-[1] flex items-start justify-between gap-3 border-b border-slate-100 bg-white pb-3;
+  }
+
+  .turn-progress-close {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xl leading-none text-slate-600 hover:bg-slate-200;
+  }
+
+  .turn-progress-mobile-backdrop {
+    @apply fixed inset-0 z-[60] block border-0 bg-black/45;
+  }
+
+  .turn-progress-agent-path {
+    display: none;
+  }
+
+  .turn-progress-agent-row {
+    padding-left: calc(0.25rem + max(0, var(--agent-depth, 1) - 1) * 0.85rem);
+  }
+
+  .turn-progress-agent-rail {
+    left: calc(0.5rem + max(0, var(--agent-depth, 1) - 1) * 0.85rem);
+  }
+
+  :root.dark .turn-progress-mobile-open,
+  :root.dark .turn-progress-mobile-sheet-header {
+    @apply border-zinc-800 bg-zinc-900;
+  }
+
+  :root.dark .turn-progress-body.turn-progress-body-mobile-open {
+    @apply border-zinc-700 bg-zinc-900;
+  }
+
+  :root.dark .turn-progress-close {
+    @apply bg-zinc-800 text-zinc-300 hover:bg-zinc-700;
   }
 }
