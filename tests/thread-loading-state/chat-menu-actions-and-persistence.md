@@ -24,6 +24,8 @@
 
 1. Make the automation, fork, pin, rename, or archive request fail.
    - The UI must show or retain an actionable failure instead of silently presenting success.
+   - If pin state cannot be loaded, pin and archive stay locked instead of overwriting unknown server state.
+   - If removing a pin fails during archive, the archive action stops and the chat remains active.
 2. Reload after each successful persistent action.
    - Only actions marked persistent above must survive reload.
    - Clipboard, navigation, and download actions must not create fake saved state.
@@ -34,4 +36,3 @@
 - Unpin and archive/delete disposable chats and forks.
 - Remove downloaded ZIP files if no longer needed.
 - Stop only the disposable `4173` process if this test started it.
-

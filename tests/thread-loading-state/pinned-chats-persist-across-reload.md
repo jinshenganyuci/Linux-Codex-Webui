@@ -21,10 +21,19 @@
 4. Make `PUT /codex-api/thread-pins` fail, then try to pin or unpin.
    - The optimistic sidebar change rolls back.
    - A visible error is shown instead of silently pretending the action succeeded.
-5. Remove the failure, retry, then reload.
+5. Make the initial `GET /codex-api/thread-pins` fail, then open a chat menu.
+   - Pin and archive remain disabled because the server's saved pin set is unknown.
+   - No `PUT` is sent with a locally assumed empty pin list.
+6. Remove the failure, retry, then reload.
    - The final explicit pin/unpin choice remains after reload.
-6. Archive a pinned chat from its menu.
+7. Archive a pinned chat from its menu.
    - The explicit archive action removes the saved pin before the chat disappears from the active list.
+8. Make the unpin `PUT` fail while archiving a pinned chat.
+   - The chat remains active and pinned.
+   - The archive request is not sent until the pin removal succeeds.
+9. Restore more than four saved pins whose summaries are absent from the first thread page.
+   - Missing summaries load with no more than four requests in flight at once.
+   - Every saved ID remains persisted; background hydration never prunes the list.
 
 ## Persistence evidence
 
