@@ -1995,6 +1995,73 @@ describe('notification recovery', () => {
 })
 
 describe('authoritative thread runtime reconciliation', () => {
+  it('backs off missing agent progress instead of retrying on every active runtime poll', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let now = 100_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    gatewayMocks.subscribeCodexNotifications.mockReturnValue(vi.fn())
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'running',
+      isRunning: true,
+      source: 'local',
+      startedAtIso: '2026-07-10T00:00:00.000Z',
+      completedAtIso: null,
+      owner: null,
+    }])
+    gatewayMocks.getAgentProgress
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error('progress unavailable'))
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+
+    async function runRuntimePoll(delay: number, nextNow: number): Promise<void> {
+      const timerIndex = timers.findIndex((timer) => timer.delay === delay)
+      expect(timerIndex).toBeGreaterThanOrEqual(0)
+      const [timer] = timers.splice(timerIndex, 1)
+      const expectedRuntimeCalls = gatewayMocks.getThreadRuntimeStates.mock.calls.length + 1
+      now = nextNow
+      timer?.callback()
+      await vi.waitFor(() => expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(expectedRuntimeCalls))
+      await Promise.resolve()
+      await Promise.resolve()
+      await vi.waitFor(() => expect(timers.some((candidate) => candidate.delay === 2_000)).toBe(true))
+    }
+
+    try {
+      await runRuntimePoll(0, 100_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(1))
+
+      await runRuntimePoll(2_000, 102_000)
+      await runRuntimePoll(2_000, 104_000)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(1)
+
+      await runRuntimePoll(2_000, 106_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(2))
+
+      await runRuntimePoll(2_000, 108_000)
+      await runRuntimePoll(2_000, 110_000)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(2)
+    } finally {
+      state.stopPolling()
+      nowSpy.mockRestore()
+    }
+  })
+
   it('clears a silent-WebSocket spinner on the next active runtime poll', async () => {
     installTestWindow()
     const timers: Array<{ callback: () => void; delay: number }> = []

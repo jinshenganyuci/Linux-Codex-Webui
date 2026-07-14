@@ -26,6 +26,7 @@
    - The selected thread recovers its graph from `/codex-api/agent-progress`.
    - If the first progress request is delayed or fails, persisted messages remain visible and no empty `Thinking` / `思考强度` card appears.
    - A later runtime-state poll retries the missing progress snapshot and expands the real tree without a browser refresh or thread switch.
+   - Missing or failed progress snapshots retry with bounded backoff instead of issuing a request on every two-second runtime poll.
    - Connection loss is shown separately from a silent/stale agent.
    - A stopped app-server reconciles active work to interrupted instead of leaving an endless spinner.
 6. Repeat in light and dark themes at desktop width, `768x1024`, and `375x812`.

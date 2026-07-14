@@ -114,6 +114,8 @@ const ACTIVE_RUNTIME_STATE_POLL_INTERVAL_MS = 2_000
 const IDLE_RUNTIME_STATE_POLL_INTERVAL_MS = 15_000
 const RECENT_THREAD_MESSAGE_LOAD_REUSE_MS = 2000
 const RECENT_AGENT_PROGRESS_LOAD_REUSE_MS = 30_000
+const AGENT_PROGRESS_RETRY_BASE_DELAY_MS = 5_000
+const AGENT_PROGRESS_RETRY_MAX_DELAY_MS = 60_000
 const RECENT_THREAD_LIST_LOAD_REUSE_MS = 2000
 const RECENT_SKILLS_LOAD_REUSE_MS = 2000
 const RECENT_MODEL_CATALOG_REUSE_MS = 10_000
@@ -1557,6 +1559,7 @@ export function useDesktopState() {
   const pendingReasoningDeltaByThreadId = new Map<string, PendingLiveTextDelta>()
   const agentProgressLoadPromiseByThreadId = new Map<string, Promise<void>>()
   const lastAgentProgressLoadAtByThreadId = new Map<string, number>()
+  const agentProgressRetryStateByThreadId = new Map<string, { consecutiveFailures: number; nextRetryAt: number }>()
   let liveDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null
   type FileAttachment = { label: string; path: string; fsPath: string }
   type QueuedMessage = {
@@ -2832,6 +2835,7 @@ export function useDesktopState() {
 
   function setThreadInProgress(threadId: string, nextInProgress: boolean): void {
     if (!threadId) return
+    if (!nextInProgress) agentProgressRetryStateByThreadId.delete(threadId)
     const currentValue = inProgressById.value[threadId] === true
     if (currentValue === nextInProgress) return
     if (nextInProgress) {
@@ -3064,7 +3068,23 @@ export function useDesktopState() {
       ...agentProgressByThreadId.value,
       [snapshot.rootThreadId]: { ...snapshot, agents },
     }
+    agentProgressRetryStateByThreadId.delete(snapshot.rootThreadId)
     lastAgentProgressLoadAtByThreadId.set(snapshot.rootThreadId, Date.now())
+  }
+
+  function recordAgentProgressLoadFailure(threadId: string): void {
+    const previousFailureCount = agentProgressRetryStateByThreadId.get(threadId)?.consecutiveFailures ?? 0
+    const consecutiveFailures = previousFailureCount + 1
+    const exponent = Math.min(consecutiveFailures - 1, 4)
+    const delayMs = Math.min(
+      AGENT_PROGRESS_RETRY_BASE_DELAY_MS * (2 ** exponent),
+      AGENT_PROGRESS_RETRY_MAX_DELAY_MS,
+    )
+    lastAgentProgressLoadAtByThreadId.delete(threadId)
+    agentProgressRetryStateByThreadId.set(threadId, {
+      consecutiveFailures,
+      nextRetryAt: Date.now() + delayMs,
+    })
   }
 
   async function loadAgentProgressSnapshot(threadId: string, options: { force?: boolean } = {}): Promise<void> {
@@ -3072,6 +3092,8 @@ export function useDesktopState() {
     if (!normalizedThreadId) return
     const pending = agentProgressLoadPromiseByThreadId.get(normalizedThreadId)
     if (pending) return pending
+    const retryState = agentProgressRetryStateByThreadId.get(normalizedThreadId)
+    if (!options.force && retryState && Date.now() < retryState.nextRetryAt) return
     if (
       !options.force &&
       Date.now() - (lastAgentProgressLoadAtByThreadId.get(normalizedThreadId) ?? 0) < RECENT_AGENT_PROGRESS_LOAD_REUSE_MS
@@ -3084,10 +3106,14 @@ export function useDesktopState() {
         } else if (normalizedThreadId in agentProgressByThreadId.value) {
           agentProgressByThreadId.value = omitKey(agentProgressByThreadId.value, normalizedThreadId)
         }
-        if (snapshot || inProgressById.value[normalizedThreadId] !== true) {
+        if (!snapshot && inProgressById.value[normalizedThreadId] === true) {
+          recordAgentProgressLoadFailure(normalizedThreadId)
+        } else {
+          agentProgressRetryStateByThreadId.delete(normalizedThreadId)
           lastAgentProgressLoadAtByThreadId.set(normalizedThreadId, Date.now())
         }
       } catch {
+        recordAgentProgressLoadFailure(normalizedThreadId)
         // Notification connection state communicates outages without replacing usable progress data.
       }
     })().finally(() => {
@@ -4497,6 +4523,7 @@ export function useDesktopState() {
         agentProgressByThreadId.value = omitKey(agentProgressByThreadId.value, startedTurn.threadId)
       }
       lastAgentProgressLoadAtByThreadId.delete(startedTurn.threadId)
+      agentProgressRetryStateByThreadId.delete(startedTurn.threadId)
       latestRuntimeStateByThreadId.delete(startedTurn.threadId)
       optimisticTurnStartedAtByThreadId.delete(startedTurn.threadId)
       pendingTurnStartsById.set(startedTurn.turnId, startedTurn)
@@ -6682,6 +6709,7 @@ export function useDesktopState() {
     pendingReasoningDeltaByThreadId.clear()
     agentProgressLoadPromiseByThreadId.clear()
     lastAgentProgressLoadAtByThreadId.clear()
+    agentProgressRetryStateByThreadId.clear()
     activeReasoningItemIdByThreadId.clear()
     shouldAutoScrollOnNextAgentEvent = false
     persistedMessagesByThreadId.value = {}
