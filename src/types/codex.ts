@@ -266,11 +266,73 @@ export type UiServerRequestReply = {
   }
 }
 
+export type UiAgentProgressPhase =
+  | 'preparing'
+  | 'reasoning'
+  | 'dispatching'
+  | 'waitingForAgents'
+  | 'executing'
+  | 'applyingChanges'
+  | 'summarizing'
+  | 'completed'
+  | 'interrupted'
+  | 'failed'
+
+export type UiAgentProgressStatus = 'starting' | 'running' | 'completed' | 'interrupted' | 'errored'
+
+export type UiAgentProgressNode = {
+  threadId: string
+  parentThreadId: string
+  path: string
+  nickname: string
+  depth: number
+  taskSummary: string
+  model: string
+  reasoningEffort: string
+  status: UiAgentProgressStatus
+  startedAtMs: number
+  lastActivityAtMs: number
+  completedAtMs: number | null
+  currentActivity: string
+  resultAvailable: boolean
+  resultText?: string
+  resultTruncated?: boolean
+  resultLoading?: boolean
+  resultError?: string
+}
+
+export type UiAgentProgressEvent = {
+  id: string
+  atMs: number
+  kind: string
+  threadId: string
+  agentThreadId: string
+  phase: UiAgentProgressPhase | null
+  detail: string
+}
+
+export type UiTurnProgress = {
+  rootThreadId: string
+  turnId: string
+  status: 'idle' | 'running' | 'completed' | 'interrupted' | 'failed'
+  phase: UiAgentProgressPhase
+  startedAtMs: number
+  lastActivityAtMs: number
+  mainLastActivityAtMs: number
+  updatedAtMs: number
+  agents: UiAgentProgressNode[]
+  events: UiAgentProgressEvent[]
+}
+
+export type UiNotificationConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'unavailable'
+
 export type UiLiveOverlay = {
   activityLabel: string
   activityDetails: string[]
   reasoningText: string
   errorText: string
+  connectionState?: UiNotificationConnectionState
+  turnProgress?: UiTurnProgress | null
 }
 
 export type UiCreditsSnapshot = {

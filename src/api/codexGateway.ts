@@ -56,6 +56,11 @@ import type {
   UiRateLimitWindow,
   UiThreadAutomation,
   UiThreadAutomationStatus,
+  UiAgentProgressEvent,
+  UiAgentProgressNode,
+  UiAgentProgressPhase,
+  UiAgentProgressStatus,
+  UiTurnProgress,
 } from '../types/codex'
 import { normalizePathForUi } from '../pathUtils.js'
 
@@ -790,6 +795,91 @@ export type ThreadRuntimeState = {
   } | null
 }
 
+const AGENT_PROGRESS_PHASES = new Set<UiAgentProgressPhase>([
+  'preparing',
+  'reasoning',
+  'dispatching',
+  'waitingForAgents',
+  'executing',
+  'applyingChanges',
+  'summarizing',
+  'completed',
+  'interrupted',
+  'failed',
+])
+
+const AGENT_PROGRESS_STATUSES = new Set<UiAgentProgressStatus>([
+  'starting',
+  'running',
+  'completed',
+  'interrupted',
+  'errored',
+])
+
+function normalizeAgentProgressNode(value: unknown): UiAgentProgressNode | null {
+  const row = asRecord(value)
+  const threadId = readString(row?.threadId)
+  const status = readString(row?.status) as UiAgentProgressStatus | null
+  if (!threadId || !status || !AGENT_PROGRESS_STATUSES.has(status)) return null
+  return {
+    threadId,
+    parentThreadId: readString(row?.parentThreadId) ?? '',
+    path: readString(row?.path) ?? '',
+    nickname: readString(row?.nickname) ?? '',
+    depth: Math.max(1, Math.round(readNumber(row?.depth) ?? 1)),
+    taskSummary: readString(row?.taskSummary) ?? '',
+    model: readString(row?.model) ?? '',
+    reasoningEffort: readString(row?.reasoningEffort) ?? '',
+    status,
+    startedAtMs: Math.max(0, readNumber(row?.startedAtMs) ?? 0),
+    lastActivityAtMs: Math.max(0, readNumber(row?.lastActivityAtMs) ?? 0),
+    completedAtMs: readNumber(row?.completedAtMs),
+    currentActivity: readString(row?.currentActivity) ?? '',
+    resultAvailable: row?.resultAvailable === true,
+  }
+}
+
+function normalizeAgentProgressEvent(value: unknown): UiAgentProgressEvent | null {
+  const row = asRecord(value)
+  const id = readString(row?.id)
+  if (!id) return null
+  const phaseValue = readString(row?.phase) as UiAgentProgressPhase | null
+  return {
+    id,
+    atMs: Math.max(0, readNumber(row?.atMs) ?? 0),
+    kind: readString(row?.kind) ?? '',
+    threadId: readString(row?.threadId) ?? '',
+    agentThreadId: readString(row?.agentThreadId) ?? '',
+    phase: phaseValue && AGENT_PROGRESS_PHASES.has(phaseValue) ? phaseValue : null,
+    detail: readString(row?.detail) ?? '',
+  }
+}
+
+export function normalizeAgentProgressSnapshot(value: unknown): UiTurnProgress | null {
+  const row = asRecord(value)
+  const rootThreadId = readString(row?.rootThreadId)
+  const phase = readString(row?.phase) as UiAgentProgressPhase | null
+  const status = readString(row?.status)
+  if (!rootThreadId || !phase || !AGENT_PROGRESS_PHASES.has(phase)) return null
+  if (!status || !['idle', 'running', 'completed', 'interrupted', 'failed'].includes(status)) return null
+  return {
+    rootThreadId,
+    turnId: readString(row?.turnId) ?? '',
+    status: status as UiTurnProgress['status'],
+    phase,
+    startedAtMs: Math.max(0, readNumber(row?.startedAtMs) ?? 0),
+    lastActivityAtMs: Math.max(0, readNumber(row?.lastActivityAtMs) ?? 0),
+    mainLastActivityAtMs: Math.max(0, readNumber(row?.mainLastActivityAtMs) ?? 0),
+    updatedAtMs: Math.max(0, readNumber(row?.updatedAtMs) ?? 0),
+    agents: (Array.isArray(row?.agents) ? row.agents : [])
+      .map(normalizeAgentProgressNode)
+      .filter((agent): agent is UiAgentProgressNode => agent !== null),
+    events: (Array.isArray(row?.events) ? row.events : [])
+      .map(normalizeAgentProgressEvent)
+      .filter((event): event is UiAgentProgressEvent => event !== null),
+  }
+}
+
 function normalizeThreadRuntimeState(value: unknown): ThreadRuntimeState | null {
   const row = asRecord(value)
   const threadId = readString(row?.threadId)
@@ -849,6 +939,39 @@ export async function getThreadRuntimeStates(threadIds: string[]): Promise<Threa
   return rows
     .map(normalizeThreadRuntimeState)
     .filter((state): state is ThreadRuntimeState => state !== null)
+}
+
+export async function getAgentProgress(threadId: string): Promise<UiTurnProgress | null> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return null
+  const response = await fetchWithTimeout(`/codex-api/agent-progress?threadId=${encodeURIComponent(normalizedThreadId)}`, undefined, {
+    timeout: 'long',
+    operation: 'agent-progress',
+  })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(payload, `Agent progress request failed with HTTP ${response.status}`))
+  }
+  return normalizeAgentProgressSnapshot(asRecord(payload)?.data)
+}
+
+export async function getAgentResult(threadId: string): Promise<{ threadId: string; text: string; truncated: boolean }> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return { threadId: '', text: '', truncated: false }
+  const response = await fetchWithTimeout(`/codex-api/agent-result?threadId=${encodeURIComponent(normalizedThreadId)}`, undefined, {
+    timeout: 'long',
+    operation: 'agent-result',
+  })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(payload, `Agent result request failed with HTTP ${response.status}`))
+  }
+  const row = asRecord(asRecord(payload)?.data)
+  return {
+    threadId: readString(row?.threadId) ?? normalizedThreadId,
+    text: readString(row?.text) ?? '',
+    truncated: row?.truncated === true,
+  }
 }
 
 async function getThreadGroupsPageV2(cursor: string | null, limit: number): Promise<ThreadGroupsPage> {

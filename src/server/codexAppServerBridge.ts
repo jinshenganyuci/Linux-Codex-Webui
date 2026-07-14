@@ -49,6 +49,11 @@ import { handleCustomEndpointProxyRequest } from './customEndpointProxy.js'
 import { ThreadTerminalManager } from './terminalManager.js'
 import { ThreadRuntimeState } from './threadRuntimeState.js'
 import {
+  AgentProgressTracker,
+  type AgentProgressSnapshot,
+  type AgentRuntimeStateLike,
+} from './agentProgressTracker.js'
+import {
   deleteThreadModelPreference,
   normalizeThreadModelPreference,
   readThreadModelPreferences,
@@ -244,6 +249,7 @@ const PROVIDER_MODELS_FETCH_TIMEOUT_MS = 5_000
 
 const THREAD_RESPONSE_TURN_LIMIT = 10
 const THREAD_TURN_PAGE_READ_CACHE_TTL_MS = 30_000
+const AGENT_PROGRESS_HYDRATION_CACHE_TTL_MS = 5_000
 const THREAD_METHODS_WITH_TURNS = new Set(['thread/read', 'thread/resume', 'thread/fork', 'thread/rollback'])
 const THREAD_METHODS_WITH_THREAD_SNAPSHOT = new Set([...THREAD_METHODS_WITH_TURNS, 'thread/start'])
 const THREAD_SEARCH_FULL_TEXT_THREAD_LIMIT = 100
@@ -2494,6 +2500,29 @@ function extractThreadMessageText(threadReadPayload: unknown): string {
   }
 
   return parts.join('\n').trim()
+}
+
+function extractLastAgentMessage(threadReadPayload: unknown, maxBytes = 64 * 1024): { text: string; truncated: boolean } {
+  const payload = asRecord(threadReadPayload)
+  const thread = asRecord(payload?.thread)
+  const turns = Array.isArray(thread?.turns) ? thread.turns : []
+  for (let turnIndex = turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+    const turn = asRecord(turns[turnIndex])
+    const items = Array.isArray(turn?.items) ? turn.items : []
+    for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+      const item = asRecord(items[itemIndex])
+      if (item?.type !== 'agentMessage' || typeof item.text !== 'string') continue
+      const text = item.text.trim()
+      if (!text) continue
+      const bytes = Buffer.from(text, 'utf8')
+      if (bytes.byteLength <= maxBytes) return { text, truncated: false }
+      return {
+        text: bytes.subarray(bytes.byteLength - maxBytes).toString('utf8').replace(/^\uFFFD+/u, ''),
+        truncated: true,
+      }
+    }
+  }
+  return { text: '', truncated: false }
 }
 
 function readNonEmptyString(value: unknown): string {
@@ -6520,10 +6549,18 @@ export class AppServerProcess {
   private readonly optimisticTurnThreadIds = new Set<string>()
   private readonly turnStartRequestThreadIds = new Map<number, string>()
   private readonly idleWaiters = new Set<() => void>()
+  private readonly pendingAgentProgressRootIds = new Set<string>()
+  private readonly agentProgressHydratedAtByRootThreadId = new Map<string, number>()
+  private readonly agentProgressHydrationPromiseByRootThreadId = new Map<string, Promise<AgentProgressSnapshot | null>>()
+  private agentProgressFlushTimer: ReturnType<typeof setTimeout> | null = null
+  private pendingAgentProgressGeneration = 0
   private chatgptAuthRefreshPromise: Promise<ChatgptAuthTokensRefreshResponse> | null = null
   private activeConfigSignature = ''
 
-  constructor(private readonly threadRuntimeState: ThreadRuntimeState | null = null) {}
+  constructor(
+    private readonly threadRuntimeState: ThreadRuntimeState | null = null,
+    private readonly agentProgressTracker: AgentProgressTracker = new AgentProgressTracker(),
+  ) {}
 
 
   private getCodexCommand(): string {
@@ -6680,6 +6717,9 @@ export class AppServerProcess {
       this.optimisticTurnThreadIds.clear()
       this.turnStartRequestThreadIds.clear()
       this.threadRuntimeState?.clearLocalActivity()
+      this.queueAgentProgressSnapshots(this.agentProgressTracker.markProcessExit(), generation, true)
+      this.agentProgressHydratedAtByRootThreadId.clear()
+      this.agentProgressHydrationPromiseByRootThreadId.clear()
       this.notifyIdleWaitersIfIdle()
     })
   }
@@ -6739,6 +6779,11 @@ export class AppServerProcess {
   private emitNotification(notification: { method: string; params: unknown }, generation = this.activeProcessGeneration): void {
     if (generation === 0) return
     const emittedNotification: AppServerNotification = { ...notification, generation }
+    const changedProgressRoots = this.agentProgressTracker.handleNotification(
+      notification.method,
+      notification.params,
+      generation,
+    )
     this.threadRuntimeState?.observeNotification(notification.method, notification.params)
     this.updateActiveTurnState(notification)
     this.recordStreamEvent(emittedNotification)
@@ -6751,7 +6796,48 @@ export class AppServerProcess {
     for (const listener of this.notificationListeners) {
       listener(emittedNotification)
     }
+    this.queueAgentProgressSnapshots(changedProgressRoots, generation)
     this.settleIdleState()
+  }
+
+  private queueAgentProgressSnapshots(rootThreadIds: string[], generation: number, immediate = false): void {
+    for (const rootThreadId of rootThreadIds) {
+      if (rootThreadId) this.pendingAgentProgressRootIds.add(rootThreadId)
+    }
+    if (this.pendingAgentProgressRootIds.size === 0) return
+    this.pendingAgentProgressGeneration = generation
+    if (immediate) {
+      if (this.agentProgressFlushTimer) clearTimeout(this.agentProgressFlushTimer)
+      this.agentProgressFlushTimer = null
+      this.flushAgentProgressSnapshots()
+      return
+    }
+    if (this.agentProgressFlushTimer) return
+    this.agentProgressFlushTimer = setTimeout(() => {
+      this.agentProgressFlushTimer = null
+      this.flushAgentProgressSnapshots()
+    }, 180)
+    this.agentProgressFlushTimer.unref()
+  }
+
+  private flushAgentProgressSnapshots(): void {
+    const roots = Array.from(this.pendingAgentProgressRootIds)
+    this.pendingAgentProgressRootIds.clear()
+    this.publishAgentProgressSnapshots(roots, this.pendingAgentProgressGeneration)
+  }
+
+  private publishAgentProgressSnapshots(rootThreadIds: string[], generation = this.activeProcessGeneration): void {
+    for (const rootThreadId of new Set(rootThreadIds)) {
+      const progress = this.agentProgressTracker.getSnapshot(rootThreadId)
+      if (!progress) continue
+      const notification: AppServerNotification = {
+        method: 'codex-ui/agent-progress',
+        params: { threadId: rootThreadId, progress },
+        generation,
+      }
+      this.recordStreamEvent(notification)
+      for (const listener of this.notificationListeners) listener(notification)
+    }
   }
 
   private updateActiveTurnState(notification: { method: string; params: unknown }): void {
@@ -6812,6 +6898,94 @@ export class AppServerProcess {
     const buffer = this.streamEventsByThreadId.get(threadId)
     if (!buffer || buffer.length === 0) return []
     return buffer.slice(-limit)
+  }
+
+  getAgentProgressSnapshot(rootThreadId: string): AgentProgressSnapshot | null {
+    return this.agentProgressTracker.getSnapshot(rootThreadId)
+  }
+
+  async readAgentProgressSnapshot(rootThreadId: string): Promise<AgentProgressSnapshot | null> {
+    const normalizedRootThreadId = rootThreadId.trim()
+    if (!normalizedRootThreadId) return null
+    const existing = this.agentProgressTracker.getSnapshot(normalizedRootThreadId)
+    const hydratedAt = this.agentProgressHydratedAtByRootThreadId.get(normalizedRootThreadId) ?? 0
+    if (existing && Date.now() - hydratedAt < AGENT_PROGRESS_HYDRATION_CACHE_TTL_MS) return existing
+    this.disposeIfConfigChanged()
+    await this.ensureInitialized()
+    const expectedGeneration = this.activeProcessGeneration
+    const pending = this.agentProgressHydrationPromiseByRootThreadId.get(normalizedRootThreadId)
+    if (pending) return pending
+
+    let succeeded = false
+    let hydration: Promise<AgentProgressSnapshot | null>
+    hydration = this.hydrateAgentProgressSnapshot(normalizedRootThreadId, expectedGeneration)
+      .then((snapshot) => {
+        succeeded = true
+        return snapshot
+      })
+      .finally(() => {
+        if (this.agentProgressHydrationPromiseByRootThreadId.get(normalizedRootThreadId) !== hydration) return
+        if (succeeded && this.activeProcessGeneration === expectedGeneration) {
+          this.agentProgressHydratedAtByRootThreadId.set(normalizedRootThreadId, Date.now())
+        }
+        this.agentProgressHydrationPromiseByRootThreadId.delete(normalizedRootThreadId)
+      })
+    this.agentProgressHydrationPromiseByRootThreadId.set(normalizedRootThreadId, hydration)
+    return hydration
+  }
+
+  private async hydrateAgentProgressSnapshot(
+    normalizedRootThreadId: string,
+    expectedGeneration: number,
+  ): Promise<AgentProgressSnapshot | null> {
+    const assertCurrentGeneration = () => {
+      if (expectedGeneration === 0 || this.activeProcessGeneration !== expectedGeneration) {
+        throw new Error('codex app-server generation changed during agent progress recovery')
+      }
+    }
+    assertCurrentGeneration()
+    const queue: string[] = [normalizedRootThreadId]
+    const visited = new Set<string>()
+    const maxNodes = 64
+    while (queue.length > 0 && visited.size < maxNodes) {
+      const threadId = queue.shift() ?? ''
+      if (!threadId || visited.has(threadId)) continue
+      visited.add(threadId)
+      let threadReadResult: unknown
+      try {
+        threadReadResult = await this.rpc('thread/read', { threadId, includeTurns: true })
+      } catch {
+        // Keep the partial tree usable when one child session cannot be read.
+        continue
+      }
+      assertCurrentGeneration()
+      this.agentProgressTracker.ingestThreadRead(threadReadResult)
+      for (const childThreadId of this.agentProgressTracker.getDirectChildThreadIds(threadId)) {
+        if (!visited.has(childThreadId) && queue.length + visited.size < maxNodes) queue.push(childThreadId)
+      }
+    }
+
+    if (this.threadRuntimeState) {
+      const threadIds = [normalizedRootThreadId, ...this.agentProgressTracker.getAgentThreadIds(normalizedRootThreadId)]
+      let runtimeStates: AgentRuntimeStateLike[] | null = null
+      try {
+        runtimeStates = await this.threadRuntimeState.getStates(threadIds.slice(0, 500))
+      } catch {
+        // Runtime leases are best-effort; thread/read data remains authoritative.
+      }
+      if (runtimeStates) {
+        assertCurrentGeneration()
+        this.agentProgressTracker.applyRuntimeStates(normalizedRootThreadId, runtimeStates)
+      }
+    }
+    return this.agentProgressTracker.getSnapshot(normalizedRootThreadId)
+  }
+
+  async readAgentResult(threadId: string): Promise<{ threadId: string; text: string; truncated: boolean }> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return { threadId: '', text: '', truncated: false }
+    const result = await this.rpc('thread/read', { threadId: normalizedThreadId, includeTurns: true })
+    return { threadId: normalizedThreadId, ...extractLastAgentMessage(result) }
   }
 
   storeThreadReadSnapshot(threadId: string, snapshot: unknown): void {
@@ -7207,6 +7381,12 @@ export class AppServerProcess {
     this.optimisticTurnThreadIds.clear()
     this.turnStartRequestThreadIds.clear()
     this.threadRuntimeState?.clearLocalActivity()
+    this.queueAgentProgressSnapshots(this.agentProgressTracker.markProcessExit(), generation, true)
+    this.agentProgressHydratedAtByRootThreadId.clear()
+    this.agentProgressHydrationPromiseByRootThreadId.clear()
+    if (this.agentProgressFlushTimer) clearTimeout(this.agentProgressFlushTimer)
+    this.agentProgressFlushTimer = null
+    this.pendingAgentProgressRootIds.clear()
     this.notifyIdleWaitersIfIdle()
 
     try {
@@ -7637,7 +7817,7 @@ type SharedBridgeState = {
 }
 
 const SHARED_BRIDGE_KEY = '__codexRemoteSharedBridge__'
-const SHARED_BRIDGE_VERSION = 'experimental-api-v3'
+const SHARED_BRIDGE_VERSION = 'experimental-api-v4-agent-progress'
 
 function getSharedBridgeState(): SharedBridgeState {
   const globalScope = globalThis as typeof globalThis & {
@@ -8556,6 +8736,27 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
         const events = appServer.getStreamEvents(threadId, limit)
         setJson(res, 200, { events })
+        return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/agent-progress') {
+        const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+        if (!threadId) {
+          setJson(res, 400, { error: 'Missing threadId' })
+          return
+        }
+        const progress = await appServer.readAgentProgressSnapshot(threadId)
+        setJson(res, 200, { data: progress })
+        return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/agent-result') {
+        const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+        if (!threadId) {
+          setJson(res, 400, { error: 'Missing threadId' })
+          return
+        }
+        setJson(res, 200, { data: await appServer.readAgentResult(threadId) })
         return
       }
 
