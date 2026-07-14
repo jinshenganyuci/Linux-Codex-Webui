@@ -469,6 +469,7 @@ import type {
 import { useDictation } from '../../composables/useDictation'
 import { useMobile } from '../../composables/useMobile'
 import { useUiLanguage } from '../../composables/useUiLanguage'
+import { sortModelIdsByStrength } from '../../modelSort'
 import {
   createComposerPrompt,
   getComposerPrompts,
@@ -683,7 +684,7 @@ function formatModelLabel(modelId: string): string {
 }
 
 const modelOptions = computed(() =>
-  props.models.map((modelId) => ({
+  sortModelIdsByStrength(props.models).map((modelId) => ({
     value: modelId,
     label: formatModelLabel(props.modelCapabilities?.[modelId]?.displayName || modelId),
   })),
