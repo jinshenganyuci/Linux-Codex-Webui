@@ -30,6 +30,7 @@ Return to the [manual test index](../../tests.md).
 | [Thread selection keeps sidebar list stable during refresh](thread-selection-keeps-sidebar-list-stable-during-refresh.md) |
 | [Sidebar thread row edge click selects thread](sidebar-thread-row-edge-click-selects-thread.md) |
 | [Sidebar thread inline delete confirmation and menu pin action](sidebar-thread-inline-delete-confirmation-and-menu-pin-action.md) |
+| [Chat menu actions and persistence](chat-menu-actions-and-persistence.md) |
 | [Active thread switches after delete](active-thread-switches-after-delete.md) |
 | [Thread open always autoscrolls to latest](thread-open-always-autoscrolls-to-latest.md) |
 | [Thread conversation loads earlier turns on demand](thread-conversation-loads-earlier-turns-on-demand.md) |
