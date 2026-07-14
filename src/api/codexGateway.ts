@@ -2379,6 +2379,7 @@ function providerModelCapability(id: string): UiModelCapability {
     displayName: id,
     supportedReasoningEfforts: [],
     defaultReasoningEffort: null,
+    supportsFastMode: false,
   }
 }
 
@@ -2396,12 +2397,32 @@ function normalizeModelCapability(value: unknown): UiModelCapability | null {
       })
     : []
   const defaultReasoningEffort = normalizeReasoningEffort(row.defaultReasoningEffort) || null
+  const serviceTiers = Array.isArray(row.serviceTiers)
+    ? row.serviceTiers.flatMap((value) => {
+        const serviceTier = asRecord(value)
+        const id = readString(serviceTier?.id)
+        const name = readString(serviceTier?.name)
+        if (!id && !name) return []
+        return [{
+          id: id ?? '',
+          name: name ?? '',
+        }]
+      })
+    : []
+  const fastServiceTier = serviceTiers.find((tier) => (
+    tier.id.toLowerCase() === 'fast' || tier.name.toLowerCase() === 'fast'
+  ))
+  const additionalSpeedTiers = readStringArray(row.additionalSpeedTiers)
+  const supportsFastMode = Boolean(
+    fastServiceTier || additionalSpeedTiers.some((tier) => tier.toLowerCase() === 'fast'),
+  )
 
   return {
     id,
     displayName: readString(row.displayName) || id,
     supportedReasoningEfforts: Array.from(new Set(supportedReasoningEfforts)),
     defaultReasoningEffort,
+    supportsFastMode,
   }
 }
 

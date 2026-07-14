@@ -222,7 +222,7 @@
             </div>
             <div class="thread-composer-attach-separator" />
             <button
-              v-if="isFastModeSupported"
+              v-if="isFastModeVisible"
               class="thread-composer-attach-setting"
               type="button"
               role="switch"
@@ -300,6 +300,7 @@
           :selected-model="selectedModel"
           :selected-reasoning-effort="selectedReasoningEffort"
           :selected-speed-mode="selectedSpeedMode"
+          :is-fast-mode-supported="isFastModeSupported"
           :model-options="modelOptions"
           :reasoning-options="reasoningOptions"
           open-direction="up"
@@ -511,6 +512,7 @@ const props = defineProps<{
   selectedModel: string
   selectedReasoningEffort: ReasoningEffort | ''
   selectedSpeedMode: SpeedMode
+  isFastModeSupported?: boolean
   selectedCodexPermissionMode: CodexPermissionMode
   skills?: SkillItem[]
   threadTokenUsage?: UiThreadTokenUsage | null
@@ -743,9 +745,12 @@ const standaloneFileAttachments = computed(() => {
 })
 const isInteractionDisabled = computed(() => props.disabled || !props.activeThreadId)
 const isComposerConfigDisabled = computed(() => props.disabled || !props.activeThreadId)
-const isFastModeSupported = computed(() => /^gpt-5\.(?:4|5)(?:$|-)/.test(props.selectedModel.trim()))
+const isFastModeSupported = computed(() => props.isFastModeSupported === true)
+const isFastModeVisible = computed(() => isFastModeSupported.value || props.selectedSpeedMode === 'fast')
 const isSpeedToggleDisabled = computed(() =>
-  isInteractionDisabled.value || props.isUpdatingSpeedMode === true,
+  isInteractionDisabled.value
+  || props.isUpdatingSpeedMode === true
+  || (!isFastModeSupported.value && props.selectedSpeedMode !== 'fast'),
 )
 const isPermissionModeDisabled = computed(() =>
   isComposerConfigDisabled.value || props.isUpdatingPermissionMode === true,
@@ -768,8 +773,11 @@ const speedModeDescription = computed(() => {
   if (props.isUpdatingSpeedMode) {
     return t('Saving speed setting...')
   }
+  if (!isFastModeSupported.value) {
+    return t('Fast mode is unavailable for this model. Turn it off to use Standard mode.')
+  }
   return props.selectedSpeedMode === 'fast'
-    ? t('About 1.5x faster, with credits used at 2x')
+    ? t('About 1.5x faster, with increased credit usage')
     : t('Default speed with normal credit usage')
 })
 const inProgressMode = computed<'steer' | 'queue'>(() =>
@@ -1238,6 +1246,7 @@ function onReasoningEffortSelect(value: string): void {
 
 function onToggleSpeedMode(): void {
   if (isSpeedToggleDisabled.value) return
+  if (props.selectedSpeedMode !== 'fast' && !isFastModeSupported.value) return
   emit('update:selected-speed-mode', props.selectedSpeedMode === 'fast' ? 'standard' : 'fast')
 }
 

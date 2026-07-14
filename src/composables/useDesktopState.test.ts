@@ -71,6 +71,7 @@ function modelCapabilities(
     id: string
     supportedReasoningEfforts?: ReasoningEffort[]
     defaultReasoningEffort?: ReasoningEffort | null
+    supportsFastMode?: boolean
   }>
 ): UiModelCapability[] {
   return entries.map((entry) => {
@@ -80,6 +81,7 @@ function modelCapabilities(
       displayName: normalized.id,
       supportedReasoningEfforts: normalized.supportedReasoningEfforts ?? [],
       defaultReasoningEffort: normalized.defaultReasoningEffort ?? null,
+      supportsFastMode: normalized.supportsFastMode ?? false,
     }
   })
 }
@@ -868,6 +870,96 @@ describe('live error overlay', () => {
 })
 
 describe('provider model selection', () => {
+  it('sends Fast for a native Codex provider when the live model catalog allows it', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.6-terra',
+      providerId: 'myproxy',
+      reasoningEffort: 'xhigh',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities({
+      id: 'gpt-5.6-terra',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      defaultReasoningEffort: 'medium',
+      supportsFastMode: true,
+    }))
+    gatewayMocks.startThreadWithTurn.mockResolvedValue({
+      threadId: 'fast-thread',
+      model: 'gpt-5.6-terra',
+      modelProvider: 'myproxy',
+      turnId: 'turn-fast',
+    })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+
+    expect(state.isFastModeSupportedForModel('gpt-5.6-terra')).toBe(true)
+    await state.updateSelectedSpeedMode('fast')
+    await state.sendMessageToNewThread('fast request', '/tmp/project')
+
+    expect(gatewayMocks.setCodexSpeedMode).toHaveBeenCalledWith('fast')
+    expect(gatewayMocks.startThreadWithTurn).toHaveBeenCalledWith(
+      '/tmp/project',
+      'fast request',
+      [],
+      'gpt-5.6-terra',
+      'xhigh',
+      undefined,
+      [],
+      'default',
+      'fast',
+    )
+  })
+
+  it('forces Standard mode for a model without a catalog Fast tier while allowing stale Fast configuration to be disabled', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.4-mini',
+      providerId: 'myproxy',
+      reasoningEffort: 'xhigh',
+      speedMode: 'fast',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities({
+      id: 'gpt-5.4-mini',
+      supportsFastMode: false,
+    }))
+    gatewayMocks.startThreadWithTurn.mockResolvedValue({
+      threadId: 'standard-thread',
+      model: 'gpt-5.4-mini',
+      modelProvider: 'myproxy',
+      turnId: 'turn-standard',
+    })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+
+    expect(state.isFastModeSupportedForModel('gpt-5.4-mini')).toBe(false)
+    await state.sendMessageToNewThread('standard request', '/tmp/project')
+    expect(gatewayMocks.startThreadWithTurn).toHaveBeenCalledWith(
+      '/tmp/project',
+      'standard request',
+      [],
+      'gpt-5.4-mini',
+      'xhigh',
+      undefined,
+      [],
+      'default',
+      null,
+    )
+
+    await state.updateSelectedSpeedMode('standard')
+    expect(gatewayMocks.setCodexSpeedMode).toHaveBeenCalledWith('standard')
+  })
+
   it('reuses a recently loaded model catalog for the same provider', async () => {
     installTestWindow()
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1000)

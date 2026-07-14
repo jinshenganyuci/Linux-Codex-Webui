@@ -353,6 +353,7 @@ describe('getAvailableModelIds', () => {
                 { reasoningEffort: 'ultra' },
               ],
               defaultReasoningEffort: 'low',
+              serviceTiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed, increased usage' }],
             },
             { id: 'codex-only' },
           ],
@@ -372,12 +373,14 @@ describe('getAvailableModelIds', () => {
         displayName: 'GPT-5.6-Sol',
         supportedReasoningEfforts: ['low', 'ultra'],
         defaultReasoningEffort: 'low',
+        supportsFastMode: true,
       },
       {
         id: 'provider-custom',
         displayName: 'provider-custom',
         supportedReasoningEfforts: [],
         defaultReasoningEffort: null,
+        supportsFastMode: false,
       },
     ])
     expect(requests).toEqual(['/codex-api/provider-models', '/codex-api/rpc'])
@@ -456,6 +459,7 @@ describe('getAvailableModelIds', () => {
             { reasoningEffort: 'ultra' },
           ],
           defaultReasoningEffort: 'low',
+          additionalSpeedTiers: ['fast'],
         }],
       },
     }), {
@@ -468,6 +472,7 @@ describe('getAvailableModelIds', () => {
       displayName: 'GPT-5.6-Sol',
       supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
       defaultReasoningEffort: 'low',
+      supportsFastMode: true,
     }])
   })
 })

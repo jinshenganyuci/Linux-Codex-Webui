@@ -20,6 +20,7 @@ export type UiModelCapability = {
   displayName: string
   supportedReasoningEfforts: ReasoningEffort[]
   defaultReasoningEffort: ReasoningEffort | null
+  supportsFastMode: boolean
 }
 export type SpeedMode = 'standard' | 'fast'
 export type CollaborationModeKind = 'default' | 'plan'

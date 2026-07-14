@@ -1568,8 +1568,23 @@ export function useDesktopState() {
   const loadedVersionByThreadId = ref<Record<string, string>>({})
   const loadedMessagesByThreadId = ref<Record<string, boolean>>({})
 
-  function serviceTierForSpeedMode(speedMode: SpeedMode | undefined): string | null | undefined {
-    if (speedMode === 'fast') return 'fast'
+  const fastModeSupportByModelId = ref<Record<string, boolean>>({})
+
+  function isFastModeSupportedForModel(modelId: string): boolean {
+    const normalizedModelId = modelId.trim()
+    if (!normalizedModelId) return false
+    const currentCapability = availableModelCapabilities.value[normalizedModelId]
+    if (currentCapability) return currentCapability.supportsFastMode
+    return fastModeSupportByModelId.value[normalizedModelId] === true
+  }
+
+  function serviceTierForSpeedMode(
+    speedMode: SpeedMode | undefined,
+    modelId: string,
+  ): string | null | undefined {
+    if (speedMode === 'fast') {
+      return isFastModeSupportedForModel(modelId) ? 'fast' : null
+    }
     if (speedMode === 'standard') return null
     return undefined
   }
@@ -2146,7 +2161,12 @@ export function useDesktopState() {
       setTurnSummaryForThread(threadId, null)
       setTurnActivityForThread(threadId, {
         label: 'Thinking',
-        details: buildPendingTurnDetails(MODEL_FALLBACK_ID, pending.effort, pending.collaborationMode),
+        details: buildPendingTurnDetails(
+          MODEL_FALLBACK_ID,
+          pending.effort,
+          pending.collaborationMode,
+          pending.speedMode,
+        ),
       })
       setThreadInProgress(threadId, true)
 
@@ -2173,7 +2193,7 @@ export function useDesktopState() {
         pending.skills.length > 0 ? pending.skills : undefined,
         pending.fileAttachments,
         pending.collaborationMode,
-        serviceTierForSpeedMode(pending.speedMode),
+        serviceTierForSpeedMode(pending.speedMode, MODEL_FALLBACK_ID),
       )
 
       scheduleRateLimitRefresh()
@@ -2210,6 +2230,14 @@ export function useDesktopState() {
     const nextMode: SpeedMode = mode === 'fast' ? 'fast' : 'standard'
     if (isUpdatingSpeedMode.value || selectedSpeedMode.value === nextMode) {
       return
+    }
+
+    if (nextMode === 'fast') {
+      const contextId = selectedThreadId.value.trim() || NEW_THREAD_COLLABORATION_MODE_CONTEXT
+      if (!isFastModeSupportedForModel(readModelIdForThread(contextId))) {
+        error.value = 'Fast mode is not available for the selected model.'
+        return
+      }
     }
 
     const previousMode = selectedSpeedMode.value
@@ -2289,11 +2317,12 @@ export function useDesktopState() {
     modelId: string,
     effort: ReasoningEffort | '',
     collaborationMode: CollaborationModeKind = selectedCollaborationMode.value,
+    speedMode: SpeedMode = selectedSpeedMode.value,
   ): string[] {
     const modelLabel = modelId.trim() || 'default'
     const effortLabel = effort || 'default'
     const modeLabel = collaborationMode === 'plan' ? 'Plan' : 'Default'
-    const speedLabel = selectedSpeedMode.value === 'fast' ? 'Fast' : 'Standard'
+    const speedLabel = serviceTierForSpeedMode(speedMode, modelId) === 'fast' ? 'Fast' : 'Standard'
     return [`Mode: ${modeLabel}`, `Model: ${modelLabel}`, `Thinking: ${effortLabel}`, `Speed: ${speedLabel}`]
   }
 
@@ -2319,6 +2348,11 @@ export function useDesktopState() {
 
     const request = getAvailableModels(options)
       .then((models) => {
+        const nextFastModeSupportByModelId = { ...fastModeSupportByModelId.value }
+        for (const model of models) {
+          nextFastModeSupportByModelId[model.id] = model.supportsFastMode
+        }
+        fastModeSupportByModelId.value = nextFastModeSupportByModelId
         lastModelCatalog = models
         lastModelCatalogKey = key
         lastModelCatalogAt = Date.now()
@@ -5482,7 +5516,7 @@ export function useDesktopState() {
           skills.length > 0 ? skills : undefined,
           fileAttachments,
           selectedMode,
-          serviceTierForSpeedMode(speedMode),
+          serviceTierForSpeedMode(speedMode, selectedModel),
         )
         threadId = startedThread.threadId
         startedTurnId = startedThread.turnId
@@ -5510,7 +5544,7 @@ export function useDesktopState() {
             skills.length > 0 ? skills : undefined,
             fileAttachments,
             selectedMode,
-            serviceTierForSpeedMode(speedMode),
+            serviceTierForSpeedMode(speedMode, MODEL_FALLBACK_ID),
           )
           threadId = fallbackThread.threadId
           startedTurnId = fallbackThread.turnId
@@ -5561,6 +5595,7 @@ export function useDesktopState() {
             readModelIdForThread(threadId),
             selectedEffort,
             selectedMode,
+            speedMode,
           ),
         },
       )
@@ -5664,7 +5699,7 @@ export function useDesktopState() {
           skills.length > 0 ? skills : undefined,
           fileAttachments,
           collaborationMode,
-          serviceTierForSpeedMode(speedMode),
+          serviceTierForSpeedMode(speedMode, modelId),
         )
       } catch (unknownError) {
         if (modelId && modelId !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
@@ -5688,7 +5723,7 @@ export function useDesktopState() {
             skills.length > 0 ? skills : undefined,
             fileAttachments,
             collaborationMode,
-            serviceTierForSpeedMode(speedMode),
+            serviceTierForSpeedMode(speedMode, MODEL_FALLBACK_ID),
           )
         } else {
           throw unknownError
@@ -6487,6 +6522,7 @@ export function useDesktopState() {
     steerQueuedMessage,
     setSelectedCollaborationMode,
     readModelIdForThread,
+    isFastModeSupportedForModel,
     setSelectedModelIdForThread,
     updateSelectedModelIdForThread,
     setSelectedModelId,

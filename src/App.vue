@@ -958,6 +958,7 @@
                   :models="availableModelIds" :model-capabilities="availableModelCapabilities" :selected-model="composerSelectedModelId"
                   :selected-reasoning-effort="selectedReasoningEffort"
                   :selected-speed-mode="selectedSpeedMode"
+                  :is-fast-mode-supported="isComposerFastModeSupported"
                   :selected-codex-permission-mode="selectedCodexPermissionMode"
                   :is-updating-speed-mode="isUpdatingSpeedMode"
                   :is-updating-permission-mode="isUpdatingPermissionMode"
@@ -1044,6 +1045,7 @@
                     :selected-model="composerSelectedModelId"
                     :selected-reasoning-effort="selectedReasoningEffort"
                     :selected-speed-mode="selectedSpeedMode"
+                    :is-fast-mode-supported="isComposerFastModeSupported"
                     :selected-codex-permission-mode="selectedCodexPermissionMode"
                     :is-updating-speed-mode="isUpdatingSpeedMode"
                     :is-updating-permission-mode="isUpdatingPermissionMode"
@@ -1479,6 +1481,7 @@ const {
   steerQueuedMessage,
   setSelectedCollaborationMode,
   readModelIdForThread,
+  isFastModeSupportedForModel,
   updateSelectedModelIdForThread,
 
   updateSelectedReasoningEffort,
@@ -1795,6 +1798,9 @@ const latestUserTurnId = computed(() => {
 const liveOverlay = computed(() => selectedLiveOverlay.value)
 const composerThreadContextId = computed(() => (isHomeRoute.value ? '__new-thread__' : selectedThreadId.value))
 const composerSelectedModelId = computed(() => readModelIdForThread(composerThreadContextId.value))
+const isComposerFastModeSupported = computed(() => (
+  isFastModeSupportedForModel(composerSelectedModelId.value)
+))
 const selectedThreadPendingRequest = computed<UiServerRequest | null>(() => {
   const rows = selectedThreadServerRequests.value
   return rows.length > 0 ? rows[rows.length - 1] : null

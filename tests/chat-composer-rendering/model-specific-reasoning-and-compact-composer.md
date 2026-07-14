@@ -14,7 +14,7 @@ The composer uses Codex model capabilities for reasoning choices and presents pe
 2. Confirm the left toolbar group contains add, Codex permissions, and skills, while the right group contains model/reasoning, context usage, and send.
 3. Select the Sol model, open the model/reasoning menu, and inspect all reasoning options.
 4. Select `ultra`, close the menu, and inspect the compact trigger text.
-5. Enable Fast mode and confirm the bolt remains visible before the model and reasoning summary.
+5. With a catalog-supported model, enable Fast mode and confirm the bolt remains visible before the model and reasoning summary.
 6. Reopen the menu, open the model side panel, select Luna, and inspect its reasoning options.
 7. On desktop, verify the model side panel opens beside the reasoning panel. On mobile, verify it replaces the reasoning panel in the same layer.
 8. Repeat steps 1-7 in dark theme.
@@ -24,7 +24,7 @@ The composer uses Codex model capabilities for reasoning choices and presents pe
 - The model trigger reads as one summary such as `5.6-sol · Ultra`; long summaries truncate as a unit instead of truncating model and effort separately.
 - Sol exposes exactly `Low`, `Medium`, `High`, `XHigh`, `Max`, and `Ultra`, using the official Codex display casing.
 - Luna only exposes efforts returned for Luna and does not inherit Sol-only `Ultra`.
-- Fast mode displays the bolt without hiding the model or reasoning summary.
+- Fast mode displays the bolt without hiding the model or reasoning summary only when the current model catalog exposes a Fast tier.
 - The context ring remains 32px and the send button remains 36px, aligned to the same toolbar row.
 - Menus close after a model or reasoning selection and remain fully inside the viewport.
 - Light and dark menus have readable contrast with no light menu surface left behind in dark theme.

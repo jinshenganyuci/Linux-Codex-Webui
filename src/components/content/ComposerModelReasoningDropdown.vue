@@ -96,6 +96,7 @@ const props = defineProps<{
   selectedModel: string
   selectedReasoningEffort: ReasoningEffort | ''
   selectedSpeedMode: SpeedMode
+  isFastModeSupported?: boolean
   modelOptions: DropdownOption[]
   reasoningOptions: DropdownOption<ReasoningEffort>[]
   disabled?: boolean
@@ -130,7 +131,7 @@ const selectedReasoningLabel = computed(() => {
   return selected?.label || t('Thinking')
 })
 
-const isFastModeSelected = computed(() => props.selectedSpeedMode === 'fast')
+const isFastModeSelected = computed(() => props.selectedSpeedMode === 'fast' && props.isFastModeSupported === true)
 
 const triggerAccessibleLabel = computed(() =>
   `${t('Model')}: ${selectedModelLabel.value || t('Model')}, ${t('Reasoning')}: ${selectedReasoningLabel.value}${isFastModeSelected.value ? `, ${t('Fast mode')}: ${t('enabled')}` : ''}`,
