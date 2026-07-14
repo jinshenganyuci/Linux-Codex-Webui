@@ -23,6 +23,7 @@ Return to the [manual test index](../../tests.md).
 | [Feature: While reading older messages, stream growth keeps viewport pinned](while-reading-older-messages-stream-growth-keeps-viewport-pinned.md) |
 | [Feature: Thread stream parity — stream-first hydration with full turn history](thread-stream-parity-stream-first-hydration-with-full-turn-history.md) |
 | [Feature: Thread stream parity works on Linux (Oracle A1 ARM64)](thread-stream-parity-works-on-linux-oracle-a1-arm64.md) |
+| [Feature: Real multi-agent progress UI](real-multi-agent-progress-ui.md) |
 | [Thread list startup pagination and direct older-thread links](thread-list-startup-pagination-and-direct-older-thread-links.md) |
 | [Thread detail load avoids duplicate live-state history fetch](thread-detail-load-avoids-duplicate-live-state-history-fetch.md) |
 | [Thread message cache skips unchanged refetches](thread-message-cache-skips-unchanged-refetches.md) |
