@@ -2046,16 +2046,136 @@ describe('authoritative thread runtime reconciliation', () => {
       await runRuntimePoll(0, 100_000)
       await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(1))
 
-      await runRuntimePoll(2_000, 102_000)
-      await runRuntimePoll(2_000, 104_000)
+      await runRuntimePoll(2_000, 104_999)
       expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(1)
 
-      await runRuntimePoll(2_000, 106_000)
+      await runRuntimePoll(2_000, 105_000)
       await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(2))
 
-      await runRuntimePoll(2_000, 108_000)
-      await runRuntimePoll(2_000, 110_000)
+      await runRuntimePoll(2_000, 114_999)
       expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(2)
+
+      await runRuntimePoll(2_000, 115_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(3))
+      await runRuntimePoll(2_000, 134_999)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(3)
+
+      await runRuntimePoll(2_000, 135_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(4))
+      await runRuntimePoll(2_000, 174_999)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(4)
+
+      await runRuntimePoll(2_000, 175_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(5))
+      await runRuntimePoll(2_000, 234_999)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(5)
+
+      await runRuntimePoll(2_000, 235_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(6))
+      await runRuntimePoll(2_000, 294_999)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(6)
+
+      await runRuntimePoll(2_000, 295_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(7))
+    } finally {
+      state.stopPolling()
+      nowSpy.mockRestore()
+    }
+  })
+
+  it('ignores a stale progress failure after a new turn invalidates the old request', async () => {
+    installTestWindow()
+    let nextTimerId = 0
+    const timers: Array<{ id: number; callback: () => void; delay: number; cancelled: boolean }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      nextTimerId += 1
+      if (typeof callback === 'function') {
+        timers.push({ id: nextTimerId, callback: callback as () => void, delay: delay ?? 0, cancelled: false })
+      }
+      return nextTimerId
+    }) as typeof window.setTimeout)
+    vi.mocked(window.clearTimeout).mockImplementation(((timerId?: number) => {
+      const timer = timers.find((candidate) => candidate.id === timerId)
+      if (timer) timer.cancelled = true
+    }) as typeof window.clearTimeout)
+    let now = 100_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    let runtimeTurnId = 'turn-a'
+    gatewayMocks.getThreadRuntimeStates.mockImplementation(async () => [{
+      threadId: 'thread-a',
+      turnId: runtimeTurnId,
+      state: 'running',
+      isRunning: true,
+      source: 'local',
+      startedAtIso: '2026-07-10T00:00:00.000Z',
+      completedAtIso: null,
+      owner: null,
+    }])
+    let rejectFirstProgress: (error: Error) => void = () => {}
+    let resolveSecondProgress: (value: null) => void = () => {}
+    const firstProgress = new Promise<null>((_resolve, reject) => {
+      rejectFirstProgress = reject
+    })
+    const secondProgress = new Promise<null>((resolve) => {
+      resolveSecondProgress = resolve
+    })
+    gatewayMocks.getAgentProgress
+      .mockImplementationOnce(() => firstProgress)
+      .mockImplementationOnce(() => secondProgress)
+      .mockResolvedValue(null)
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+
+    async function runRuntimePoll(delay: number, nextNow: number): Promise<void> {
+      const timerIndex = timers.findIndex((timer) => !timer.cancelled && timer.delay === delay)
+      expect(timerIndex).toBeGreaterThanOrEqual(0)
+      const [timer] = timers.splice(timerIndex, 1)
+      const expectedRuntimeCalls = gatewayMocks.getThreadRuntimeStates.mock.calls.length + 1
+      now = nextNow
+      timer?.callback()
+      await vi.waitFor(() => expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(expectedRuntimeCalls))
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+
+    try {
+      await runRuntimePoll(0, 100_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(1))
+
+      notificationHandler?.({
+        method: 'turn/completed',
+        params: { threadId: 'thread-a', turnId: 'turn-a', turn: { id: 'turn-a', status: 'completed' } },
+      })
+      runtimeTurnId = 'turn-b'
+      notificationHandler?.({
+        method: 'turn/started',
+        params: { threadId: 'thread-a', turn: { id: 'turn-b', status: 'inProgress' } },
+      })
+
+      await runRuntimePoll(0, 103_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(2))
+      resolveSecondProgress(null)
+      await Promise.resolve()
+      await Promise.resolve()
+      rejectFirstProgress(new Error('old request failed late'))
+      await Promise.resolve()
+      await Promise.resolve()
+
+      await runRuntimePoll(2_000, 108_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(3))
     } finally {
       state.stopPolling()
       nowSpy.mockRestore()
