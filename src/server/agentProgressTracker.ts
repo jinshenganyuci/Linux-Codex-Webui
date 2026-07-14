@@ -251,7 +251,6 @@ export class AgentProgressTracker {
     }
 
     const progress = this.ensureProgress(rootThreadId, atMs, generation)
-    this.touchProgress(progress, threadId, atMs)
 
     if (method === 'turn/completed') {
       const completedAtMs = readNotificationAtMs(params, atMs, true)
@@ -316,6 +315,7 @@ export class AgentProgressTracker {
       const itemType = normalizeItemType(item?.type)
       const itemId = readString(item?.id)
       const eventAtMs = readNotificationAtMs(params, atMs, method === 'item/completed')
+      this.touchProgress(progress, threadId, eventAtMs)
 
       if (itemType === 'subagentactivity') {
         const childThreadId = readString(item?.agentThreadId) || readString(item?.agent_thread_id)
@@ -428,17 +428,26 @@ export class AgentProgressTracker {
     if (!thread) return []
     const metadata = readThreadMetadata(thread)
     if (!metadata) return []
-    const rootThreadId = this.registerThreadMetadata(metadata, atMs) || metadata.threadId
     const turns = Array.isArray(thread.turns) ? thread.turns : []
     const latestTurn = asRecord(turns.at(-1))
-    if (!latestTurn) return [rootThreadId]
+    if (!latestTurn) {
+      const rootThreadId = this.registerThreadMetadata(metadata, atMs) || metadata.threadId
+      return [rootThreadId]
+    }
     const latestTurnId = readString(latestTurn.id)
     const status = turnStatus(latestTurn.status)
+    const startedAtMs = readEpochMs(latestTurn.startedAtMs)
+      ?? readEpochMs(latestTurn.startedAt)
+      ?? atMs
+    const completedAtMs = readEpochMs(latestTurn.completedAtMs)
+      ?? readEpochMs(latestTurn.completedAt)
+    const eventAtMs = completedAtMs ?? (status.includes('progress') || status === 'running' ? atMs : startedAtMs)
+    const rootThreadId = this.registerThreadMetadata(metadata, startedAtMs) || metadata.threadId
 
     if (metadata.threadId === rootThreadId) {
       const progress = this.progressByRootThreadId.get(rootThreadId)
       if (!progress || (latestTurnId && progress.turnId !== latestTurnId)) {
-        this.startRootTurn(rootThreadId, latestTurnId, atMs, 0)
+        this.startRootTurn(rootThreadId, latestTurnId, startedAtMs, 0)
       }
     }
 
@@ -450,13 +459,14 @@ export class AgentProgressTracker {
         threadId: metadata.threadId,
         turnId: latestTurnId,
         item: itemRecord,
-        completedAtMs: atMs,
-      }, 0, atMs)
+        completedAtMs: eventAtMs,
+      }, 0, eventAtMs)
     }
 
     const progress = this.progressByRootThreadId.get(rootThreadId)
     if (!progress) return [rootThreadId]
     if (metadata.threadId === rootThreadId) {
+      this.touchProgress(progress, rootThreadId, eventAtMs)
       if (status.includes('progress') || status === 'running') {
         progress.status = 'running'
       } else if (status.includes('interrupt') || status.includes('cancel')) {
@@ -472,31 +482,49 @@ export class AgentProgressTracker {
     } else {
       const node = progress.agentsByThreadId.get(metadata.threadId)
       if (node) {
+        node.startedAtMs = Math.min(node.startedAtMs, startedAtMs)
+        node.lastActivityAtMs = Math.max(node.lastActivityAtMs, eventAtMs)
         if (items.some((item) => normalizeItemType(asRecord(item)?.type) === 'agentmessage')) node.resultAvailable = true
-        if (status.includes('interrupt') || status.includes('cancel')) node.status = 'interrupted'
-        else if (status.includes('fail') || status.includes('error')) node.status = 'errored'
-        else if (status.includes('complete')) node.status = 'completed'
+        if (status.includes('interrupt') || status.includes('cancel')) {
+          node.status = 'interrupted'
+          node.completedAtMs = completedAtMs ?? eventAtMs
+          node.currentActivity = ''
+        } else if (status.includes('fail') || status.includes('error')) {
+          node.status = 'errored'
+          node.completedAtMs = completedAtMs ?? eventAtMs
+          node.currentActivity = ''
+        } else if (status.includes('complete')) {
+          node.status = 'completed'
+          node.completedAtMs = completedAtMs ?? eventAtMs
+          node.currentActivity = ''
+        }
         else if (status.includes('progress') || status === 'running') node.status = 'running'
       }
     }
-    progress.updatedAtMs = Math.max(progress.updatedAtMs, atMs)
+    progress.updatedAtMs = Math.max(progress.updatedAtMs, eventAtMs)
     return [rootThreadId]
   }
 
   applyRuntimeStates(rootThreadId: string, states: AgentRuntimeStateLike[], atMs = this.now()): void {
     const progress = this.progressByRootThreadId.get(rootThreadId)
     if (!progress) return
+    let latestStateAtMs = progress.updatedAtMs
     for (const state of states) {
       const stateAtMs = readIsoMs(state.completedAtIso) ?? readIsoMs(state.startedAtIso) ?? atMs
+      latestStateAtMs = Math.max(latestStateAtMs, stateAtMs)
       if (state.threadId === rootThreadId) {
         if (state.state === 'running') progress.status = 'running'
         if (state.state === 'completed') {
           progress.status = 'completed'
           progress.phase = 'completed'
+          progress.lastActivityAtMs = Math.max(progress.lastActivityAtMs, stateAtMs)
+          progress.mainLastActivityAtMs = Math.max(progress.mainLastActivityAtMs, stateAtMs)
         }
         if (state.state === 'interrupted') {
           progress.status = 'interrupted'
           progress.phase = 'interrupted'
+          progress.lastActivityAtMs = Math.max(progress.lastActivityAtMs, stateAtMs)
+          progress.mainLastActivityAtMs = Math.max(progress.mainLastActivityAtMs, stateAtMs)
         }
         continue
       }
@@ -507,14 +535,16 @@ export class AgentProgressTracker {
       if (state.state === 'completed') {
         node.status = 'completed'
         node.completedAtMs = stateAtMs
+        node.currentActivity = ''
         node.resultAvailable = true
       }
       if (state.state === 'interrupted') {
         node.status = 'interrupted'
         node.completedAtMs = stateAtMs
+        node.currentActivity = ''
       }
     }
-    progress.updatedAtMs = Math.max(progress.updatedAtMs, atMs)
+    progress.updatedAtMs = latestStateAtMs
   }
 
   markProcessExit(atMs = this.now()): string[] {

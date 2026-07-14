@@ -215,6 +215,109 @@ describe('AgentProgressTracker', () => {
     })
   })
 
+  it('restores elapsed time from persisted turn timestamps instead of hydration time', () => {
+    const startedAtMs = 1_700_000_000_000
+    const completedAtMs = startedAtMs + 123_000
+    const tracker = new AgentProgressTracker({ now: () => completedAtMs + 999_000 })
+    tracker.ingestThreadRead({
+      thread: {
+        id: 'root',
+        turns: [{
+          id: 'root-turn',
+          status: 'completed',
+          startedAt: startedAtMs,
+          completedAt: completedAtMs,
+          items: [],
+        }],
+      },
+    }, completedAtMs + 999_000)
+
+    expect(tracker.getSnapshot('root')).toMatchObject({
+      startedAtMs,
+      updatedAtMs: completedAtMs,
+      lastActivityAtMs: completedAtMs,
+      status: 'completed',
+    })
+
+    tracker.applyRuntimeStates('root', [{
+      threadId: 'root',
+      state: 'completed',
+      startedAtIso: new Date(startedAtMs).toISOString(),
+      completedAtIso: new Date(completedAtMs).toISOString(),
+    }], completedAtMs + 999_000)
+    tracker.handleNotification('thread/status/changed', {
+      threadId: 'root',
+      status: { type: 'idle' },
+    }, 0, completedAtMs + 999_000)
+
+    expect(tracker.getSnapshot('root')).toMatchObject({
+      startedAtMs,
+      updatedAtMs: completedAtMs,
+      lastActivityAtMs: completedAtMs,
+      status: 'completed',
+    })
+  })
+
+  it('restores child timestamps from seconds and prefers explicit millisecond fields', () => {
+    const rootStartedAtMs = 1_700_000_000_000
+    const rootCompletedAtMs = rootStartedAtMs + 123_000
+    const childStartedAtMs = rootStartedAtMs + 20_000
+    const childCompletedAtMs = rootStartedAtMs + 80_000
+    const hydrationAtMs = rootCompletedAtMs + 999_000
+    const tracker = new AgentProgressTracker({ now: () => hydrationAtMs })
+
+    tracker.ingestThreadRead({
+      thread: {
+        id: 'root',
+        turns: [{
+          id: 'root-turn',
+          status: 'completed',
+          startedAtMs: rootStartedAtMs,
+          startedAt: (rootStartedAtMs - 5_000) / 1000,
+          completedAtMs: rootCompletedAtMs,
+          completedAt: (rootCompletedAtMs - 5_000) / 1000,
+          items: [],
+        }],
+      },
+    }, hydrationAtMs)
+    tracker.ingestThreadRead({
+      thread: {
+        id: 'child',
+        parentThreadId: 'root',
+        source: {
+          subAgent: {
+            thread_spawn: {
+              parent_thread_id: 'root',
+              depth: 1,
+              agent_path: '/root/child',
+            },
+          },
+        },
+        turns: [{
+          id: 'child-turn',
+          status: 'completed',
+          startedAt: childStartedAtMs / 1000,
+          completedAt: childCompletedAtMs / 1000,
+          items: [{ type: 'agentMessage', id: 'answer', text: 'done' }],
+        }],
+      },
+    }, hydrationAtMs)
+
+    expect(tracker.getSnapshot('root')).toMatchObject({
+      startedAtMs: rootStartedAtMs,
+      updatedAtMs: rootCompletedAtMs,
+      agents: [{
+        threadId: 'child',
+        startedAtMs: childStartedAtMs,
+        lastActivityAtMs: childCompletedAtMs,
+        completedAtMs: childCompletedAtMs,
+        status: 'completed',
+        currentActivity: '',
+        resultAvailable: true,
+      }],
+    })
+  })
+
   it('marks only active progress as interrupted when the app-server exits', () => {
     const tracker = new AgentProgressTracker({ now: () => 4_000 })
     tracker.handleNotification('turn/started', {
