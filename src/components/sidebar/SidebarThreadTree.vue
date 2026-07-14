@@ -602,6 +602,9 @@
         <button class="thread-menu-item" type="button" @click="openRenameThreadDialog(openThreadMenuThread.id, openThreadMenuThread.title)">
           {{ t('Rename thread') }}
         </button>
+        <button class="thread-menu-item" type="button" @click="archiveThreadFromMenu(openThreadMenuThread.id)">
+          {{ t('Archive chat') }}
+        </button>
       </div>
     </Teleport>
 
@@ -856,6 +859,7 @@ const { recordVisibleFailure } = useFeedbackDiagnostics()
 
 const emit = defineEmits<{
   select: [threadId: string]
+  archive: [threadId: string]
   'start-new-thread': [projectName: string]
   'browse-thread-files': [threadId: string]
   'save-thread-project': [threadId: string]
@@ -1733,6 +1737,11 @@ function submitRenameThread(): void {
   if (!threadId || !title) return
   emit('rename-thread', { threadId, title })
   closeRenameThreadDialog()
+}
+
+function archiveThreadFromMenu(threadId: string): void {
+  closeThreadMenu()
+  emit('archive', threadId)
 }
 
 function openAutomationDialog(threadId: string): void {
