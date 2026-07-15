@@ -18,6 +18,7 @@
    - All agents use the same row layout; no special case is required for four, five, or six agents.
    - Nested agents are indented beneath their actual parent.
    - Completed, interrupted, failed, running, waiting, stale, and disconnected states are visually distinct.
+   - Before reloading the page, a completed root with completed child results shows zero active agents and `Completed N/N`; trailing token-usage or goal notifications do not revert child rows to `Running`.
 3. Expand the timeline.
    - Structural events appear newest first and remain bounded, independently of whether agent details are expanded.
 4. Expand a completed agent result.

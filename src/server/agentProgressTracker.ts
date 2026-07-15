@@ -411,10 +411,10 @@ export class AgentProgressTracker {
     if (threadId === rootThreadId && directPhase) {
       this.setRootPhase(rootThreadId, directPhase, atMs, method)
       changedRoots.add(rootThreadId)
-    } else if (threadId !== rootThreadId) {
+    } else if (threadId !== rootThreadId && directPhase) {
       this.updateAgent(rootThreadId, threadId, atMs, (agent) => {
         agent.status = 'running'
-        if (directPhase) agent.currentActivity = directPhase
+        agent.currentActivity = directPhase
       })
       changedRoots.add(rootThreadId)
     }

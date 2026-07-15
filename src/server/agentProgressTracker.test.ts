@@ -118,6 +118,82 @@ describe('AgentProgressTracker', () => {
     })
   })
 
+  it('keeps a completed agent terminal after trailing telemetry notifications', () => {
+    let now = 1_700_000_000_000
+    const tracker = new AgentProgressTracker({ now: () => now })
+
+    tracker.handleNotification('turn/started', {
+      threadId: 'root',
+      turn: { id: 'root-turn', status: 'inProgress' },
+    }, 1, now)
+
+    now += 100
+    tracker.handleNotification('item/completed', {
+      threadId: 'root',
+      turnId: 'root-turn',
+      item: {
+        type: 'subAgentActivity',
+        id: 'spawn-child',
+        agentPath: '/root/child',
+        agentThreadId: 'child',
+        kind: 'started',
+      },
+      completedAtMs: now,
+    }, 1, now)
+
+    now += 100
+    tracker.handleNotification('turn/started', {
+      threadId: 'child',
+      turn: { id: 'child-turn', status: 'inProgress' },
+    }, 1, now)
+
+    now += 100
+    tracker.handleNotification('item/completed', {
+      threadId: 'child',
+      turnId: 'child-turn',
+      item: { type: 'agentMessage', id: 'child-result', text: '7' },
+      completedAtMs: now,
+    }, 1, now)
+
+    now += 100
+    tracker.handleNotification('turn/completed', {
+      threadId: 'child',
+      turn: { id: 'child-turn', status: 'completed' },
+      completedAtMs: now,
+    }, 1, now)
+    const childCompletedAtMs = now
+
+    now += 100
+    expect(tracker.handleNotification('thread/tokenUsage/updated', {
+      threadId: 'child',
+      turnId: 'child-turn',
+      tokenUsage: { total: { totalTokens: 42 } },
+    }, 1, now)).toEqual([])
+
+    now += 100
+    expect(tracker.handleNotification('thread/goal/cleared', {
+      threadId: 'child',
+    }, 1, now)).toEqual([])
+
+    now += 100
+    tracker.handleNotification('turn/completed', {
+      threadId: 'root',
+      turn: { id: 'root-turn', status: 'completed' },
+      completedAtMs: now,
+    }, 1, now)
+
+    expect(tracker.getSnapshot('root')).toMatchObject({
+      status: 'completed',
+      phase: 'completed',
+      agents: [{
+        threadId: 'child',
+        status: 'completed',
+        completedAtMs: childCompletedAtMs,
+        resultAvailable: true,
+      }],
+    })
+  })
+
   it('uses wait calls only as a root phase and does not require agent state fields', () => {
     const tracker = new AgentProgressTracker({ now: () => 2_000 })
     tracker.handleNotification('turn/started', {
