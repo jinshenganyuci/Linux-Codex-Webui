@@ -139,6 +139,39 @@ describe('AppServerJsonlTransport', () => {
     ])
   })
 
+  it('emits the current exit before clearing transport identity', () => {
+    const fake = createFakeProcess()
+    const observedDuringExit: Array<{ running: boolean; activeGeneration: number }> = []
+    let transport: AppServerJsonlTransport
+    transport = new AppServerJsonlTransport((event) => {
+      if (event.type !== 'exit') return
+      observedDuringExit.push({
+        running: transport.running,
+        activeGeneration: transport.activeGeneration,
+      })
+    }, () => fake.child)
+
+    transport.start({ command: 'codex', args: ['app-server'] })
+    fake.child.emit('exit', 1, null)
+
+    expect(observedDuringExit).toEqual([{ running: true, activeGeneration: 1 }])
+    expect(transport.running).toBe(false)
+    expect(transport.activeGeneration).toBe(0)
+  })
+
+  it('clears transport identity when an exit listener throws', () => {
+    const fake = createFakeProcess()
+    const transport = new AppServerJsonlTransport((event) => {
+      if (event.type === 'exit') throw new Error('bridge exit cleanup failed')
+    }, () => fake.child)
+
+    transport.start({ command: 'codex', args: ['app-server'] })
+
+    expect(() => fake.child.emit('exit', 1, null)).toThrow('bridge exit cleanup failed')
+    expect(transport.running).toBe(false)
+    expect(transport.activeGeneration).toBe(0)
+  })
+
   it('ends stdin, sends SIGTERM, and preserves the delayed SIGKILL fallback on explicit stop', async () => {
     vi.useFakeTimers()
     const fake = createFakeProcess(false)

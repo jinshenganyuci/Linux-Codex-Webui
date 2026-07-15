@@ -90,10 +90,13 @@ export class AppServerJsonlTransport implements AppServerJsonlTransportLike {
 
     proc.on('exit', () => {
       if (this.process !== proc || this.activeProcessGeneration !== generation) return
-      this.emit({ type: 'exit', generation })
-      if (this.process === proc && this.activeProcessGeneration === generation) {
-        this.process = null
-        this.activeProcessGeneration = 0
+      try {
+        this.emit({ type: 'exit', generation })
+      } finally {
+        if (this.process === proc && this.activeProcessGeneration === generation) {
+          this.process = null
+          this.activeProcessGeneration = 0
+        }
       }
     })
 

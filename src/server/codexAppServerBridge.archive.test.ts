@@ -91,11 +91,11 @@ function createAppServerHarness(initialGeneration = 1): {
   }
   const emitExit = (generation = activeGeneration) => {
     if (!running || generation === 0 || generation !== activeGeneration) return
+    emit?.({ type: 'exit', generation })
     if (running && activeGeneration === generation) {
       running = false
       activeGeneration = 0
     }
-    emit?.({ type: 'exit', generation })
   }
   return {
     appServer,
