@@ -2,6 +2,11 @@ import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type {
+  AppServerJsonlTransportEvent,
+  AppServerJsonlTransportFactory,
+  AppServerJsonlTransportLike,
+} from './appServerJsonlTransport'
 import {
   AppServerProcess,
   buildProjectlessFolderName,
@@ -28,6 +33,81 @@ afterEach(() => {
     process.env.CODEX_HOME = originalCodexHome
   }
 })
+
+function createAppServerHarness(initialGeneration = 1): {
+  appServer: AppServerProcess
+  writes: string[]
+  start: ReturnType<typeof vi.fn>
+  stop: ReturnType<typeof vi.fn>
+  writeJson: ReturnType<typeof vi.fn>
+  emitLine: (message: unknown, generation?: number) => void
+  emitExit: (generation?: number) => void
+  getActiveGeneration: () => number
+} {
+  let emit: ((event: AppServerJsonlTransportEvent) => void) | null = null
+  let running = true
+  let activeGeneration = initialGeneration
+  let processGeneration = initialGeneration
+  const writes: string[] = []
+  const start = vi.fn(() => {
+    if (running) return activeGeneration
+    running = true
+    activeGeneration = ++processGeneration
+    return activeGeneration
+  })
+  const writeJson = vi.fn((payload: Record<string, unknown>, generation = activeGeneration) => {
+    if (!running || generation === 0 || generation !== activeGeneration) {
+      throw new Error('codex app-server is not running')
+    }
+    writes.push(`${JSON.stringify(payload)}\n`)
+  })
+  const stop = vi.fn(() => {
+    if (!running) return 0
+    const generation = activeGeneration
+    running = false
+    activeGeneration = 0
+    return generation
+  })
+  const transport: AppServerJsonlTransportLike = {
+    get running() {
+      return running
+    },
+    get activeGeneration() {
+      return activeGeneration
+    },
+    start,
+    writeJson,
+    stop,
+  }
+  const factory: AppServerJsonlTransportFactory = (listener) => {
+    emit = listener
+    return transport
+  }
+  const appServer = new AppServerProcess(null, undefined, factory)
+  const emitLine = (message: unknown, generation = activeGeneration) => {
+    if (!running || generation === 0 || generation !== activeGeneration) return
+    const line = typeof message === 'string' ? message : JSON.stringify(message)
+    emit?.({ type: 'line', generation, line })
+  }
+  const emitExit = (generation = activeGeneration) => {
+    if (!running || generation === 0 || generation !== activeGeneration) return
+    if (running && activeGeneration === generation) {
+      running = false
+      activeGeneration = 0
+    }
+    emit?.({ type: 'exit', generation })
+  }
+  return {
+    appServer,
+    writes,
+    start,
+    stop,
+    writeJson,
+    emitLine,
+    emitExit,
+    getActiveGeneration: () => activeGeneration,
+  }
+}
 
 describe('callRpcWithArchiveRecovery', () => {
   it('sets a fallback name and retries archive when Codex has not materialized a rollout', async () => {
@@ -328,20 +408,7 @@ describe('startThreadAndTurn', () => {
 
 describe('AppServerProcess runtime config restart', () => {
   it('defers restarting the app-server until the active turn completes', () => {
-    const appServer = new AppServerProcess()
-    const fakeProcess = {
-      killed: false,
-      stdin: {
-        end: vi.fn(),
-      },
-      kill: vi.fn((signal?: string) => {
-        fakeProcess.killed = true
-        return true
-      }),
-    }
-    ;(appServer as unknown as { process: unknown; processGeneration: number; activeProcessGeneration: number }).process = fakeProcess
-    ;(appServer as unknown as { processGeneration: number }).processGeneration = 1
-    ;(appServer as unknown as { activeProcessGeneration: number }).activeProcessGeneration = 1
+    const { appServer, stop } = createAppServerHarness()
 
     ;(appServer as unknown as { emitNotification: (notification: { method: string; params: unknown }) => void })
       .emitNotification({
@@ -353,7 +420,7 @@ describe('AppServerProcess runtime config restart', () => {
       })
 
     expect(appServer.requestConfigRestartWhenIdle()).toBe(false)
-    expect(fakeProcess.kill).not.toHaveBeenCalled()
+    expect(stop).not.toHaveBeenCalled()
 
     ;(appServer as unknown as { emitNotification: (notification: { method: string; params: unknown }) => void })
       .emitNotification({
@@ -364,25 +431,11 @@ describe('AppServerProcess runtime config restart', () => {
         },
       })
 
-    expect(fakeProcess.stdin.end).toHaveBeenCalledTimes(1)
-    expect(fakeProcess.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(stop).toHaveBeenCalledTimes(1)
   })
 
   it('waits for an active turn before graceful shutdown disposes the app-server', async () => {
-    const appServer = new AppServerProcess()
-    const fakeProcess = {
-      killed: false,
-      stdin: {
-        end: vi.fn(),
-      },
-      kill: vi.fn((signal?: string) => {
-        fakeProcess.killed = true
-        return true
-      }),
-    }
-    ;(appServer as unknown as { process: unknown; processGeneration: number; activeProcessGeneration: number }).process = fakeProcess
-    ;(appServer as unknown as { processGeneration: number }).processGeneration = 1
-    ;(appServer as unknown as { activeProcessGeneration: number }).activeProcessGeneration = 1
+    const { appServer, stop } = createAppServerHarness()
 
     ;(appServer as unknown as { emitNotification: (notification: { method: string; params: unknown }) => void })
       .emitNotification({
@@ -400,7 +453,7 @@ describe('AppServerProcess runtime config restart', () => {
     await Promise.resolve()
 
     expect(disposed).toBe(false)
-    expect(fakeProcess.kill).not.toHaveBeenCalled()
+    expect(stop).not.toHaveBeenCalled()
 
     ;(appServer as unknown as { emitNotification: (notification: { method: string; params: unknown }) => void })
       .emitNotification({
@@ -414,26 +467,11 @@ describe('AppServerProcess runtime config restart', () => {
     await disposePromise
 
     expect(disposed).toBe(true)
-    expect(fakeProcess.stdin.end).toHaveBeenCalledTimes(1)
-    expect(fakeProcess.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(stop).toHaveBeenCalledTimes(1)
   })
 
   it('keeps a successful turn/start busy until the matching turn completes', async () => {
-    const appServer = new AppServerProcess()
-    const fakeProcess = {
-      killed: false,
-      stdin: {
-        end: vi.fn(),
-        write: vi.fn(),
-      },
-      kill: vi.fn((signal?: string) => {
-        fakeProcess.killed = true
-        return true
-      }),
-    }
-    ;(appServer as unknown as { process: unknown; processGeneration: number; activeProcessGeneration: number }).process = fakeProcess
-    ;(appServer as unknown as { processGeneration: number }).processGeneration = 1
-    ;(appServer as unknown as { activeProcessGeneration: number }).activeProcessGeneration = 1
+    const { appServer, emitLine, stop } = createAppServerHarness()
 
     const turnPromise = (appServer as unknown as {
       call: (method: string, params: unknown) => Promise<unknown>
@@ -441,11 +479,11 @@ describe('AppServerProcess runtime config restart', () => {
       threadId: 'thread-active',
       input: [{ type: 'text', text: 'hi' }],
     })
-    ;(appServer as unknown as { handleLine: (line: string) => void }).handleLine(JSON.stringify({
+    emitLine({
       jsonrpc: '2.0',
       id: 1,
       result: { turn: { id: 'turn-active' } },
-    }))
+    })
 
     await expect(turnPromise).resolves.toEqual({ turn: { id: 'turn-active' } })
     expect(appServer.isBusy()).toBe(true)
@@ -457,7 +495,7 @@ describe('AppServerProcess runtime config restart', () => {
     await Promise.resolve()
 
     expect(disposed).toBe(false)
-    expect(fakeProcess.kill).not.toHaveBeenCalled()
+    expect(stop).not.toHaveBeenCalled()
 
     ;(appServer as unknown as { emitNotification: (notification: { method: string; params: unknown }) => void })
       .emitNotification({
@@ -471,19 +509,11 @@ describe('AppServerProcess runtime config restart', () => {
     await disposePromise
 
     expect(disposed).toBe(true)
-    expect(fakeProcess.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(stop).toHaveBeenCalledTimes(1)
   })
 
   it('ignores responses from an older app-server generation', async () => {
-    const appServer = new AppServerProcess()
-    const fakeProcess = {
-      stdin: { write: vi.fn(), end: vi.fn() },
-      kill: vi.fn(),
-      killed: false,
-    }
-    ;(appServer as unknown as { process: unknown }).process = fakeProcess
-    ;(appServer as unknown as { processGeneration: number }).processGeneration = 2
-    ;(appServer as unknown as { activeProcessGeneration: number }).activeProcessGeneration = 2
+    const { appServer } = createAppServerHarness(2)
 
     const callPromise = (appServer as unknown as {
       call: (method: string, params: unknown) => Promise<unknown>
@@ -499,25 +529,175 @@ describe('AppServerProcess runtime config restart', () => {
     ;(appServer as unknown as { handleLine: (line: string, generation: number) => void })
       .handleLine(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { source: 'current' } }), 2)
     await expect(callPromise).resolves.toEqual({ source: 'current' })
+    appServer.dispose()
   })
 
   it('rejects an approval reply from an older app-server generation', async () => {
-    const appServer = new AppServerProcess()
-    const fakeProcess = {
-      stdin: { write: vi.fn(), end: vi.fn() },
-      kill: vi.fn(),
-      killed: false,
-    }
-    ;(appServer as unknown as { process: unknown }).process = fakeProcess
-    ;(appServer as unknown as { processGeneration: number }).processGeneration = 2
-    ;(appServer as unknown as { activeProcessGeneration: number }).activeProcessGeneration = 2
+    const { appServer, writeJson } = createAppServerHarness(2)
     ;(appServer as unknown as { initialized: boolean }).initialized = true
     ;(appServer as unknown as { handleServerRequest: (generation: number, id: number, method: string, params: unknown) => void })
       .handleServerRequest(2, 7, 'item/commandExecution/requestApproval', { threadId: 'thread-1' })
 
     await expect(appServer.respondToServerRequest({ id: 7, generation: 1, result: { decision: 'accept' } }))
       .rejects.toThrow('No pending server request')
-    expect(fakeProcess.stdin.write).not.toHaveBeenCalled()
+    expect(writeJson).not.toHaveBeenCalled()
+    appServer.dispose()
+  })
+
+  it('shares one initialize handshake across concurrent initialization callers', async () => {
+    const { appServer, writes, emitLine } = createAppServerHarness()
+
+    const ensureInitialized = (appServer as unknown as {
+      ensureInitialized: () => Promise<void>
+    }).ensureInitialized.bind(appServer)
+    const first = ensureInitialized()
+    const second = ensureInitialized()
+
+    expect(writes).toEqual([`${JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        clientInfo: { name: 'linux-codex-webui', version: '0.1.0' },
+        capabilities: { experimentalApi: true },
+      },
+    })}\n`])
+
+    emitLine({ jsonrpc: '2.0', id: 1, result: {} })
+    await Promise.all([first, second])
+
+    expect(writes).toEqual([
+      `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          clientInfo: { name: 'linux-codex-webui', version: '0.1.0' },
+          capabilities: { experimentalApi: true },
+        },
+      })}\n`,
+      `${JSON.stringify({ jsonrpc: '2.0', method: 'initialized' })}\n`,
+    ])
+    expect((appServer as unknown as { initialized: boolean }).initialized).toBe(true)
+    appServer.dispose()
+  })
+
+  it('defers a config restart for an ordinary pending RPC and disposes after its response', async () => {
+    const { appServer, emitLine, stop } = createAppServerHarness()
+
+    const callPromise = (appServer as unknown as {
+      call: (method: string, params: unknown) => Promise<unknown>
+    }).call('thread/list', { limit: 20 })
+
+    expect(appServer.requestConfigRestartWhenIdle()).toBe(false)
+    expect(stop).not.toHaveBeenCalled()
+
+    emitLine({ jsonrpc: '2.0', id: 1, result: { data: [] } })
+
+    await expect(callPromise).resolves.toEqual({ data: [] })
+    expect(stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a manual server request busy until its reply is written', async () => {
+    const { appServer, writes, stop } = createAppServerHarness()
+    ;(appServer as unknown as { initialized: boolean }).initialized = true
+    ;(appServer as unknown as {
+      handleServerRequest: (generation: number, id: number, method: string, params: unknown) => void
+    }).handleServerRequest(1, 7, 'item/commandExecution/requestApproval', { threadId: 'thread-1' })
+
+    expect(appServer.requestConfigRestartWhenIdle()).toBe(false)
+    await appServer.respondToServerRequest({ id: 7, generation: 1, result: { decision: 'accept' } })
+
+    expect(writes).toContain(`${JSON.stringify({
+      jsonrpc: '2.0',
+      id: 7,
+      result: { decision: 'accept' },
+    })}\n`)
+    expect(stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects pending RPCs as stopped and ignores their late responses after explicit disposal', async () => {
+    const { appServer, stop } = createAppServerHarness()
+
+    const callPromise = (appServer as unknown as {
+      call: (method: string, params: unknown) => Promise<unknown>
+    }).call('thread/list', {})
+    appServer.dispose()
+
+    await expect(callPromise).rejects.toThrow('codex app-server stopped')
+    ;(appServer as unknown as { handleLine: (line: string, generation: number) => void })
+      .handleLine(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { source: 'late' } }), 1)
+    expect(stop).toHaveBeenCalledTimes(1)
+    expect(appServer.isBusy()).toBe(false)
+  })
+
+  it('rejects pending work, invalidates server requests, and reinitializes after an unexpected exit', async () => {
+    const { appServer, writes, start, emitLine, emitExit, getActiveGeneration } = createAppServerHarness()
+    const notifications: Array<{ method: string; params: unknown }> = []
+    appServer.onNotification((notification) => notifications.push(notification))
+    const callPromise = (appServer as unknown as {
+      call: (method: string, params: unknown) => Promise<unknown>
+    }).call('thread/list', {})
+    ;(appServer as unknown as {
+      handleServerRequest: (generation: number, id: number, method: string, params: unknown) => void
+    }).handleServerRequest(1, 7, 'item/commandExecution/requestApproval', { threadId: 'thread-1' })
+
+    emitExit()
+
+    await expect(callPromise).rejects.toThrow('codex app-server exited unexpectedly')
+    expect(appServer.listPendingServerRequests()).toEqual([])
+    expect(appServer.isBusy()).toBe(false)
+    expect(notifications).toContainEqual({
+      method: 'server/requests/invalidated',
+      params: {
+        generation: 1,
+        requestIds: [7],
+        reason: 'codex app-server exited unexpectedly',
+      },
+      generation: 1,
+    })
+
+    const ensureInitialized = (appServer as unknown as {
+      ensureInitialized: () => Promise<void>
+    }).ensureInitialized.bind(appServer)
+    const initializePromise = ensureInitialized()
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(getActiveGeneration()).toBe(2)
+    expect(writes.at(-1)).toBe(`${JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'initialize',
+      params: {
+        clientInfo: { name: 'linux-codex-webui', version: '0.1.0' },
+        capabilities: { experimentalApi: true },
+      },
+    })}\n`)
+    emitLine({ jsonrpc: '2.0', id: 2, result: {} }, 2)
+    await initializePromise
+    expect(writes.at(-1)).toBe(`${JSON.stringify({ jsonrpc: '2.0', method: 'initialized' })}\n`)
+    appServer.dispose()
+  })
+
+  it('resolves every idle waiter once after the last pending RPC settles', async () => {
+    const { appServer, emitLine } = createAppServerHarness()
+    const callPromise = (appServer as unknown as {
+      call: (method: string, params: unknown) => Promise<unknown>
+    }).call('thread/list', {})
+    const firstIdle = vi.fn()
+    const secondIdle = vi.fn()
+    const firstWait = appServer.waitUntilIdle().then(firstIdle)
+    const secondWait = appServer.waitUntilIdle().then(secondIdle)
+
+    await Promise.resolve()
+    expect(firstIdle).not.toHaveBeenCalled()
+    expect(secondIdle).not.toHaveBeenCalled()
+
+    emitLine({ jsonrpc: '2.0', id: 1, result: { data: [] } })
+    await expect(callPromise).resolves.toEqual({ data: [] })
+    await Promise.all([firstWait, secondWait])
+    expect(firstIdle).toHaveBeenCalledTimes(1)
+    expect(secondIdle).toHaveBeenCalledTimes(1)
+    appServer.dispose()
   })
 })
 

@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rename, rm, mkdir, stat, cp, lstat, readlink, symlink, realpath, utimes } from 'node:fs/promises'
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
@@ -19,6 +19,12 @@ import {
   resolveAppServerRuntimeConfig,
   updateAppServerRuntimeConfig,
 } from './appServerRuntimeConfig.js'
+import {
+  AppServerJsonlTransport,
+  type AppServerJsonlTransportEvent,
+  type AppServerJsonlTransportFactory,
+  type AppServerJsonlTransportLike,
+} from './appServerJsonlTransport.js'
 import { callRpcWithRateLimitDecodeRecovery } from './rateLimitDecodeRecovery.js'
 import { handleReviewRoutes } from './reviewGit.js'
 import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoutes.js'
@@ -6514,13 +6520,10 @@ const MERGEABLE_ITEM_TYPES = new Set([
 ])
 
 export class AppServerProcess {
-  private process: ChildProcessWithoutNullStreams | null = null
-  private processGeneration = 0
-  private activeProcessGeneration = 0
+  private readonly transport: AppServerJsonlTransportLike
   private initialized = false
   private initializePromise: Promise<void> | null = null
   private nextId = 1
-  private stopping = false
   private pendingConfigRestart = false
   private readonly pending = new Map<number, { generation: number; resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
   private readonly notificationListeners = new Set<(value: AppServerNotification) => void>()
@@ -6546,7 +6549,10 @@ export class AppServerProcess {
   constructor(
     private readonly threadRuntimeState: ThreadRuntimeState | null = null,
     private readonly agentProgressTracker: AgentProgressTracker = new AgentProgressTracker(),
-  ) {}
+    transportFactory: AppServerJsonlTransportFactory = (emit) => new AppServerJsonlTransport(emit),
+  ) {
+    this.transport = transportFactory((event) => this.handleTransportEvent(event))
+  }
 
 
   private getCodexCommand(): string {
@@ -6585,7 +6591,7 @@ export class AppServerProcess {
   }
 
   private disposeIfConfigChanged(): void {
-    if (!this.process) return
+    if (!this.transport.running) return
     const config = this.buildAppServerConfig()
     const nextSignature = this.getAppServerConfigSignature(config)
     if (this.activeConfigSignature === nextSignature) return
@@ -6644,82 +6650,56 @@ export class AppServerProcess {
   }
 
   private start(): void {
-    if (this.process) return
+    if (this.transport.running) return
 
-    this.stopping = false
     const config = this.buildAppServerConfig()
     this.activeConfigSignature = this.getAppServerConfigSignature(config)
     const invocation = getSpawnInvocation(this.getCodexCommand(), config.args)
     const spawnEnv = Object.keys(config.env).length > 0
       ? { ...process.env, ...config.env }
       : undefined
-    const proc = spawn(invocation.command, invocation.args, { stdio: ['pipe', 'pipe', 'pipe'], ...(spawnEnv ? { env: spawnEnv } : {}) })
-    const generation = ++this.processGeneration
-    let readBuffer = ''
-    this.process = proc
-    this.activeProcessGeneration = generation
-
-    proc.stdout.setEncoding('utf8')
-    proc.stdout.on('data', (chunk: string) => {
-      if (this.process !== proc || this.activeProcessGeneration !== generation) return
-      readBuffer += chunk
-
-      let lineEnd = readBuffer.indexOf('\n')
-      while (lineEnd !== -1) {
-        const line = readBuffer.slice(0, lineEnd).trim()
-        readBuffer = readBuffer.slice(lineEnd + 1)
-
-        if (line.length > 0) {
-          this.handleLine(line, generation)
-        }
-
-        lineEnd = readBuffer.indexOf('\n')
-      }
-    })
-
-    proc.stderr.setEncoding('utf8')
-    proc.stderr.on('data', () => {
-      // Keep stderr silent in dev middleware; JSON-RPC errors are forwarded via responses.
-    })
-
-    proc.on('exit', () => {
-      if (this.process !== proc) {
-        return
-      }
-
-      const failure = new Error(this.stopping ? 'codex app-server stopped' : 'codex app-server exited unexpectedly')
-      for (const request of this.pending.values()) {
-        request.reject(failure)
-      }
-
-      this.pending.clear()
-      this.invalidatePendingServerRequests(generation, failure.message)
-      this.pendingServerRequests.clear()
-      this.process = null
-      this.activeProcessGeneration = 0
-      this.initialized = false
-      this.initializePromise = null
-      this.activeTurnThreadIds.clear()
-      this.optimisticTurnThreadIds.clear()
-      this.turnStartRequestThreadIds.clear()
-      this.threadRuntimeState?.clearLocalActivity()
-      this.queueAgentProgressSnapshots(this.agentProgressTracker.markProcessExit(), generation, true)
-      this.agentProgressHydratedAtByRootThreadId.clear()
-      this.agentProgressHydrationPromiseByRootThreadId.clear()
-      this.notifyIdleWaitersIfIdle()
+    this.transport.start({
+      command: invocation.command,
+      args: invocation.args,
+      ...(spawnEnv ? { env: spawnEnv } : {}),
     })
   }
 
-  private sendLine(payload: Record<string, unknown>, generation = this.activeProcessGeneration): void {
-    if (!this.process || generation === 0 || generation !== this.activeProcessGeneration) {
-      throw new Error('codex app-server is not running')
+  private handleTransportEvent(event: AppServerJsonlTransportEvent): void {
+    if (event.type === 'line') {
+      this.handleLine(event.line, event.generation)
+      return
+    }
+    this.handleUnexpectedExit(event.generation)
+  }
+
+  private handleUnexpectedExit(generation: number): void {
+    const failure = new Error('codex app-server exited unexpectedly')
+    for (const request of this.pending.values()) {
+      request.reject(failure)
     }
 
-    this.process.stdin.write(`${JSON.stringify(payload)}\n`)
+    this.pending.clear()
+    this.invalidatePendingServerRequests(generation, failure.message)
+    this.pendingServerRequests.clear()
+    this.initialized = false
+    this.initializePromise = null
+    this.activeTurnThreadIds.clear()
+    this.optimisticTurnThreadIds.clear()
+    this.turnStartRequestThreadIds.clear()
+    this.threadRuntimeState?.clearLocalActivity()
+    this.queueAgentProgressSnapshots(this.agentProgressTracker.markProcessExit(), generation, true)
+    this.agentProgressHydratedAtByRootThreadId.clear()
+    this.agentProgressHydrationPromiseByRootThreadId.clear()
+    this.notifyIdleWaitersIfIdle()
   }
 
-  private handleLine(line: string, generation = this.activeProcessGeneration): void {
-    if (generation === 0 || generation !== this.activeProcessGeneration) return
+  private sendLine(payload: Record<string, unknown>, generation = this.transport.activeGeneration): void {
+    this.transport.writeJson(payload, generation)
+  }
+
+  private handleLine(line: string, generation = this.transport.activeGeneration): void {
+    if (generation === 0 || generation !== this.transport.activeGeneration) return
     let message: JsonRpcResponse
     try {
       message = JSON.parse(line) as JsonRpcResponse
@@ -6762,7 +6742,7 @@ export class AppServerProcess {
     }
   }
 
-  private emitNotification(notification: { method: string; params: unknown }, generation = this.activeProcessGeneration): void {
+  private emitNotification(notification: { method: string; params: unknown }, generation = this.transport.activeGeneration): void {
     if (generation === 0) return
     const emittedNotification: AppServerNotification = { ...notification, generation }
     const changedProgressRoots = this.agentProgressTracker.handleNotification(
@@ -6812,7 +6792,7 @@ export class AppServerProcess {
     this.publishAgentProgressSnapshots(roots, this.pendingAgentProgressGeneration)
   }
 
-  private publishAgentProgressSnapshots(rootThreadIds: string[], generation = this.activeProcessGeneration): void {
+  private publishAgentProgressSnapshots(rootThreadIds: string[], generation = this.transport.activeGeneration): void {
     for (const rootThreadId of new Set(rootThreadIds)) {
       const progress = this.agentProgressTracker.getSnapshot(rootThreadId)
       if (!progress) continue
@@ -6898,7 +6878,7 @@ export class AppServerProcess {
     if (existing && Date.now() - hydratedAt < AGENT_PROGRESS_HYDRATION_CACHE_TTL_MS) return existing
     this.disposeIfConfigChanged()
     await this.ensureInitialized()
-    const expectedGeneration = this.activeProcessGeneration
+    const expectedGeneration = this.transport.activeGeneration
     const pending = this.agentProgressHydrationPromiseByRootThreadId.get(normalizedRootThreadId)
     if (pending) return pending
 
@@ -6911,7 +6891,7 @@ export class AppServerProcess {
       })
       .finally(() => {
         if (this.agentProgressHydrationPromiseByRootThreadId.get(normalizedRootThreadId) !== hydration) return
-        if (succeeded && this.activeProcessGeneration === expectedGeneration) {
+        if (succeeded && this.transport.activeGeneration === expectedGeneration) {
           this.agentProgressHydratedAtByRootThreadId.set(normalizedRootThreadId, Date.now())
         }
         this.agentProgressHydrationPromiseByRootThreadId.delete(normalizedRootThreadId)
@@ -6925,7 +6905,7 @@ export class AppServerProcess {
     expectedGeneration: number,
   ): Promise<AgentProgressSnapshot | null> {
     const assertCurrentGeneration = () => {
-      if (expectedGeneration === 0 || this.activeProcessGeneration !== expectedGeneration) {
+      if (expectedGeneration === 0 || this.transport.activeGeneration !== expectedGeneration) {
         throw new Error('codex app-server generation changed during agent progress recovery')
       }
     }
@@ -7175,7 +7155,7 @@ export class AppServerProcess {
         reason: readNonEmptyString(requestParams?.reason) || undefined,
         previousAccountId: previousAccountId || undefined,
       })
-      if (generation !== this.activeProcessGeneration) return
+      if (generation !== this.transport.activeGeneration) return
       this.sendServerRequestReply(generation, requestId, { result })
       this.emitNotification({
         method: 'server/request/resolved',
@@ -7188,7 +7168,7 @@ export class AppServerProcess {
         },
       }, generation)
     } catch (error) {
-      if (generation !== this.activeProcessGeneration) return
+      if (generation !== this.transport.activeGeneration) return
       this.sendServerRequestReply(generation, requestId, {
         error: {
           code: -32001,
@@ -7221,7 +7201,7 @@ export class AppServerProcess {
 
   private async call(method: string, params: unknown): Promise<unknown> {
     this.start()
-    const generation = this.activeProcessGeneration
+    const generation = this.transport.activeGeneration
     const id = this.nextId++
     const turnStartThreadId = method === 'turn/start'
       ? this.extractThreadIdFromParams(params)
@@ -7345,13 +7325,9 @@ export class AppServerProcess {
   }
 
   dispose(): void {
-    if (!this.process) return
+    if (!this.transport.running) return
 
-    const proc = this.process
-    const generation = this.activeProcessGeneration
-    this.stopping = true
-    this.process = null
-    this.activeProcessGeneration = 0
+    const generation = this.transport.stop()
     this.initialized = false
     this.initializePromise = null
     this.activeConfigSignature = ''
@@ -7374,29 +7350,6 @@ export class AppServerProcess {
     this.agentProgressFlushTimer = null
     this.pendingAgentProgressRootIds.clear()
     this.notifyIdleWaitersIfIdle()
-
-    try {
-      proc.stdin.end()
-    } catch {
-      // ignore close errors on shutdown
-    }
-
-    try {
-      proc.kill('SIGTERM')
-    } catch {
-      // ignore kill errors on shutdown
-    }
-
-    const forceKillTimer = setTimeout(() => {
-      if (!proc.killed) {
-        try {
-          proc.kill('SIGKILL')
-        } catch {
-          // ignore kill errors on shutdown
-        }
-      }
-    }, 1500)
-    forceKillTimer.unref()
   }
 
   async disposeWhenIdle(): Promise<void> {
