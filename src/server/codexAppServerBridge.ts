@@ -8759,6 +8759,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             threadId,
             includeTurns: true,
           }))
+          // Bound app-server history before inline-media scanning and snapshot retention.
           const boundedThreadReadResult = limitThreadCommandOutputs(threadReadResult)
           const sanitized = await sanitizeThreadTurnsInlinePayloads('thread/read', boundedThreadReadResult)
           appServer.storeThreadReadSnapshot(threadId, sanitized)
@@ -8793,6 +8794,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             }
           }
 
+          // Captured notifications and session recovery can add commands after the snapshot pass.
           turns = limitCommandOutputsInTurns(turns)
 
           const lastTurn = turns.length > 0 ? asRecord(turns[turns.length - 1]) : null
