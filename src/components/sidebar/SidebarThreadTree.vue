@@ -619,6 +619,49 @@
         >
           {{ t('Archive chat') }}
         </button>
+        <button
+          class="thread-menu-item thread-menu-item-danger"
+          type="button"
+          :disabled="!hasLoadedPinnedThreadState || isSavingPinnedThreadState"
+          @click="openPermanentlyDeleteDialog(openThreadMenuThread)"
+        >
+          {{ t('Delete permanently') }}
+        </button>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="permanentlyDeleteCandidate" class="rename-thread-overlay" @click.self="closePermanentlyDeleteDialog">
+        <div
+          class="rename-thread-panel"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="t('Permanently delete thread?')"
+          @keydown.esc.prevent="closePermanentlyDeleteDialog"
+        >
+          <h3 class="rename-thread-title">{{ t('Permanently delete thread?') }}</h3>
+          <p class="rename-thread-subtitle">
+            {{ t('This permanently deletes "{title}" and cannot be undone.', { title: permanentlyDeleteCandidate.title }) }}
+          </p>
+          <div class="rename-thread-actions">
+            <button
+              class="rename-thread-button"
+              type="button"
+              :disabled="isPermanentlyDeletingThread || isSavingPinnedThreadState"
+              @click="closePermanentlyDeleteDialog"
+            >
+              {{ t('Cancel') }}
+            </button>
+            <button
+              class="rename-thread-button rename-thread-button-danger"
+              type="button"
+              :disabled="isPermanentlyDeletingThread || isSavingPinnedThreadState"
+              @click="confirmPermanentlyDeleteThread"
+            >
+              {{ t('Delete permanently') }}
+            </button>
+          </div>
+        </div>
       </div>
     </Teleport>
 
@@ -873,6 +916,7 @@ const { recordVisibleFailure } = useFeedbackDiagnostics()
 const emit = defineEmits<{
   select: [threadId: string]
   archive: [threadId: string]
+  'permanently-delete': [request: { threadId: string; onComplete: (deleted: boolean) => void }]
   'start-new-thread': [projectName: string]
   'browse-thread-files': [threadId: string]
   'save-thread-project': [threadId: string]
@@ -962,6 +1006,8 @@ const renameThreadDialogVisible = ref(false)
 const renameThreadDialogThreadId = ref('')
 const renameThreadDraft = ref('')
 const renameThreadInputRef = ref<HTMLInputElement | null>(null)
+const permanentlyDeleteCandidate = ref<Pick<UiThread, 'id' | 'title'> | null>(null)
+const isPermanentlyDeletingThread = ref(false)
 const automationByThreadId = ref<Record<string, UiThreadAutomation[]>>({})
 const automationByProjectName = ref<Record<string, UiThreadAutomation[]>>({})
 const automationDialogVisible = ref(false)
@@ -1763,6 +1809,41 @@ async function archiveThreadFromMenu(threadId: string): Promise<void> {
   closeThreadMenu()
   if (isPinned(threadId) && !(await togglePin(threadId))) return
   emit('archive', threadId)
+}
+
+function openPermanentlyDeleteDialog(thread: UiThread): void {
+  permanentlyDeleteCandidate.value = { id: thread.id, title: thread.title }
+  closeThreadMenu()
+}
+
+function closePermanentlyDeleteDialog(): void {
+  if (isPermanentlyDeletingThread.value || isSavingPinnedThreadState.value) return
+  permanentlyDeleteCandidate.value = null
+}
+
+async function confirmPermanentlyDeleteThread(): Promise<void> {
+  const candidate = permanentlyDeleteCandidate.value
+  if (
+    !candidate
+    || !hasLoadedPinnedThreadState.value
+    || isPermanentlyDeletingThread.value
+    || isSavingPinnedThreadState.value
+  ) return
+
+  const wasPinned = isPinned(candidate.id)
+  isPermanentlyDeletingThread.value = true
+  try {
+    if (wasPinned && !(await togglePin(candidate.id))) return
+    const deleted = await new Promise<boolean>((resolve) => {
+      emit('permanently-delete', { threadId: candidate.id, onComplete: resolve })
+    })
+    if (!deleted && wasPinned && !isPinned(candidate.id)) {
+      await togglePin(candidate.id)
+    }
+    permanentlyDeleteCandidate.value = null
+  } finally {
+    isPermanentlyDeletingThread.value = false
+  }
 }
 
 function openAutomationDialog(threadId: string): void {

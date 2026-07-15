@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import {
 
   archiveThread,
+  permanentlyDeleteThread,
   forkThread,
   getAvailableCollaborationModes,
   getAccountRateLimits,
@@ -5270,6 +5271,30 @@ export function useDesktopState() {
     }
   }
 
+  async function permanentlyDeleteThreadById(threadId: string): Promise<boolean> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return false
+
+    const nextSelectedThreadId = findAdjacentThreadId(flattenThreads(projectGroups.value), normalizedThreadId)
+
+    try {
+      await permanentlyDeleteThread(normalizedThreadId)
+    } catch (unknownError) {
+      error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+      return false
+    }
+
+    removeArchivedThreadFromLoadedLists(normalizedThreadId)
+    if (selectedThreadId.value === normalizedThreadId) {
+      setSelectedThreadId(nextSelectedThreadId)
+      if (nextSelectedThreadId) {
+        void loadMessages(nextSelectedThreadId, { silent: true })
+      }
+    }
+    pruneThreadScopedState(flattenThreads(projectGroups.value))
+    return true
+  }
+
   async function renameThreadById(threadId: string, threadName: string) {
     const normalizedName = threadName.trim()
     if (!threadId || !normalizedName) return
@@ -6526,6 +6551,7 @@ export function useDesktopState() {
     setThreadTerminalOpen,
     toggleSelectedThreadTerminal,
     archiveThreadById,
+    permanentlyDeleteThreadById,
     renameThreadById,
     forkThreadById,
     forkThreadFromTurn,

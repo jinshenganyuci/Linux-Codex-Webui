@@ -14,6 +14,7 @@ import type { WorkspaceRootsState } from '../api/codexGateway'
 
 const gatewayMocks = vi.hoisted(() => ({
   archiveThread: vi.fn(),
+  permanentlyDeleteThread: vi.fn(),
   forkThread: vi.fn(),
   getAccountRateLimits: vi.fn(),
   getAgentProgress: vi.fn(),
@@ -118,6 +119,8 @@ function installTestWindow(initialStorage: Record<string, string> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  gatewayMocks.archiveThread.mockResolvedValue(undefined)
+  gatewayMocks.permanentlyDeleteThread.mockResolvedValue(undefined)
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
   gatewayMocks.getThreadModelPreferences.mockResolvedValue({})
   gatewayMocks.getThreadRuntimeStates.mockResolvedValue([])
@@ -1821,6 +1824,86 @@ describe('findAdjacentThreadId', () => {
 
   it('returns no fallback when there is no adjacent thread', () => {
     expect(findAdjacentThreadId([thread('selected-thread', '/tmp/project')], 'selected-thread')).toBe('')
+  })
+})
+
+describe('permanent thread deletion', () => {
+  it('deletes directly without archiving and selects the adjacent thread after success', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockReset().mockResolvedValue({
+      groups: [{
+        projectName: 'Project',
+        threads: [
+          thread('first-thread', '/tmp/project'),
+          thread('delete-me', '/tmp/project'),
+          thread('next-thread', '/tmp/project'),
+        ],
+      }],
+      nextCursor: null,
+    })
+    let resolveDelete!: () => void
+    gatewayMocks.permanentlyDeleteThread.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      resolveDelete = resolve
+    }))
+    gatewayMocks.resumeThread.mockResolvedValue({
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    state.primeSelectedThread('first-thread')
+
+    const deletion = state.permanentlyDeleteThreadById('delete-me')
+    state.primeSelectedThread('delete-me')
+    resolveDelete()
+    const deleted = await deletion
+
+    expect(deleted).toBe(true)
+    expect(gatewayMocks.permanentlyDeleteThread).toHaveBeenCalledOnce()
+    expect(gatewayMocks.permanentlyDeleteThread).toHaveBeenCalledWith('delete-me')
+    expect(gatewayMocks.archiveThread).not.toHaveBeenCalled()
+    expect(state.projectGroups.value.flatMap((group) => group.threads.map((row) => row.id))).toEqual([
+      'first-thread',
+      'next-thread',
+    ])
+    expect(state.selectedThreadId.value).toBe('next-thread')
+    expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the thread and current selection when permanent deletion fails', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockReset().mockResolvedValue({
+      groups: [{
+        projectName: 'Project',
+        threads: [
+          thread('keep-thread', '/tmp/project'),
+          thread('delete-me', '/tmp/project'),
+        ],
+      }],
+      nextCursor: null,
+    })
+    gatewayMocks.permanentlyDeleteThread.mockRejectedValueOnce(new Error('delete failed'))
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    state.primeSelectedThread('delete-me')
+
+    const deleted = await state.permanentlyDeleteThreadById('delete-me')
+
+    expect(deleted).toBe(false)
+    expect(gatewayMocks.archiveThread).not.toHaveBeenCalled()
+    expect(state.projectGroups.value.flatMap((group) => group.threads.map((row) => row.id))).toEqual([
+      'keep-thread',
+      'delete-me',
+    ])
+    expect(state.selectedThreadId.value).toBe('delete-me')
+    expect(state.error.value).toBe('delete failed')
   })
 })
 

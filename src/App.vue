@@ -105,6 +105,7 @@
             :search-matched-thread-ids="serverMatchedThreadIds"
             @select="onSelectThread"
             @archive="onArchiveThread"
+            @permanently-delete="onPermanentlyDeleteThread"
             @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
             @browse-thread-files="onBrowseThreadFiles"
             @save-thread-project="onSaveThreadProject"
@@ -1102,6 +1103,7 @@ const {
   setThreadTerminalOpen,
   toggleSelectedThreadTerminal,
   archiveThreadById,
+  permanentlyDeleteThreadById,
   forkThreadById,
   renameThreadById,
   forkThreadFromTurn,
@@ -2334,6 +2336,10 @@ function onArchivedThreadsChanged(): void {
 
 function onArchiveThread(threadId: string): void {
   void archiveThreadById(threadId)
+}
+
+function onPermanentlyDeleteThread(request: { threadId: string; onComplete: (deleted: boolean) => void }): void {
+  void permanentlyDeleteThreadById(request.threadId).then(request.onComplete)
 }
 
 async function onForkThread(threadId: string): Promise<void> {

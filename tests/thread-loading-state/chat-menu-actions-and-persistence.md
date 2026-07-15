@@ -19,6 +19,7 @@
 | Pin this chat | Pin, reload, then reopen the same menu. | The chat remains under `Pinned chats`; the menu changes to `Unpin this chat`. | Must persist through `/codex-api/thread-pins`. |
 | Rename thread | Rename the disposable chat. | Sidebar and conversation heading use the new title. | The title remains after reload. |
 | Archive chat | Archive the disposable chat. | It leaves the active sidebar and appears in archived conversations. | Archive state remains after reload; an existing pin is explicitly removed. |
+| Delete permanently | Open the action directly below `Archive chat`, cancel once, then reopen and confirm. | Cancel keeps the chat. Confirm sends one `thread/delete` and no `thread/archive`; the chat leaves the active and pinned lists, and the current route moves to an adjacent chat when needed. | After reload, the chat is absent from both active and archived conversations. |
 
 ## Failure checks
 
@@ -29,6 +30,10 @@
 2. Reload after each successful persistent action.
    - Only actions marked persistent above must survive reload.
    - Clipboard, navigation, and download actions must not create fake saved state.
+3. Make the permanent-delete request fail.
+   - The chat, current selection, and pin state must remain unchanged, and the error must remain visible.
+4. After a successful permanent delete, query `thread/list` with both `archived:false` and `archived:true`.
+   - The deleted chat id must be absent from both results.
 
 ## Rollback / cleanup
 
