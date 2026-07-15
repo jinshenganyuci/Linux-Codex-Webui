@@ -60,66 +60,36 @@
                   :key="`grouped-cmd-${cmd.id}`"
                   class="worked-cmd-item"
                 >
-                  <button
-                    type="button"
-                    class="cmd-row"
-                    :class="[
-                      commandStatusClass(cmd),
-                      {
-                        'cmd-expanded': isCommandExpanded(cmd),
-                        'cmd-compact': true,
-                      },
-                    ]"
-                    @click="toggleCommandExpand(cmd)"
-                  >
-                    <span class="cmd-chevron" :class="{ 'cmd-chevron-open': isCommandExpanded(cmd) }">▶</span>
-                    <code class="cmd-label">{{ cmd.commandExecution?.command || t('(command)') }}</code>
-                    <span class="cmd-status">{{ commandStatusLabel(cmd) }}</span>
-                  </button>
-                  <div
-                    class="cmd-output-wrap"
-                    :class="{ 'cmd-output-visible': isCommandExpanded(cmd) }"
-                  >
-                    <div class="cmd-output-inner">
-                      <pre
-                        class="cmd-output"
-                        :class="{ 'cmd-output-condensed': isCommandOutputCondensed(cmd) }"
-                        v-text="cmd.commandExecution?.aggregatedOutput || t('(no output)')"
-                      ></pre>
-                    </div>
-                  </div>
+                  <CommandExecutionBlock
+                    :instance-id="`timeline-group:${message.id}:${cmd.id}`"
+                    :command="cmd.commandExecution?.command || ''"
+                    :output="cmd.commandExecution?.aggregatedOutput || ''"
+                    :status-label="commandStatusLabel(cmd)"
+                    :status-class="commandStatusClass(cmd)"
+                    :expanded="isCommandGroupExpanded(message) && isCommandExpanded(cmd)"
+                    :compact="true"
+                    :condensed="isCommandOutputCondensed(cmd)"
+                    :command-fallback="t('(command)')"
+                    :empty-output-label="t('(no output)')"
+                    @toggle="toggleCommandExpand(cmd)"
+                  />
                 </div>
               </div>
             </div>
             <template v-else>
-              <button
-                type="button"
-                class="cmd-row"
-                :class="[
-                  commandStatusClass(message),
-                  {
-                    'cmd-expanded': isCommandExpanded(message),
-                    'cmd-compact': isCommandCompact(message),
-                  },
-                ]"
-                @click="toggleCommandExpand(message)"
-              >
-                <span class="cmd-chevron" :class="{ 'cmd-chevron-open': isCommandExpanded(message) }">▶</span>
-                <code class="cmd-label">{{ message.commandExecution?.command || t('(command)') }}</code>
-                <span class="cmd-status">{{ commandStatusLabel(message) }}</span>
-              </button>
-              <div
-                class="cmd-output-wrap"
-                :class="{ 'cmd-output-visible': isCommandExpanded(message) }"
-              >
-                <div class="cmd-output-inner">
-                  <pre
-                    class="cmd-output"
-                    :class="{ 'cmd-output-condensed': isCommandOutputCondensed(message) }"
-                    v-text="message.commandExecution?.aggregatedOutput || t('(no output)')"
-                  ></pre>
-                </div>
-              </div>
+              <CommandExecutionBlock
+                :instance-id="`timeline:${message.id}`"
+                :command="message.commandExecution?.command || ''"
+                :output="message.commandExecution?.aggregatedOutput || ''"
+                :status-label="commandStatusLabel(message)"
+                :status-class="commandStatusClass(message)"
+                :expanded="isCommandExpanded(message)"
+                :compact="isCommandCompact(message)"
+                :condensed="isCommandOutputCondensed(message)"
+                :command-fallback="t('(command)')"
+                :empty-output-label="t('(no output)')"
+                @toggle="toggleCommandExpand(message)"
+              />
             </template>
           </div>
         </div>
@@ -294,34 +264,19 @@
                       :key="`worked-cmd-${cmd.id}`"
                       class="worked-cmd-item"
                     >
-                      <button
-                        type="button"
-                        class="cmd-row"
-                        :class="[
-                          commandStatusClass(cmd),
-                          {
-                            'cmd-expanded': isCommandExpanded(cmd),
-                            'cmd-compact': isCommandCompact(cmd),
-                          },
-                        ]"
-                        @click="toggleCommandExpand(cmd)"
-                      >
-                        <span class="cmd-chevron" :class="{ 'cmd-chevron-open': isCommandExpanded(cmd) }">▶</span>
-                        <code class="cmd-label">{{ cmd.commandExecution?.command || t('(command)') }}</code>
-                        <span class="cmd-status">{{ commandStatusLabel(cmd) }}</span>
-                      </button>
-                      <div
-                        class="cmd-output-wrap"
-                        :class="{ 'cmd-output-visible': isCommandExpanded(cmd) }"
-                      >
-                        <div class="cmd-output-inner">
-                          <pre
-                            class="cmd-output"
-                            :class="{ 'cmd-output-condensed': isCommandOutputCondensed(cmd) }"
-                            v-text="cmd.commandExecution?.aggregatedOutput || t('(no output)')"
-                          ></pre>
-                        </div>
-                      </div>
+                      <CommandExecutionBlock
+                        :instance-id="`worked:${message.id}:${cmd.id}`"
+                        :command="cmd.commandExecution?.command || ''"
+                        :output="cmd.commandExecution?.aggregatedOutput || ''"
+                        :status-label="commandStatusLabel(cmd)"
+                        :status-class="commandStatusClass(cmd)"
+                        :expanded="isCommandExpanded(cmd)"
+                        :compact="isCommandCompact(cmd)"
+                        :condensed="isCommandOutputCondensed(cmd)"
+                        :command-fallback="t('(command)')"
+                        :empty-output-label="t('(no output)')"
+                        @toggle="toggleCommandExpand(cmd)"
+                      />
                     </div>
                   </div>
                 </div>
@@ -939,6 +894,7 @@ import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerGitFork from '../icons/IconTablerGitFork.vue'
 import IconTablerX from '../icons/IconTablerX.vue'
 import TurnProgressCard from './TurnProgressCard.vue'
+import CommandExecutionBlock from './thread-conversation/CommandExecutionBlock.vue'
 
 type HighlightJsModule = (typeof import('highlight.js/lib/common'))['default']
 
@@ -5296,10 +5252,6 @@ onBeforeUnmount(() => {
   font-size: 9px;
 }
 
-.cmd-row.cmd-compact .cmd-label {
-  font-size: 0.75rem;
-}
-
 .cmd-row.cmd-compact .cmd-status {
   max-width: 4.5rem;
   font-size: 0.75rem;
@@ -5315,10 +5267,6 @@ onBeforeUnmount(() => {
 
 .cmd-chevron-open {
   transform: rotate(90deg);
-}
-
-.cmd-label {
-  @apply flex-1 min-w-0 truncate text-xs font-mono text-zinc-700;
 }
 
 .cmd-group-label {
@@ -5341,20 +5289,6 @@ onBeforeUnmount(() => {
   @apply text-rose-600;
 }
 
-.cmd-output-wrap {
-  @apply rounded-b-lg bg-zinc-900;
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 300ms ease-out, border-color 300ms ease-out;
-  border: 1px solid transparent;
-  border-top: none;
-}
-
-.cmd-output-wrap.cmd-output-visible {
-  grid-template-rows: 1fr;
-  border-color: #e4e4e7;
-}
-
 .cmd-group-wrap {
   display: grid;
   grid-template-rows: 0fr;
@@ -5367,19 +5301,6 @@ onBeforeUnmount(() => {
 
 .cmd-group-inner {
   @apply mb-1 flex min-h-0 flex-col gap-1 overflow-hidden pl-2;
-}
-
-.cmd-output-inner {
-  overflow: hidden;
-  min-height: 0;
-}
-
-.cmd-output {
-  @apply m-0 px-3 py-2 text-xs font-mono text-zinc-200 whitespace-pre-wrap break-words max-h-60 overflow-y-auto;
-}
-
-.cmd-output.cmd-output-condensed {
-  max-height: 9rem;
 }
 
 .file-change-summary-block {
