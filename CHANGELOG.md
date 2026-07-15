@@ -6,6 +6,52 @@
 
 ## 2026-07-15
 
+### 采用绞杀式拆分收敛前端与 app-server bridge
+
+#### 问题或目标
+
+- `App.vue`、`ThreadConversation.vue`、`useDesktopState.ts`、`codexGateway.ts` 和 `codexAppServerBridge.ts` 长期集中了过多协调职责，修改一个领域时容易误伤实时通知、线程恢复、项目传输或渲染协议。
+- 本阶段不推倒重写，而是先使用特征与契约测试固定行为，再以 facade 保留原入口、逐个抽出纯逻辑和领域控制器，最后整理 app-server 子进程边界。
+- 同时治理长会话的两个明确性能风险：折叠命令的大文本节点仍常驻 DOM，以及单个历史 `commandExecution.aggregatedOutput` 可以无界增长。
+
+#### 实现内容
+
+- `04532fa` 拆分线程运行态轮询控制器：将运行线程 ID 汇总、单 timer、in-flight 门禁、前台/联网唤醒、代际隔离和 UUIDv7 旧终态防护移出 `useDesktopState`，保留 2 秒活动与 15 秒空闲校验语义。
+- `d77917a` 抽取命令执行消息组件：用 `CommandExecutionBlock` 和纯展示模型统一时间线、命令组与 worked 详情中的三套重复 DOM，并保留原状态、输出文本和 ARIA 契约。
+- `4e3c7fb` 收缩应用壳：抽出 `useAppPreferences`、Codex 登录弹窗和项目 ZIP 导出弹窗，保留七个 `localStorage` 键、原 props/emits、焦点和错误反馈行为。
+- `44f08af` 按需挂载折叠命令输出：折叠时不再创建 `<pre>` 及其大文本节点，展开时才挂载完整输出，折叠/展开交互与原始消息数据不变。
+- `79cde62` 抽出实时增量批处理：将代理文本、命令输出和推理文本三通道统一到一个 180 ms 控制器，保持 512/256/128 KiB 尾部限额、顺序和清理时机。
+- `d0edd24` 修复弹窗暗色作用域：将 scoped CSS 中不稳定的暗色后代选择器改为整段全局选择器，确保登录、ZIP、输入框、按钮和错误面在暗色页面上使用深色表面。
+- `a3cbf9c` 抽取项目工作区前端网关：将工作区根目录缓存、目录浏览、项目打开、ZIP、GitHub 克隆、项目与文件搜索移入 `projectGateway`，`codexGateway` 继续重导出原函数与类型。
+- `35b51fe` 限制历史命令输出响应体：在普通 thread RPC、历史分页、live-state、Session 恢复和快照回退路径统一保留每项最新 256 KiB UTF-8 尾部，并添加截断标记和原始字节数；正常输出逐字不变。
+- `1809417` 拆分线程列表加载控制器：封装首屏 single-flight、2 秒复用窗口、10 秒后台串行分页、活动任务暂停、项目分组合并和归档剔除，保留 `thread/list` 游标与排序。
+- `c67b2ad` 下沉项目 ZIP 传输流程：用 `useProjectZipTransfer` 封装导出进度、下载/分享错误映射、隐藏文件输入、导入互斥与根目录/线程/默认项目名刷新顺序，`App.vue` 只保留应用级编排。
+- `65f131d` 拆分会话 Markdown 渲染管线：将路径/内联 token、块级语法、HTML 输出和共享类型抽到 `markdownInline`、`markdownBlocks`、`markdownHtml` 和 `markdownTypes`，保留文件链接、列表、表格、代码高亮与 LRU 缓存行为。
+- `4e8ea58` 说明历史输出限额的两个阶段：标注 snapshot/扫描前限额与 Session/通知合并后限额的不同保护目的，避免后续将幂等防线误当重复代码删除。
+- `aa10851` 抽取 app-server JSONL transport：封装惰性单进程启动、UTF-8 分块换行组帧、generation 隔离、精确 JSON 行写入、显式停止及 SIGTERM/1500 ms SIGKILL 兜底，`AppServerProcess` 保留 RPC、通知与业务生命周期门面。
+- `28b96fa` 补充五份分层重构手工验收文档：增加折叠命令无 `<pre>`、256 KiB UTF-8 限额、线程分页去重、ZIP 单请求流程和 TestChat 链接契约的前置条件、操作、预期与清理步骤。
+- `a35f23c` 修复 transport 异常退出清理：使用 `try/finally` 保证 bridge 或通知监听器抛错时仍按 child 身份与 generation 双重条件清理旧运行态，后续可正常重启。
+- `62faba7` 校准手工验收语义：分开“浏览器不支持分享”与“权限阻止分享”的提示，并将后台分页等待改为首屏响应后的两个完整十秒间隔及各页响应。
+
+#### 用户影响
+
+- 日常路由、发送、恢复、实时消息、项目 ZIP、登录、项目搜索、线程排序和 Markdown 显示保持原行为；本阶段没有更换 Vue、Vite、Express 或 Codex app-server 技术栈。
+- 折叠命令不再常驻大输出 DOM；超大历史命令显示截断标记与最新 256 KiB 尾部，普通输出不变。
+- 登录与 ZIP 弹窗在浅色和深色主题下保持可读；既有本地偏好、Session、项目 ZIP 和 Codex 配置不需迁移。
+
+#### 测试验证
+
+- 全量单元测试 34 个文件、321 项全部通过；`pnpm exec vue-tsc --noEmit`、前端/CLI 完整构建、`node dist-cli/index.js --help` 和 `git diff --check` 全部通过。
+- 浏览器验收使用 `1440x1000` 视口：TestChat 唯一标记的文件链接在明暗主题下均满足 `hrefOk/titleOk/textOk/target/rel`；协议 fixture 下命令块满足折叠 `pre=0`、展开 `pre=1`、再折叠 `pre=0`；ZIP 弹窗单次 GET 并完成明暗主题截图，Codex 登录弹窗的链接、回调输入、禁用提交和取消状态均正常。
+- 最终性能门禁复跑中，主页 `thread/list=1`、`totalApiKB=102.9`、`warnings=[]`；目标线程 `threadReadWithTurns=1`、`duplicateKeys=0`、`warnings=[]`、`totalApiKB=417.1`。更早的同一实时数据对比样本中，当前分支为 423.2 KiB，基线为 418.0 KiB。早期一次额外读取已用 trace 定位为 WebSocket `responseStreamDisconnected` 重连事件在 220 ms debounce 后触发的一致性刷新，基线无该事件且后续复跑未复现，因此保留刷新逻辑。
+- 最终 Vite 主包 580.82 kB（gzip 179.97 kB），会话懒加载 chunk 86.01 kB（gzip 25.15 kB）；新控制器保持单 timer、单 in-flight 或串行请求，未引入无界扇出或新的全局缓存。
+
+#### 部署或回滚注意事项
+
+- HTTP URL、WebSocket/SSE、RPC method 与既有 payload、CLI 参数、`localStorage` 键和 Codex Session 持久化格式不变，不需要数据迁移。
+- 本阶段同时包含前端渲染与 bridge/transport 保护，部署时应使用同一提交生成的 `dist` 与 `dist-cli`；回滚可按上述离散提交的领域边界逐项回退。
+- 256 KiB 限额只作用于返回给 WebUI 的历史命令输出，不重写原 Session；回滚限额不会恢复或删除任何会话数据。
+
 ### 新增真实的主代理与多级子代理进度展示
 
 #### 问题或目标
