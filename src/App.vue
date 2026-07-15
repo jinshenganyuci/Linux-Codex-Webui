@@ -1073,122 +1073,33 @@
       </section>
     </template>
   </DesktopLayout>
-  <div v-if="projectZipExportStatus.phase !== 'idle'" class="project-zip-modal-backdrop" role="presentation">
-    <div class="project-zip-modal" role="dialog" aria-modal="true" :aria-label="t('Export Project')" @click.stop>
-      <div class="project-zip-modal-header">
-        <h2 class="project-zip-modal-title">{{ t('Export Project') }}</h2>
-        <button
-          class="project-zip-modal-close"
-          type="button"
-          :aria-label="t('Close')"
-          :disabled="projectZipExportStatus.phase === 'exporting'"
-          @click="onCloseProjectZipExportModal"
-        >
-          ×
-        </button>
-      </div>
-      <p class="project-zip-modal-copy">
-        {{ projectZipExportStatus.phase === 'exporting' ? t('Preparing project ZIP...') : projectZipExportStatus.fileName }}
-      </p>
-      <div class="project-zip-progress-label" role="status" aria-live="polite">
-        <span>{{ projectZipExportStatus.phase === 'exporting' ? t('Exporting') : t('Ready') }}</span>
-        <span>{{ projectZipProgressText }}</span>
-      </div>
-      <div class="project-zip-progress-track">
-        <div class="project-zip-progress-fill" :style="{ width: projectZipProgressWidth }" />
-      </div>
-      <p v-if="projectZipExportStatus.error" class="project-zip-modal-error" role="alert">
-        {{ projectZipExportStatus.error }}
-      </p>
-      <div class="project-zip-modal-actions">
-        <button class="project-zip-modal-cancel" type="button" :disabled="projectZipExportStatus.phase === 'exporting'" @click="onCloseProjectZipExportModal">
-          {{ t('Close') }}
-        </button>
-        <button class="project-zip-modal-action" type="button" :disabled="!projectZipExportStatus.blob" @click="onDownloadProjectZipExport">
-          {{ t('Download') }}
-        </button>
-        <button class="project-zip-modal-action project-zip-modal-action-primary" type="button" :disabled="!projectZipExportStatus.blob" @click="onShareProjectZipExport">
-          {{ t('Share') }}
-        </button>
-      </div>
-    </div>
-  </div>
-  <div
+  <ProjectZipExportModal
+    v-if="projectZipExportStatus.phase !== 'idle'"
+    :status="projectZipExportStatus"
+    @close="onCloseProjectZipExportModal"
+    @download="onDownloadProjectZipExport"
+    @share="onShareProjectZipExport"
+  />
+  <CodexLoginModal
     v-if="isCodexLoginModalOpen"
-    class="codex-login-modal-backdrop"
-    role="presentation"
-    @click="onCancelCodexLoginModal"
-  >
-    <form
-      class="codex-login-modal"
-      role="dialog"
-      aria-modal="true"
-      :aria-label="t('Complete Codex login')"
-      @submit.prevent="onSubmitCodexLoginCallback"
-      @click.stop
-    >
-      <div class="codex-login-modal-header">
-        <h2 class="codex-login-modal-title">{{ t('Complete Codex login') }}</h2>
-        <button
-          class="codex-login-modal-close"
-          type="button"
-          :aria-label="t('Close')"
-          :disabled="isCompletingCodexLogin"
-          @click="onCancelCodexLoginModal"
-        >
-          ×
-        </button>
-      </div>
-      <p class="codex-login-modal-copy">
-        {{ t('Finish login in the browser, then paste the localhost callback URL here.') }}
-      </p>
-      <a
-        v-if="codexLoginUrl"
-        class="codex-login-modal-link"
-        :href="codexLoginUrl"
-        target="_blank"
-        rel="noreferrer"
-      >
-        {{ t('Open login URL') }}
-      </a>
-      <input
-        ref="codexLoginCallbackInputRef"
-        v-model="codexLoginCallbackUrl"
-        class="codex-login-modal-input"
-        type="url"
-        inputmode="url"
-        :placeholder="t('Paste localhost callback URL')"
-        :disabled="isCompletingCodexLogin"
-      >
-      <div v-if="accountActionError" class="codex-login-modal-error visible-error-with-feedback">
-        <span>{{ accountActionError }}</span>
-        <a class="visible-error-feedback" :href="feedbackMailto" @click="prepareFeedbackLink($event, accountActionError)">{{ t('Send feedback') }}</a>
-      </div>
-      <div class="codex-login-modal-actions">
-        <button
-          class="codex-login-modal-cancel"
-          type="button"
-          :disabled="isCompletingCodexLogin"
-          @click="onCancelCodexLoginModal"
-        >
-          {{ t('Cancel') }}
-        </button>
-        <button
-          class="codex-login-modal-submit"
-          type="submit"
-          :disabled="isCompletingCodexLogin || codexLoginCallbackUrl.trim().length === 0"
-        >
-          {{ isCompletingCodexLogin ? t('Completing…') : t('Complete') }}
-        </button>
-      </div>
-    </form>
-  </div>
+    ref="codexLoginModalRef"
+    v-model:callback-url="codexLoginCallbackUrl"
+    :login-url="codexLoginUrl"
+    :error="accountActionError"
+    :is-completing="isCompletingCodexLogin"
+    :feedback-mailto="feedbackMailto"
+    @cancel="onCancelCodexLoginModal"
+    @submit="onSubmitCodexLoginCallback"
+    @prepare-feedback="prepareFeedbackLink"
+  />
 </template>
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DesktopLayout from './components/layout/DesktopLayout.vue'
+import CodexLoginModal from './components/app/CodexLoginModal.vue'
+import ProjectZipExportModal from './components/app/ProjectZipExportModal.vue'
 import SidebarThreadTree from './components/sidebar/SidebarThreadTree.vue'
 import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
@@ -1209,6 +1120,7 @@ import { useDesktopState } from './composables/useDesktopState'
 import { useMobile } from './composables/useMobile'
 import { useUiLanguage } from './composables/useUiLanguage'
 import { useFeedbackDiagnostics } from './composables/useFeedbackDiagnostics'
+import { useAppPreferences } from './composables/app/useAppPreferences'
 import {
   checkoutGitBranch,
   cloneGithubRepository,
@@ -1247,6 +1159,7 @@ import {
 } from './api/codexGateway'
 import type { CodexPermissionMode, ReasoningEffort, SpeedMode, UiAccountEntry, UiRateLimitWindow, UiServerRequest, UiServerRequestReply, UiThreadAutomation } from './types/codex'
 import type { ComposerDraftPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
+import type { ProjectZipExportStatus } from './components/app/projectZipExportModal'
 import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, TelegramStatus, ThreadTerminalQuickCommand, WorktreeBranchOption } from './api/codexGateway'
 import { getFreeModeStatus, setFreeMode, setFreeModeCustomKey, setCustomProvider } from './api/codexGateway'
 import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
@@ -1276,8 +1189,6 @@ const SETTINGS_HELP = {
   dictationLanguage: t('Choose transcription language or keep auto-detect.'),
 } as const
 
-type ChatWidthMode = 'standard' | 'wide' | 'extra-wide'
-
 type TerminalHeaderQuickCommand = {
   label: string
   value: string
@@ -1298,133 +1209,6 @@ type DirectoryTryItemPayload = {
   skillPath?: string
   prompt?: string
   attachedSkills?: Array<{ name: string; path: string }>
-}
-
-type ChatWidthPreset = {
-  label: string
-  columnMax: string
-  cardMax: string
-}
-
-const CHAT_WIDTH_PRESETS: Record<ChatWidthMode, ChatWidthPreset> = {
-  standard: {
-    label: 'Standard',
-    columnMax: '45rem',
-    cardMax: '76ch',
-  },
-  wide: {
-    label: 'Wide',
-    columnMax: '72rem',
-    cardMax: '88ch',
-  },
-  'extra-wide': {
-    label: 'Extra wide',
-    columnMax: '96rem',
-    cardMax: '96ch',
-  },
-}
-
-const WHISPER_LANGUAGES: Record<string, string> = {
-  en: 'english',
-  zh: 'chinese',
-  de: 'german',
-  es: 'spanish',
-  ru: 'russian',
-  ko: 'korean',
-  fr: 'french',
-  ja: 'japanese',
-  pt: 'portuguese',
-  tr: 'turkish',
-  pl: 'polish',
-  ca: 'catalan',
-  nl: 'dutch',
-  ar: 'arabic',
-  sv: 'swedish',
-  it: 'italian',
-  id: 'indonesian',
-  hi: 'hindi',
-  fi: 'finnish',
-  vi: 'vietnamese',
-  he: 'hebrew',
-  uk: 'ukrainian',
-  el: 'greek',
-  ms: 'malay',
-  cs: 'czech',
-  ro: 'romanian',
-  da: 'danish',
-  hu: 'hungarian',
-  ta: 'tamil',
-  no: 'norwegian',
-  th: 'thai',
-  ur: 'urdu',
-  hr: 'croatian',
-  bg: 'bulgarian',
-  lt: 'lithuanian',
-  la: 'latin',
-  mi: 'maori',
-  ml: 'malayalam',
-  cy: 'welsh',
-  sk: 'slovak',
-  te: 'telugu',
-  fa: 'persian',
-  lv: 'latvian',
-  bn: 'bengali',
-  sr: 'serbian',
-  az: 'azerbaijani',
-  sl: 'slovenian',
-  kn: 'kannada',
-  et: 'estonian',
-  mk: 'macedonian',
-  br: 'breton',
-  eu: 'basque',
-  is: 'icelandic',
-  hy: 'armenian',
-  ne: 'nepali',
-  mn: 'mongolian',
-  bs: 'bosnian',
-  kk: 'kazakh',
-  sq: 'albanian',
-  sw: 'swahili',
-  gl: 'galician',
-  mr: 'marathi',
-  pa: 'punjabi',
-  si: 'sinhala',
-  km: 'khmer',
-  sn: 'shona',
-  yo: 'yoruba',
-  so: 'somali',
-  af: 'afrikaans',
-  oc: 'occitan',
-  ka: 'georgian',
-  be: 'belarusian',
-  tg: 'tajik',
-  sd: 'sindhi',
-  gu: 'gujarati',
-  am: 'amharic',
-  yi: 'yiddish',
-  lo: 'lao',
-  uz: 'uzbek',
-  fo: 'faroese',
-  ht: 'haitian creole',
-  ps: 'pashto',
-  tk: 'turkmen',
-  nn: 'nynorsk',
-  mt: 'maltese',
-  sa: 'sanskrit',
-  lb: 'luxembourgish',
-  my: 'myanmar',
-  bo: 'tibetan',
-  tl: 'tagalog',
-  mg: 'malagasy',
-  as: 'assamese',
-  tt: 'tatar',
-  haw: 'hawaiian',
-  ln: 'lingala',
-  ha: 'hausa',
-  ba: 'bashkir',
-  jw: 'javanese',
-  su: 'sundanese',
-  yue: 'cantonese',
 }
 
 const {
@@ -1508,6 +1292,9 @@ type SidebarThreadTreeExposed = {
 type AutomationsPanelExposed = {
   loadAutomations: () => Promise<void>
 }
+type CodexLoginModalExposed = {
+  focusCallbackInput: () => void
+}
 type AutomationEditRequest = {
   scope: 'thread' | 'project'
   target: string
@@ -1560,7 +1347,7 @@ const workspaceRootOptionsState = ref<{ order: string[]; labels: Record<string, 
   labels: {},
   projectOrder: [],
 })
-const projectZipExportStatus = ref<{ phase: 'idle' | 'exporting' | 'ready'; loaded: number; total: number | null; blob: Blob | null; fileName: string; error: string }>({
+const projectZipExportStatus = ref<ProjectZipExportStatus>({
   phase: 'idle',
   loaded: 0,
   total: null,
@@ -1629,42 +1416,31 @@ const isCompletingCodexLogin = ref(false)
 const isCodexLoginModalOpen = ref(false)
 const codexLoginUrl = ref('')
 const codexLoginCallbackUrl = ref('')
-const codexLoginCallbackInputRef = ref<HTMLInputElement | null>(null)
+const codexLoginModalRef = ref<CodexLoginModalExposed | null>(null)
 const removingAccountId = ref('')
 const confirmingRemoveAccountId = ref('')
 const hoveredAccountId = ref('')
 const accountActionError = ref('')
-const SEND_WITH_ENTER_KEY = 'codex-web-local.send-with-enter.v1'
-const IN_PROGRESS_SEND_MODE_KEY = 'codex-web-local.in-progress-send-mode.v1'
-const DARK_MODE_KEY = 'codex-web-local.dark-mode.v1'
-const DICTATION_CLICK_TO_TOGGLE_KEY = 'codex-web-local.dictation-click-to-toggle.v1'
-const DICTATION_AUTO_SEND_KEY = 'codex-web-local.dictation-auto-send.v1'
-const DICTATION_LANGUAGE_KEY = 'codex-web-local.dictation-language.v1'
-
-const CHAT_WIDTH_KEY = 'codex-web-local.chat-width.v1'
 const MOBILE_RESUME_RELOAD_MIN_HIDDEN_MS = 400
-const sendWithEnter = ref(loadBoolPref(SEND_WITH_ENTER_KEY, true))
-const inProgressSendMode = ref<'steer' | 'queue'>(loadInProgressSendModePref())
-const darkMode = ref<'system' | 'light' | 'dark'>(loadDarkModePref())
-const chatWidth = ref<ChatWidthMode>(loadChatWidthPref())
-const dictationClickToToggle = ref(loadBoolPref(DICTATION_CLICK_TO_TOGGLE_KEY, false))
-const dictationAutoSend = ref(loadBoolPref(DICTATION_AUTO_SEND_KEY, true))
-const dictationLanguage = ref(loadDictationLanguagePref())
-const dictationLanguageOptions = computed(() => buildDictationLanguageOptions())
-const projectZipProgressText = computed(() => {
-  const { loaded, total } = projectZipExportStatus.value
-  const loadedLabel = formatByteCount(loaded)
-  if (total && total > 0) {
-    return `${loadedLabel} / ${formatByteCount(total)}`
-  }
-  return loaded > 0 ? loadedLabel : t('Preparing...')
-})
-const projectZipProgressWidth = computed(() => {
-  const { loaded, total, phase } = projectZipExportStatus.value
-  if (phase === 'ready') return '100%'
-  if (!total || total <= 0) return loaded > 0 ? '55%' : '20%'
-  return `${Math.min(100, Math.max(5, Math.round((loaded / total) * 100)))}%`
-})
+const {
+  sendWithEnter,
+  inProgressSendMode,
+  darkMode,
+  chatWidthPreset,
+  chatWidthLabel,
+  dictationClickToToggle,
+  dictationAutoSend,
+  dictationLanguage,
+  dictationLanguageOptions,
+  toggleSendWithEnter,
+  cycleInProgressSendMode,
+  cycleDarkMode,
+  cycleChatWidth,
+  toggleDictationClickToToggle,
+  toggleDictationAutoSend,
+  onDictationLanguageChange,
+  applyDarkMode,
+} = useAppPreferences({ translate: t })
 const showFirstLaunchPluginsCard = ref(false)
 const freeModeEnabled = ref(false)
 const freeModeLoading = ref(false)
@@ -2042,7 +1818,6 @@ const existingFolderFilteredEntries = computed(() => {
   )
 })
 const darkModeMediaQuery = typeof window !== 'undefined' ? window.matchMedia('(prefers-color-scheme: dark)') : null
-const chatWidthLabel = computed(() => t(CHAT_WIDTH_PRESETS[chatWidth.value].label))
 const terminalShortcutLabel = computed(() => {
   if (typeof navigator !== 'undefined' && /mac|iphone|ipad|ipod/i.test(navigator.platform)) {
     return '⌘J'
@@ -2073,7 +1848,7 @@ const terminalHeaderDropdownOptions = computed(() => [
   ...terminalHeaderQuickCommands.value.map((command) => ({ label: command.label, value: command.value })),
 ])
 const contentStyle = computed(() => {
-  const preset = CHAT_WIDTH_PRESETS[chatWidth.value]
+  const preset = chatWidthPreset.value
   const keyboardInset = Math.max(
     0,
     layoutViewportHeight.value - visualViewportHeight.value - visualViewportOffsetTop.value,
@@ -2635,7 +2410,7 @@ async function onStartCodexLogin(): Promise<void> {
     isCodexLoginModalOpen.value = true
     window.open(loginUrl, '_blank', 'noopener,noreferrer')
     await nextTick()
-    codexLoginCallbackInputRef.value?.focus()
+    codexLoginModalRef.value?.focusCallbackInput()
   } catch (error) {
     accountActionError.value = error instanceof Error ? error.message : t('Failed to start Codex login')
   } finally {
@@ -2817,18 +2592,6 @@ function getThreadCwd(threadId: string): string {
     if (thread?.cwd?.trim()) return thread.cwd.trim()
   }
   return ''
-}
-
-function formatByteCount(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let value = bytes
-  let unitIndex = 0
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024
-    unitIndex += 1
-  }
-  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`
 }
 
 function downloadProjectZipFallback(blob: Blob, fileName: string): void {
@@ -4254,69 +4017,6 @@ function escapeMarkdownText(value: string): string {
   return value.replace(/([\\`*_{}\[\]()#+\-.!])/g, '\\$1')
 }
 
-function loadBoolPref(key: string, fallback: boolean): boolean {
-  if (typeof window === 'undefined') return fallback
-  const v = window.localStorage.getItem(key)
-  if (v === null) return fallback
-  return v === '1'
-}
-
-function loadDarkModePref(): 'system' | 'light' | 'dark' {
-  if (typeof window === 'undefined') return 'system'
-  const v = window.localStorage.getItem(DARK_MODE_KEY)
-  if (v === 'light' || v === 'dark') return v
-  return 'system'
-}
-
-function loadInProgressSendModePref(): 'steer' | 'queue' {
-  if (typeof window === 'undefined') return 'steer'
-  const v = window.localStorage.getItem(IN_PROGRESS_SEND_MODE_KEY)
-  if (v === 'steer' || v === 'queue') return v
-  return 'queue'
-}
-
-function loadChatWidthPref(): ChatWidthMode {
-  if (typeof window === 'undefined') return 'standard'
-  const value = window.localStorage.getItem(CHAT_WIDTH_KEY)
-  return value === 'standard' || value === 'wide' || value === 'extra-wide' ? value : 'standard'
-}
-
-function toggleSendWithEnter(): void {
-  sendWithEnter.value = !sendWithEnter.value
-  window.localStorage.setItem(SEND_WITH_ENTER_KEY, sendWithEnter.value ? '1' : '0')
-}
-
-function cycleInProgressSendMode(): void {
-  inProgressSendMode.value = inProgressSendMode.value === 'steer' ? 'queue' : 'steer'
-  window.localStorage.setItem(IN_PROGRESS_SEND_MODE_KEY, inProgressSendMode.value)
-}
-
-function cycleDarkMode(): void {
-  const order: Array<'system' | 'light' | 'dark'> = ['system', 'light', 'dark']
-  const idx = order.indexOf(darkMode.value)
-  darkMode.value = order[(idx + 1) % order.length]
-  window.localStorage.setItem(DARK_MODE_KEY, darkMode.value)
-  applyDarkMode()
-}
-
-function cycleChatWidth(): void {
-  const order: ChatWidthMode[] = ['standard', 'wide', 'extra-wide']
-  const idx = order.indexOf(chatWidth.value)
-  chatWidth.value = order[(idx + 1) % order.length]
-  window.localStorage.setItem(CHAT_WIDTH_KEY, chatWidth.value)
-}
-
-function toggleDictationClickToToggle(): void {
-  dictationClickToToggle.value = !dictationClickToToggle.value
-  window.localStorage.setItem(DICTATION_CLICK_TO_TOGGLE_KEY, dictationClickToToggle.value ? '1' : '0')
-}
-
-function toggleDictationAutoSend(): void {
-  dictationAutoSend.value = !dictationAutoSend.value
-  window.localStorage.setItem(DICTATION_AUTO_SEND_KEY, dictationAutoSend.value ? '1' : '0')
-}
-
-
 async function onProviderChange(provider: string): Promise<void> {
   if (freeModeLoading.value) return
   freeModeLoading.value = true
@@ -4493,80 +4193,6 @@ async function loadFreeModeStatus(): Promise<void> {
     }
   } catch {
     // Ignore — free mode status unknown
-  }
-}
-
-function onDictationLanguageChange(nextValue: string): void {
-  const normalized = normalizeToWhisperLanguage(nextValue.trim())
-  const value = normalized || 'auto'
-  dictationLanguage.value = value
-  window.localStorage.setItem(DICTATION_LANGUAGE_KEY, value)
-}
-
-function loadDictationLanguagePref(): string {
-  if (typeof window === 'undefined') return 'auto'
-  const value = window.localStorage.getItem(DICTATION_LANGUAGE_KEY)?.trim() || 'auto'
-  const normalized = normalizeToWhisperLanguage(value)
-  return normalized || 'auto'
-}
-
-function buildDictationLanguageOptions(): Array<{ value: string; label: string }> {
-  const options: Array<{ value: string; label: string }> = [{ value: 'auto', label: t('Auto-detect') }]
-  const seen = new Set<string>(['auto'])
-  function formatLanguageLabel(value: string): string {
-    const languageName = WHISPER_LANGUAGES[value] || value
-    const title = languageName.charAt(0).toUpperCase() + languageName.slice(1)
-    return `${title} (${value})`
-  }
-
-  for (const raw of typeof navigator !== 'undefined' ? (navigator.languages ?? []) : []) {
-    const value = normalizeToWhisperLanguage(raw)
-    if (!value || seen.has(value)) continue
-    seen.add(value)
-    options.push({
-      value,
-      label: `Preferred: ${formatLanguageLabel(value)}`,
-    })
-  }
-
-  for (const value of Object.keys(WHISPER_LANGUAGES)) {
-    if (seen.has(value)) continue
-    seen.add(value)
-    options.push({
-      value,
-      label: formatLanguageLabel(value),
-    })
-  }
-
-  const current = dictationLanguage.value.trim()
-  if (current && !seen.has(current)) {
-    options.push({
-      value: current,
-      label: formatLanguageLabel(current),
-    })
-  }
-
-  return options
-}
-
-function normalizeToWhisperLanguage(raw: string): string {
-  const value = raw.trim().toLowerCase()
-  if (!value || value === 'auto') return ''
-  if (value in WHISPER_LANGUAGES) return value
-  const base = value.split('-')[0] ?? value
-  if (base in WHISPER_LANGUAGES) return base
-  return ''
-}
-
-function applyDarkMode(): void {
-  const root = document.documentElement
-  if (darkMode.value === 'dark') {
-    root.classList.add('dark')
-  } else if (darkMode.value === 'light') {
-    root.classList.remove('dark')
-  } else {
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    root.classList.toggle('dark', prefersDark)
   }
 }
 
@@ -5704,88 +5330,6 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
   @apply text-xs text-zinc-500;
 }
 
-.codex-login-modal-backdrop {
-  @apply fixed inset-0 z-[100] flex items-center justify-center bg-black/35 px-4;
-}
-
-.codex-login-modal {
-  @apply flex w-full max-w-md flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4 shadow-2xl;
-}
-
-.codex-login-modal-header {
-  @apply flex items-center justify-between gap-3;
-}
-
-.codex-login-modal-title {
-  @apply text-base font-semibold text-zinc-900;
-}
-
-.codex-login-modal-close {
-  @apply inline-flex h-7 w-7 items-center justify-center rounded-full border border-zinc-200 bg-white text-lg leading-none text-zinc-600 transition hover:bg-zinc-50 disabled:cursor-default disabled:opacity-60;
-}
-
-.codex-login-modal-copy {
-  @apply text-sm leading-5 text-zinc-600;
-}
-
-.codex-login-modal-link {
-  @apply min-w-0 truncate text-sm text-blue-600 hover:text-blue-700 hover:underline;
-}
-
-.codex-login-modal-input {
-  @apply w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-zinc-400 disabled:cursor-default disabled:opacity-60;
-}
-
-.codex-login-modal-error {
-  @apply rounded-md bg-rose-50 px-3 py-2 text-xs text-rose-700;
-}
-
-.codex-login-modal-actions {
-  @apply flex items-center justify-end gap-2;
-}
-
-.codex-login-modal-cancel,
-.codex-login-modal-submit {
-  @apply rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-700 transition hover:bg-zinc-50 disabled:cursor-default disabled:opacity-60;
-}
-
-.codex-login-modal-submit {
-  @apply border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800;
-}
-
-:global(:root.dark) .codex-login-modal {
-  @apply border-zinc-700 bg-zinc-900;
-}
-
-:global(:root.dark) .codex-login-modal-title {
-  @apply text-zinc-100;
-}
-
-:global(:root.dark) .codex-login-modal-close,
-:global(:root.dark) .codex-login-modal-cancel {
-  @apply border-zinc-600 bg-zinc-800 text-zinc-200 hover:bg-zinc-700;
-}
-
-:global(:root.dark) .codex-login-modal-copy {
-  @apply text-zinc-300;
-}
-
-:global(:root.dark) .codex-login-modal-link {
-  @apply text-sky-300 hover:text-sky-200;
-}
-
-:global(:root.dark) .codex-login-modal-input {
-  @apply border-zinc-600 bg-zinc-950 text-zinc-100 placeholder:text-zinc-500 focus:border-zinc-400;
-}
-
-:global(:root.dark) .codex-login-modal-error {
-  @apply bg-rose-950/40 text-rose-200;
-}
-
-:global(:root.dark) .codex-login-modal-submit {
-  @apply border-zinc-200 bg-zinc-100 text-zinc-900 hover:bg-white;
-}
-
 .sidebar-settings-account-list {
   @apply flex flex-col gap-2;
 }
@@ -5985,97 +5529,6 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 .settings-panel-leave-to {
   opacity: 0;
   transform: translateY(8px);
-}
-
-.project-zip-modal-backdrop {
-  @apply fixed inset-0 z-[100] flex items-center justify-center bg-black/35 px-4;
-}
-
-.project-zip-modal {
-  @apply flex w-full max-w-md flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-4 text-zinc-900 shadow-2xl;
-}
-
-.project-zip-modal-header {
-  @apply flex items-center justify-between gap-3;
-}
-
-.project-zip-modal-title {
-  @apply text-base font-semibold;
-}
-
-.project-zip-modal-close {
-  @apply inline-flex h-7 w-7 items-center justify-center rounded-full border border-zinc-200 bg-white text-lg leading-none text-zinc-600 transition hover:bg-zinc-50 disabled:cursor-default disabled:opacity-60;
-}
-
-.project-zip-modal-copy {
-  @apply min-h-5 truncate text-sm text-zinc-600;
-}
-
-.project-zip-modal-error {
-  @apply rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900;
-}
-
-.project-zip-progress-label {
-  @apply flex items-center justify-between gap-3 text-sm font-semibold;
-}
-
-.project-zip-progress-label span:last-child {
-  @apply shrink-0 text-xs font-medium text-zinc-500;
-}
-
-.project-zip-progress-track {
-  @apply h-2 overflow-hidden rounded-full bg-zinc-100;
-}
-
-.project-zip-progress-fill {
-  @apply h-full rounded-full bg-emerald-600 transition-all duration-150;
-}
-
-.project-zip-modal-actions {
-  @apply flex items-center justify-end gap-2;
-}
-
-.project-zip-modal-cancel,
-.project-zip-modal-action {
-  @apply rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 disabled:cursor-default disabled:opacity-60;
-}
-
-.project-zip-modal-action-primary {
-  @apply border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800;
-}
-
-:root.dark .project-zip-modal {
-  @apply border-zinc-700 bg-zinc-900 text-zinc-100;
-}
-
-:root.dark .project-zip-modal-close,
-:root.dark .project-zip-modal-cancel,
-:root.dark .project-zip-modal-action {
-  @apply border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800;
-}
-
-:root.dark .project-zip-modal-copy {
-  @apply text-zinc-400;
-}
-
-:root.dark .project-zip-modal-error {
-  @apply border-amber-900/60 bg-amber-950/40 text-amber-100;
-}
-
-:root.dark .project-zip-modal-action-primary {
-  @apply border-zinc-100 bg-zinc-100 text-zinc-950 hover:bg-white;
-}
-
-:root.dark .project-zip-progress-label span:last-child {
-  @apply text-zinc-400;
-}
-
-:root.dark .project-zip-progress-track {
-  @apply bg-zinc-800;
-}
-
-:root.dark .project-zip-progress-fill {
-  @apply bg-emerald-500;
 }
 
 .sidebar-settings-rate-limits {
