@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { UiAgentProgressNode, UiTurnProgress } from '../../types/codex'
 import {
   agentDisplayName,
+  agentModelDetailSegments,
   countAgentProgress,
   formatProgressDuration,
   isAgentNodeStale,
@@ -86,6 +87,19 @@ describe('turnProgressUtils', () => {
   it('formats names and elapsed durations compactly', () => {
     expect(agentDisplayName(agent('frontend_scan', 'root', 1), 0)).toBe('frontend_scan')
     expect(formatProgressDuration(65_000)).toBe('1m 5s')
+  })
+
+  it('shows only model details supplied by that child agent', () => {
+    expect(agentModelDetailSegments({
+      ...agent('child', 'root', 1),
+      model: 'gpt-child',
+      reasoningEffort: 'ultra',
+    })).toEqual(['Model: gpt-child', 'Thinking: ultra'])
+    expect(agentModelDetailSegments({
+      ...agent('child', 'root', 1),
+      model: 'gpt-child',
+    })).toEqual(['Model: gpt-child'])
+    expect(agentModelDetailSegments(agent('child', 'root', 1))).toEqual([])
   })
 
   it('freezes root and agent durations after they reach a terminal state', () => {

@@ -1933,6 +1933,7 @@
 
 .turn-progress-summary,
 .turn-progress-main-model-details,
+.turn-progress-agent-model-details,
 .turn-progress-agent-meta {
   @apply m-0 text-xs leading-5 text-slate-500;
 }
@@ -2164,6 +2165,7 @@
 
 :root.dark .turn-progress-summary,
 :root.dark .turn-progress-main-model-details,
+:root.dark .turn-progress-agent-model-details,
 :root.dark .turn-progress-agent-meta,
 :root.dark .turn-progress-header-meta,
 :root.dark .turn-progress-timeline li,

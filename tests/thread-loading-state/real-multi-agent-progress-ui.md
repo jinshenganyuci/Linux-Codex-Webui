@@ -16,6 +16,7 @@
    - Elapsed time and last-activity time advance without displaying a fabricated percentage or ETA.
 2. Send the six-agent task.
    - All agents use the same row layout; no special case is required for four, five, or six agents.
+   - Each child row shows `Model` and `Thinking` from that child's own rollout. Compare agents with different values and confirm they are not copied from the main model or another child; when Codex does not record a child speed, no fabricated `Speed: Standard` or `Speed: Fast` is shown.
    - Nested agents are indented beneath their actual parent.
    - Completed, interrupted, failed, running, waiting, stale, and disconnected states are visually distinct.
    - Before reloading the page, a completed root with completed child results shows zero active agents and `Completed N/N`; trailing token-usage or goal notifications do not revert child rows to `Running`.
@@ -26,6 +27,7 @@
    - Loading and error states are visible; oversized results show that only the final portion is displayed.
 5. Reload the page while agents are active, then briefly interrupt the notification connection or restart only the disposable app server.
    - The selected thread recovers its graph from `/codex-api/agent-progress`.
+   - Recovered child rows retain their own rollout-backed model and thinking details after refresh.
    - If the first progress request is delayed or fails, persisted messages remain visible and no empty `Thinking` / `思考强度` card appears.
    - A later runtime-state poll retries the missing progress snapshot and expands the real tree without a browser refresh or thread switch.
    - Missing or failed progress snapshots retry with bounded backoff instead of issuing a request on every two-second runtime poll.

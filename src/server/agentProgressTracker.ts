@@ -1,3 +1,5 @@
+import type { AgentSessionModelDetails } from './agentSessionModelDetails.js'
+
 export type AgentProgressPhase =
   | 'preparing'
   | 'reasoning'
@@ -600,6 +602,29 @@ export class AgentProgressTracker {
   getAgentThreadIds(rootThreadId: string): string[] {
     const snapshot = this.getSnapshot(rootThreadId)
     return snapshot?.agents.map((agent) => agent.threadId) ?? []
+  }
+
+  applyAgentModelDetails(rootThreadId: string, details: AgentSessionModelDetails[]): boolean {
+    const root = this.rootByThreadId.get(rootThreadId) ?? rootThreadId
+    const progress = this.progressByRootThreadId.get(root)
+    if (!progress) return false
+    let changed = false
+    for (const detail of details) {
+      if (this.rootByThreadId.get(detail.threadId) !== root) continue
+      const agent = progress.agentsByThreadId.get(detail.threadId)
+      if (!agent) continue
+      const model = readString(detail.model)
+      const reasoningEffort = readString(detail.reasoningEffort)
+      if (model && agent.model !== model) {
+        agent.model = model
+        changed = true
+      }
+      if (reasoningEffort && agent.reasoningEffort !== reasoningEffort) {
+        agent.reasoningEffort = reasoningEffort
+        changed = true
+      }
+    }
+    return changed
   }
 
   private ensureProgress(rootThreadId: string, atMs: number, generation: number): MutableProgress {

@@ -109,13 +109,15 @@
                 {{ t(agentStatusTranslationKey(agent.status, agentIsStale(agent))) }}
               </span>
             </div>
+            <p v-if="agentModelDetailSegments(agent).length" class="turn-progress-agent-model-details">
+              {{ agentModelDetailSegments(agent).join(' · ') }}
+            </p>
             <p v-if="agent.taskSummary" class="turn-progress-agent-task">{{ agent.taskSummary }}</p>
             <p class="turn-progress-agent-meta">
               <span v-if="agent.currentActivity">{{ activityLabel(agent.currentActivity) }}</span>
               <span>{{ agent.status === 'starting' || agent.status === 'running'
                 ? t('Last activity {time} ago', { time: relativeActivity(agent.lastActivityAtMs) })
                 : t('Duration {time}', { time: agentDurationText(agent) }) }}</span>
-              <span v-if="agent.model">{{ agent.model }}<template v-if="agent.reasoningEffort"> · {{ agent.reasoningEffort }}</template></span>
             </p>
             <div v-if="agent.resultAvailable" class="turn-progress-result-wrap">
               <button
@@ -192,6 +194,7 @@ import { useUiLanguage } from '../../composables/useUiLanguage'
 import {
   agentDisplayName,
   agentDurationMs,
+  agentModelDetailSegments,
   agentStatusTranslationKey,
   countAgentProgress,
   formatProgressDuration,

@@ -507,4 +507,35 @@ describe('AgentProgressTracker', () => {
     ]))
     expect(tracker.getSnapshot('child')?.rootThreadId).toBe('root')
   })
+
+  it('applies each child session model without borrowing another agent value', () => {
+    const tracker = new AgentProgressTracker({ now: () => 1_000 })
+    tracker.handleNotification('turn/started', {
+      threadId: 'root',
+      turn: { id: 'root-turn', status: 'inProgress' },
+    })
+    for (const threadId of ['child-a', 'child-b']) {
+      tracker.handleNotification('item/completed', {
+        threadId: 'root',
+        turnId: 'root-turn',
+        item: {
+          type: 'subAgentActivity',
+          id: `spawn-${threadId}`,
+          agentPath: `/root/${threadId}`,
+          agentThreadId: threadId,
+          kind: 'started',
+        },
+      })
+    }
+
+    expect(tracker.applyAgentModelDetails('root', [
+      { threadId: 'child-a', model: 'gpt-child-a', reasoningEffort: 'high' },
+      { threadId: 'child-b', model: 'gpt-child-b', reasoningEffort: 'ultra' },
+      { threadId: 'unknown-child', model: 'not-used', reasoningEffort: 'low' },
+    ])).toBe(true)
+    expect(tracker.getSnapshot('root')?.agents).toEqual([
+      expect.objectContaining({ threadId: 'child-a', model: 'gpt-child-a', reasoningEffort: 'high' }),
+      expect.objectContaining({ threadId: 'child-b', model: 'gpt-child-b', reasoningEffort: 'ultra' }),
+    ])
+  })
 })

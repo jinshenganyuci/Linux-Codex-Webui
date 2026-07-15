@@ -37,6 +37,10 @@ import {
   type AgentRuntimeStateLike,
 } from './agentProgressTracker.js'
 import {
+  readAgentSessionModelDetails,
+  type AgentSessionModelDetails,
+} from './agentSessionModelDetails.js'
+import {
   deleteThreadModelPreference,
   normalizeThreadModelPreference,
   readThreadModelPreferences,
@@ -239,6 +243,7 @@ const PROVIDER_MODELS_FETCH_TIMEOUT_MS = 5_000
 
 const THREAD_TURN_PAGE_READ_CACHE_TTL_MS = 30_000
 const AGENT_PROGRESS_HYDRATION_CACHE_TTL_MS = 5_000
+const AGENT_MODEL_DETAILS_CACHE_LIMIT = 2_048
 const THREAD_METHODS_WITH_THREAD_SNAPSHOT = new Set([...THREAD_METHODS_WITH_TURNS, 'thread/start'])
 const THREAD_SEARCH_FULL_TEXT_THREAD_LIMIT = 100
 const PROJECTLESS_THREAD_DIRECTORY_MAX_ATTEMPTS = 100
@@ -6249,6 +6254,9 @@ export class AppServerProcess {
   private readonly pendingAgentProgressRootIds = new Set<string>()
   private readonly agentProgressHydratedAtByRootThreadId = new Map<string, number>()
   private readonly agentProgressHydrationPromiseByRootThreadId = new Map<string, Promise<AgentProgressSnapshot | null>>()
+  private readonly agentSessionPathByThreadId = new Map<string, string>()
+  private readonly agentModelDetailsByThreadId = new Map<string, AgentSessionModelDetails>()
+  private readonly agentModelDetailsHydrationPromiseByRootThreadId = new Map<string, Promise<boolean>>()
   private agentProgressFlushTimer: ReturnType<typeof setTimeout> | null = null
   private pendingAgentProgressGeneration = 0
   private chatgptAuthRefreshPromise: Promise<ChatgptAuthTokensRefreshResponse> | null = null
@@ -6385,6 +6393,7 @@ export class AppServerProcess {
     this.queueAgentProgressSnapshots(this.agentProgressTracker.markProcessExit(), generation, true)
     this.agentProgressHydratedAtByRootThreadId.clear()
     this.agentProgressHydrationPromiseByRootThreadId.clear()
+    this.agentModelDetailsHydrationPromiseByRootThreadId.clear()
     this.notifyIdleWaitersIfIdle()
   }
 
@@ -6436,8 +6445,30 @@ export class AppServerProcess {
     }
   }
 
+  private rememberThreadSessionPath(value: unknown): void {
+    const record = asRecord(value)
+    const thread = asRecord(record?.thread) ?? asRecord(asRecord(record?.data)?.thread)
+    const source = asRecord(thread?.source)
+    const subAgent = asRecord(source?.subAgent) ?? asRecord(source?.subagent)
+    const threadId = readNonEmptyString(thread?.id)
+    const sessionPath = readNonEmptyString(thread?.path)
+    if (!subAgent || !threadId || !sessionPath) return
+    this.agentSessionPathByThreadId.set(threadId, sessionPath)
+  }
+
+  private queueAgentModelDetailsHydration(rootThreadIds: string[], generation: number): void {
+    for (const rootThreadId of new Set(rootThreadIds)) {
+      if (!rootThreadId) continue
+      void this.ensureAgentModelDetails(rootThreadId, generation).then((changed) => {
+        if (!changed || this.transport.activeGeneration !== generation) return
+        this.queueAgentProgressSnapshots([rootThreadId], generation, true)
+      })
+    }
+  }
+
   private emitNotification(notification: { method: string; params: unknown }, generation = this.transport.activeGeneration): void {
     if (generation === 0) return
+    if (notification.method === 'thread/started') this.rememberThreadSessionPath(notification.params)
     const emittedNotification: AppServerNotification = { ...notification, generation }
     const changedProgressRoots = this.agentProgressTracker.handleNotification(
       notification.method,
@@ -6457,6 +6488,15 @@ export class AppServerProcess {
       listener(emittedNotification)
     }
     this.queueAgentProgressSnapshots(changedProgressRoots, generation)
+    if (notification.method === 'thread/started' || notification.method === 'turn/started') {
+      this.queueAgentModelDetailsHydration(changedProgressRoots, generation)
+      for (const delayMs of [250, 1_000]) {
+        const retryTimer = setTimeout(() => {
+          this.queueAgentModelDetailsHydration(changedProgressRoots, generation)
+        }, delayMs)
+        retryTimer.unref()
+      }
+    }
     this.settleIdleState()
   }
 
@@ -6564,6 +6604,47 @@ export class AppServerProcess {
     return this.agentProgressTracker.getSnapshot(rootThreadId)
   }
 
+  private ensureAgentModelDetails(rootThreadId: string, expectedGeneration: number): Promise<boolean> {
+    const pending = this.agentModelDetailsHydrationPromiseByRootThreadId.get(rootThreadId)
+    if (pending) return pending
+
+    let hydration: Promise<boolean>
+    hydration = (async () => {
+      if (expectedGeneration === 0 || this.transport.activeGeneration !== expectedGeneration) return false
+      const snapshot = this.agentProgressTracker.getSnapshot(rootThreadId)
+      const cachedDetails: AgentSessionModelDetails[] = []
+      const unresolvedThreadIds: string[] = []
+      for (const agent of snapshot?.agents ?? []) {
+        if (agent.model && agent.reasoningEffort) continue
+        const cached = this.agentModelDetailsByThreadId.get(agent.threadId)
+        if (cached) cachedDetails.push(cached)
+        else unresolvedThreadIds.push(agent.threadId)
+      }
+      let changed = this.agentProgressTracker.applyAgentModelDetails(rootThreadId, cachedDetails)
+      if (unresolvedThreadIds.length === 0) return changed
+
+      const details = await readAgentSessionModelDetails(unresolvedThreadIds, this.agentSessionPathByThreadId)
+      if (expectedGeneration === 0 || this.transport.activeGeneration !== expectedGeneration) return false
+      for (const detail of details) {
+        this.agentModelDetailsByThreadId.set(detail.threadId, detail)
+        this.agentSessionPathByThreadId.delete(detail.threadId)
+      }
+      while (this.agentModelDetailsByThreadId.size > AGENT_MODEL_DETAILS_CACHE_LIMIT) {
+        const oldestThreadId = this.agentModelDetailsByThreadId.keys().next().value
+        if (typeof oldestThreadId !== 'string') break
+        this.agentModelDetailsByThreadId.delete(oldestThreadId)
+      }
+      changed = this.agentProgressTracker.applyAgentModelDetails(rootThreadId, details) || changed
+      return changed
+    })().finally(() => {
+      if (this.agentModelDetailsHydrationPromiseByRootThreadId.get(rootThreadId) === hydration) {
+        this.agentModelDetailsHydrationPromiseByRootThreadId.delete(rootThreadId)
+      }
+    })
+    this.agentModelDetailsHydrationPromiseByRootThreadId.set(rootThreadId, hydration)
+    return hydration
+  }
+
   async readAgentProgressSnapshot(rootThreadId: string): Promise<AgentProgressSnapshot | null> {
     const normalizedRootThreadId = rootThreadId.trim()
     if (!normalizedRootThreadId) return null
@@ -6619,6 +6700,7 @@ export class AppServerProcess {
         continue
       }
       assertCurrentGeneration()
+      this.rememberThreadSessionPath(threadReadResult)
       this.agentProgressTracker.ingestThreadRead(threadReadResult)
       for (const childThreadId of this.agentProgressTracker.getDirectChildThreadIds(threadId)) {
         if (!visited.has(childThreadId) && queue.length + visited.size < maxNodes) queue.push(childThreadId)
@@ -6638,6 +6720,8 @@ export class AppServerProcess {
         this.agentProgressTracker.applyRuntimeStates(normalizedRootThreadId, runtimeStates)
       }
     }
+    await this.ensureAgentModelDetails(normalizedRootThreadId, expectedGeneration)
+    assertCurrentGeneration()
     return this.agentProgressTracker.getSnapshot(normalizedRootThreadId)
   }
 
@@ -7040,6 +7124,7 @@ export class AppServerProcess {
     this.queueAgentProgressSnapshots(this.agentProgressTracker.markProcessExit(), generation, true)
     this.agentProgressHydratedAtByRootThreadId.clear()
     this.agentProgressHydrationPromiseByRootThreadId.clear()
+    this.agentModelDetailsHydrationPromiseByRootThreadId.clear()
     if (this.agentProgressFlushTimer) clearTimeout(this.agentProgressFlushTimer)
     this.agentProgressFlushTimer = null
     this.pendingAgentProgressRootIds.clear()

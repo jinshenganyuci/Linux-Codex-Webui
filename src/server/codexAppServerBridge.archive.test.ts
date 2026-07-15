@@ -107,6 +107,70 @@ function createAppServerHarness(initialGeneration = 1): {
   }
 }
 
+describe('agent model detail recovery', () => {
+  it('reapplies cached child details when a later root turn reuses the same child thread', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-agent-model-cache-'))
+    process.env.CODEX_HOME = codexHome
+    const sessionPath = join(codexHome, 'child-thread.jsonl')
+    await writeFile(sessionPath, [
+      JSON.stringify({ type: 'session_meta', payload: { id: 'child-thread' } }),
+      JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-child', effort: 'ultra' } }),
+    ].join('\n'))
+    const harness = createAppServerHarness()
+
+    const emitRootAndChild = (rootTurnId: string) => {
+      harness.emitLine({
+        method: 'turn/started',
+        params: { threadId: 'root-thread', turn: { id: rootTurnId, status: 'inProgress' } },
+      })
+      harness.emitLine({
+        method: 'thread/started',
+        params: {
+          thread: {
+            id: 'child-thread',
+            path: sessionPath,
+            source: {
+              subAgent: {
+                thread_spawn: {
+                  parent_thread_id: 'root-thread',
+                  depth: 1,
+                  agent_path: '/root/child',
+                },
+              },
+            },
+          },
+        },
+      })
+      harness.emitLine({
+        method: 'turn/started',
+        params: { threadId: 'child-thread', turn: { id: `${rootTurnId}-child`, status: 'inProgress' } },
+      })
+    }
+
+    try {
+      emitRootAndChild('root-turn-1')
+      await vi.waitFor(() => {
+        expect(harness.appServer.getAgentProgressSnapshot('root-thread')?.agents[0]).toMatchObject({
+          model: 'gpt-child',
+          reasoningEffort: 'ultra',
+        })
+      })
+
+      await rm(sessionPath)
+      emitRootAndChild('root-turn-2')
+      await vi.waitFor(() => {
+        expect(harness.appServer.getAgentProgressSnapshot('root-thread')?.agents[0]).toMatchObject({
+          model: 'gpt-child',
+          reasoningEffort: 'ultra',
+        })
+      })
+    } finally {
+      harness.appServer.dispose()
+      await rm(codexHome, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('callRpcWithArchiveRecovery', () => {
   it('sets a fallback name and retries archive when Codex has not materialized a rollout', async () => {
     const calls: Array<{ method: string; params: unknown }> = []

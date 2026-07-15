@@ -118,6 +118,15 @@ export function agentDisplayName(agent: UiAgentProgressNode, index: number): str
   return pathName || `Agent ${index + 1}`
 }
 
+export function agentModelDetailSegments(agent: UiAgentProgressNode): string[] {
+  const details: string[] = []
+  const model = agent.model.trim()
+  const reasoningEffort = agent.reasoningEffort.trim()
+  if (model) details.push(`Model: ${model}`)
+  if (reasoningEffort) details.push(`Thinking: ${reasoningEffort}`)
+  return details
+}
+
 export function formatProgressDuration(durationMs: number): string {
   const seconds = Math.max(0, Math.floor(durationMs / 1000))
   if (seconds < 60) return `${seconds}s`
