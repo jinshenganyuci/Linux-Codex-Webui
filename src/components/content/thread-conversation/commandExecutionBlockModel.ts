@@ -1,7 +1,7 @@
 export interface CommandExecutionBlockState {
   commandLabel: string
   outputDomId: string
-  mountedOutput: string
+  mountedOutput: string | null
 }
 
 export interface CommandExecutionBlockStateInput {
@@ -13,12 +13,13 @@ export interface CommandExecutionBlockStateInput {
   expanded: boolean
 }
 
+/** Keep large output out of render state until the command is expanded. */
 export function buildCommandExecutionBlockState(
   input: CommandExecutionBlockStateInput,
 ): CommandExecutionBlockState {
   return {
     commandLabel: input.command || input.commandFallback,
     outputDomId: `command-output-${encodeURIComponent(input.instanceId)}`,
-    mountedOutput: input.output || input.emptyOutputLabel,
+    mountedOutput: input.expanded ? (input.output || input.emptyOutputLabel) : null,
   }
 }

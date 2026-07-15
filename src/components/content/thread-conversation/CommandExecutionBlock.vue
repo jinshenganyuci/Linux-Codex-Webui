@@ -28,6 +28,7 @@
     >
       <div class="cmd-output-inner">
         <pre
+          v-if="renderState.mountedOutput !== null"
           class="cmd-output"
           :class="{ 'cmd-output-condensed': condensed }"
           v-text="renderState.mountedOutput"

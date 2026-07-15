@@ -57,19 +57,21 @@ async function renderCommand(overrides: Partial<typeof baseInput> = {}): Promise
 }
 
 describe('buildCommandExecutionBlockState', () => {
-  it('keeps deterministic labels and region ids while collapsed', () => {
-    const state = readState({ output: 'build complete', expanded: false })
+  it('keeps a large command output out of render state while collapsed', () => {
+    const largeOutput = `start-${'x'.repeat(128 * 1024)}-end`
+    const state = readState({ output: largeOutput, expanded: false })
 
-    expect(state.commandLabel).toBe('pnpm run build')
-    expect(state.mountedOutput).toBe('build complete')
+    expect(state.mountedOutput).toBeNull()
     expect(state.outputDomId).toBe('command-output-timeline%3Acommand%3Aone')
   })
 
-  it('preserves the existing collapsed output DOM during component extraction', async () => {
-    const html = await renderCommand({ output: 'build complete', expanded: false })
+  it('does not mount the output pre or its text while the component is collapsed', async () => {
+    const largeOutput = `start-${'x'.repeat(128 * 1024)}-end`
+    const html = await renderCommand({ output: largeOutput, expanded: false })
 
-    expect(html).toContain('<pre')
-    expect(html).toContain('build complete')
+    expect(html).not.toContain('<pre')
+    expect(html).not.toContain('start-')
+    expect(html).not.toContain('-end')
     expect(html).toContain('aria-expanded="false"')
     expect(html).toContain('aria-hidden="true"')
   })
