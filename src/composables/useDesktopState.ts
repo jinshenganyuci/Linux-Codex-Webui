@@ -88,8 +88,13 @@ import {
   LIVE_DELTA_FLUSH_MS,
   LIVE_REASONING_TEXT_MAX_BYTES,
 } from './desktop/liveDeltaBuffer'
+import {
+  createThreadListLoader,
+  removeThreadFromGroups,
+} from './desktop/threadListLoader'
 
 export { capUtf8Tail } from './desktop/liveDeltaBuffer'
+export { removeThreadFromGroups } from './desktop/threadListLoader'
 
 function flattenThreads(groups: UiProjectGroup[]): UiThread[] {
   return groups.flatMap((group) => group.threads)
@@ -117,14 +122,12 @@ const NEW_THREAD_COLLABORATION_MODE_CONTEXT = '__new-thread__'
 const NEW_THREAD_PROVIDER_MODEL_CONTEXT_PREFIX = '__new-thread-provider__::'
 const EVENT_SYNC_DEBOUNCE_MS = 220
 const EVENT_SYNC_RETRY_DELAY_MS = 1_000
-const BACKGROUND_THREAD_PAGINATION_DELAY_MS = 10_000
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 500
 const TURN_START_FOLLOW_UP_SYNC_DELAY_MS = 3000
 const RECENT_THREAD_MESSAGE_LOAD_REUSE_MS = 2000
 const RECENT_AGENT_PROGRESS_LOAD_REUSE_MS = 30_000
 const AGENT_PROGRESS_RETRY_BASE_DELAY_MS = 5_000
 const AGENT_PROGRESS_RETRY_MAX_DELAY_MS = 60_000
-const RECENT_THREAD_LIST_LOAD_REUSE_MS = 2000
 const RECENT_SKILLS_LOAD_REUSE_MS = 2000
 const RECENT_MODEL_CATALOG_REUSE_MS = 10_000
 const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
@@ -1082,29 +1085,6 @@ function pruneThreadStateMap<T>(stateMap: Record<string, T>, threadIds: Set<stri
   return Object.fromEntries(nextEntries) as Record<string, T>
 }
 
-export function removeThreadFromGroups(groups: UiProjectGroup[], threadId: string): UiProjectGroup[] {
-  const normalizedThreadId = threadId.trim()
-  if (!normalizedThreadId) return groups
-
-  let changed = false
-  const nextGroups: UiProjectGroup[] = []
-
-  for (const group of groups) {
-    const nextThreads = group.threads.filter((thread) => thread.id !== normalizedThreadId)
-    const removedFromGroup = nextThreads.length !== group.threads.length
-    if (removedFromGroup) {
-      changed = true
-    }
-    if (nextThreads.length > 0) {
-      nextGroups.push(removedFromGroup ? { ...group, threads: nextThreads } : group)
-    } else if (group.threads.length === 0) {
-      nextGroups.push(group)
-    }
-  }
-
-  return changed ? nextGroups : groups
-}
-
 function mergeThreadGroups(
   previous: UiProjectGroup[],
   incoming: UiProjectGroup[],
@@ -1688,11 +1668,9 @@ export function useDesktopState() {
   const optimisticTurnStartedAtByThreadId = new Map<string, number>()
   let rateLimitRefreshTimer: number | null = null
   const delayedTurnSyncTimerByThreadId = new Map<string, number>()
-  let loadThreadsPromise: Promise<void> | null = null
   const loadMessagePromiseByThreadId = new Map<string, Promise<void>>()
   let refreshSkillsPromise: Promise<void> | null = null
   const modelCatalogPromiseByKey = new Map<string, Promise<UiModelCapability[]>>()
-  let lastThreadListLoadAt = 0
   let hasLoadedSkills = false
   let lastSkillsLoadAt = 0
   let lastSkillsLoadKey = ''
@@ -1705,12 +1683,6 @@ export function useDesktopState() {
   const pendingThreadMessageRefresh = new Set<string>()
   const lastMessageLoadAtByThreadId = new Map<string, number>()
   const lastMessageLoadFailureAtByThreadId = new Map<string, number>()
-  let threadListNextCursor: string | null = null
-  let threadListBackgroundTimer: number | null = null
-  let isLoadingRemainingThreadPages = false
-  let hasLoadedAllThreadPages = false
-  let loadedThreadListGroups: UiProjectGroup[] = []
-  let loadedThreadListRootsState: WorkspaceRootsState | null = null
   let hasHydratedWorkspaceRootsState = false
   const activeReasoningItemIdByThreadId = new Map<string, string>()
   let shouldAutoScrollOnNextAgentEvent = false
@@ -2830,8 +2802,8 @@ export function useDesktopState() {
     if (nextInProgress && stopNotificationStream) {
       threadRuntimePolling.requestImmediate()
     }
-    if (!nextInProgress && !hasActiveInProgressThreads() && threadListNextCursor) {
-      scheduleRemainingThreadPages()
+    if (!nextInProgress && !hasActiveInProgressThreads() && threadListLoader.hasRemaining()) {
+      threadListLoader.scheduleRemaining()
     }
   }
 
@@ -4931,148 +4903,48 @@ export function useDesktopState() {
     }
   }
 
+  function hasActiveInProgressThreads(): boolean {
+    return Object.values(inProgressById.value).some((value) => value === true)
+  }
+
+  function afterPrimaryThreadPageApplied(): void {
+    const flatThreads = flattenThreads(projectGroups.value)
+    pruneThreadScopedState(flatThreads)
+
+    const currentExists = flatThreads.some((thread) => thread.id === selectedThreadId.value)
+
+    if (!currentExists && !selectedThreadId.value) {
+      setSelectedThreadId(flatThreads[0]?.id ?? '')
+    }
+  }
+
+  const threadListLoader = createThreadListLoader({
+    fetchPage: getThreadGroupsPage,
+    getBackgroundPageLimit: getBackgroundThreadListLimit,
+    loadRootsState: loadWorkspaceRootsStateForThreadList,
+    loadTitleCache: loadThreadTitleCacheIfNeeded,
+    hydrateRootsState: hydrateWorkspaceRootsStateIfNeeded,
+    applyGroups: applyThreadGroups,
+    hasLoadedThreads: () => hasLoadedThreads.value,
+    setThreadsLoading: (loading) => {
+      isLoadingThreads.value = loading
+    },
+    markThreadsLoaded: () => {
+      hasLoadedThreads.value = true
+    },
+    hasActiveThreads: hasActiveInProgressThreads,
+    afterPrimaryPageApplied: afterPrimaryThreadPageApplied,
+  })
+
   function removeArchivedThreadFromLoadedLists(threadId: string): void {
-    loadedThreadListGroups = removeThreadFromGroups(loadedThreadListGroups, threadId)
+    threadListLoader.removeThread(threadId)
     sourceGroups.value = removeThreadFromGroups(sourceGroups.value, threadId)
     inProgressById.value = omitKey(inProgressById.value, threadId)
     applyThreadFlags()
   }
 
-  function mergeThreadGroupPages(previous: UiProjectGroup[], incoming: UiProjectGroup[]): UiProjectGroup[] {
-    if (previous.length === 0) return incoming
-    if (incoming.length === 0) return previous
-
-    const threadById = new Map<string, UiThread>()
-    for (const thread of flattenThreads(previous)) {
-      threadById.set(thread.id, thread)
-    }
-    for (const thread of flattenThreads(incoming)) {
-      threadById.set(thread.id, thread)
-    }
-    const groupsByProject = new Map<string, UiThread[]>()
-    for (const thread of threadById.values()) {
-      const existing = groupsByProject.get(thread.projectName)
-      if (existing) existing.push(thread)
-      else groupsByProject.set(thread.projectName, [thread])
-    }
-
-    return Array.from(groupsByProject.entries())
-      .map(([projectName, threads]) => ({
-        projectName,
-        threads: threads.sort(
-          (first, second) => new Date(second.updatedAtIso).getTime() - new Date(first.updatedAtIso).getTime(),
-        ),
-      }))
-      .sort((first, second) => {
-        const firstUpdated = new Date(first.threads[0]?.updatedAtIso ?? 0).getTime()
-        const secondUpdated = new Date(second.threads[0]?.updatedAtIso ?? 0).getTime()
-        return secondUpdated - firstUpdated
-      })
-  }
-
-  function hasActiveInProgressThreads(): boolean {
-    return Object.values(inProgressById.value).some((value) => value === true)
-  }
-
-  function scheduleRemainingThreadPages(rootsState: WorkspaceRootsState | null = loadedThreadListRootsState): void {
-    if (!threadListNextCursor || isLoadingRemainingThreadPages || hasActiveInProgressThreads()) return
-
-    loadedThreadListRootsState = rootsState
-
-    if (typeof window === 'undefined') {
-      void loadRemainingThreadPages(rootsState)
-      return
-    }
-
-    if (threadListBackgroundTimer !== null) {
-      window.clearTimeout(threadListBackgroundTimer)
-    }
-
-    threadListBackgroundTimer = window.setTimeout(() => {
-      threadListBackgroundTimer = null
-      if (!threadListNextCursor || hasActiveInProgressThreads()) return
-      void loadRemainingThreadPages(loadedThreadListRootsState)
-    }, BACKGROUND_THREAD_PAGINATION_DELAY_MS)
-  }
-
-  async function loadRemainingThreadPages(rootsState: WorkspaceRootsState | null): Promise<void> {
-    if (isLoadingRemainingThreadPages || !threadListNextCursor || hasActiveInProgressThreads()) return
-    isLoadingRemainingThreadPages = true
-
-    try {
-      const page = await getThreadGroupsPage(threadListNextCursor, getBackgroundThreadListLimit())
-      threadListNextCursor = page.nextCursor
-      hasLoadedAllThreadPages = page.nextCursor === null
-      loadedThreadListGroups = mergeThreadGroupPages(loadedThreadListGroups, page.groups)
-      applyThreadGroups(loadedThreadListGroups, rootsState)
-    } catch {
-      // Keep the first page usable; a later refresh can retry remaining pages.
-    } finally {
-      isLoadingRemainingThreadPages = false
-      if (threadListNextCursor && !hasActiveInProgressThreads()) {
-        scheduleRemainingThreadPages(rootsState)
-      }
-    }
-  }
-
-  async function loadThreads(options: { force?: boolean } = {}) {
-    if (loadThreadsPromise) {
-      await loadThreadsPromise
-      return
-    }
-    if (
-      options.force !== true &&
-      hasLoadedThreads.value &&
-      Date.now() - lastThreadListLoadAt < RECENT_THREAD_LIST_LOAD_REUSE_MS
-    ) {
-      return
-    }
-
-    loadThreadsPromise = (async () => {
-    if (!hasLoadedThreads.value) {
-      isLoadingThreads.value = true
-    }
-
-    try {
-      const [page, rootsState] = await Promise.all([
-        getThreadGroupsPage(),
-        loadWorkspaceRootsStateForThreadList(),
-        loadThreadTitleCacheIfNeeded({ force: options.force === true }),
-      ])
-      loadedThreadListRootsState = rootsState
-      const groups = page.groups
-      loadedThreadListGroups = hasLoadedThreads.value
-        ? mergeThreadGroupPages(loadedThreadListGroups, groups)
-        : groups
-      threadListNextCursor = hasLoadedThreads.value && !hasLoadedAllThreadPages
-        ? threadListNextCursor
-        : page.nextCursor
-      hasLoadedAllThreadPages = page.nextCursor === null
-      await hydrateWorkspaceRootsStateIfNeeded(groups, rootsState)
-
-      applyThreadGroups(loadedThreadListGroups, rootsState)
-      hasLoadedThreads.value = true
-      lastThreadListLoadAt = Date.now()
-      if (!hasLoadedAllThreadPages) {
-        scheduleRemainingThreadPages(rootsState)
-      }
-
-      const flatThreads = flattenThreads(projectGroups.value)
-      pruneThreadScopedState(flatThreads)
-
-      const currentExists = flatThreads.some((thread) => thread.id === selectedThreadId.value)
-
-      if (!currentExists && !selectedThreadId.value) {
-        setSelectedThreadId(flatThreads[0]?.id ?? '')
-      }
-    } finally {
-      isLoadingThreads.value = false
-    }
-    })().finally(() => {
-      loadThreadsPromise = null
-    })
-
-    await loadThreadsPromise
+  function loadThreads(options: { force?: boolean } = {}): Promise<void> {
+    return threadListLoader.load(options)
   }
 
   async function loadMessages(threadId: string, options: { silent?: boolean; force?: boolean } = {}) {
@@ -6537,10 +6409,7 @@ export function useDesktopState() {
       window.clearTimeout(rateLimitRefreshTimer)
       rateLimitRefreshTimer = null
     }
-    if (threadListBackgroundTimer !== null && typeof window !== 'undefined') {
-      window.clearTimeout(threadListBackgroundTimer)
-      threadListBackgroundTimer = null
-    }
+    threadListLoader.stop()
     if (typeof window !== 'undefined') {
       for (const timerId of delayedTurnSyncTimerByThreadId.values()) {
         window.clearTimeout(timerId)
