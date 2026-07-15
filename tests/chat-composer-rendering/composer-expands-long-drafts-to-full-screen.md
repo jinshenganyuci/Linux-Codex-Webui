@@ -9,8 +9,8 @@ Thread composer full-screen expand control for multi-line drafts.
 3. Light theme and dark theme both available from the appearance switcher
 
 #### Steps
-1. In light theme, type or paste at least six lines into the composer.
-2. Confirm the expand button appears in the composer input area.
+1. In light theme, type or paste several wrapped lines into the composer and confirm the textarea grows upward with the text instead of hiding lines inside a one-line field.
+2. Continue to at least six lines; confirm growth stops at the inline maximum, the textarea becomes scrollable, and the expand button appears in the composer input area.
 3. Click the expand button.
 4. Confirm the composer fills the viewport, keeps the draft text, and leaves model/skill/thinking/send controls usable at the bottom.
 5. Click the collapse button.
@@ -19,6 +19,7 @@ Thread composer full-screen expand control for multi-line drafts.
 
 #### Expected Results
 - Short drafts do not show the expand control.
+- The inline textarea grows with wrapped or explicit new lines until its configured maximum height, and shrinking or clearing the draft reduces its height again.
 - Long or overflowing drafts show an icon-only expand control.
 - Full-screen mode uses the same draft state and submit controls as inline mode.
 - Full-screen and inline states are readable in light theme and dark theme.

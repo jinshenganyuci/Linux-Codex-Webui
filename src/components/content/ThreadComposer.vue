@@ -1214,7 +1214,26 @@ function updateComposerOverflowState(): void {
     isDraftOverflowing.value = false
     return
   }
-  isDraftOverflowing.value = input.scrollHeight > input.clientHeight + 2
+  if (isComposerExpanded.value) {
+    input.style.height = ''
+    input.style.overflowY = 'auto'
+    isDraftOverflowing.value = false
+    return
+  }
+
+  input.style.height = 'auto'
+  const computedStyle = window.getComputedStyle(input)
+  const minHeight = Number.parseFloat(computedStyle.minHeight)
+  const maxHeight = Number.parseFloat(computedStyle.maxHeight)
+  const contentHeight = input.scrollHeight
+  const boundedMinHeight = Number.isFinite(minHeight) ? minHeight : contentHeight
+  const boundedMaxHeight = Number.isFinite(maxHeight) ? maxHeight : contentHeight
+  const nextHeight = Math.min(Math.max(contentHeight, boundedMinHeight), boundedMaxHeight)
+  const isOverflowing = contentHeight > nextHeight + 2
+
+  input.style.height = `${nextHeight}px`
+  input.style.overflowY = isOverflowing ? 'auto' : 'hidden'
+  isDraftOverflowing.value = isOverflowing
 }
 
 function queueComposerOverflowMeasurement(): void {
