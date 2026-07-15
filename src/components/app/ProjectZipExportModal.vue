@@ -119,37 +119,37 @@ const presentation = computed(() => getProjectZipExportPresentation(props.status
   @apply border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800;
 }
 
-:global(:root.dark) .project-zip-modal {
+:global(:root.dark .project-zip-modal) {
   @apply border-zinc-700 bg-zinc-900 text-zinc-100;
 }
 
-:global(:root.dark) .project-zip-modal-close,
-:global(:root.dark) .project-zip-modal-cancel,
-:global(:root.dark) .project-zip-modal-action {
+:global(:root.dark .project-zip-modal-close),
+:global(:root.dark .project-zip-modal-cancel),
+:global(:root.dark .project-zip-modal-action) {
   @apply border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800;
 }
 
-:global(:root.dark) .project-zip-modal-copy {
+:global(:root.dark .project-zip-modal-copy) {
   @apply text-zinc-400;
 }
 
-:global(:root.dark) .project-zip-modal-error {
+:global(:root.dark .project-zip-modal-error) {
   @apply border-amber-900/60 bg-amber-950/40 text-amber-100;
 }
 
-:global(:root.dark) .project-zip-modal-action-primary {
+:global(:root.dark .project-zip-modal-action-primary) {
   @apply border-zinc-100 bg-zinc-100 text-zinc-950 hover:bg-white;
 }
 
-:global(:root.dark) .project-zip-progress-label span:last-child {
+:global(:root.dark .project-zip-progress-label span:last-child) {
   @apply text-zinc-400;
 }
 
-:global(:root.dark) .project-zip-progress-track {
+:global(:root.dark .project-zip-progress-track) {
   @apply bg-zinc-800;
 }
 
-:global(:root.dark) .project-zip-progress-fill {
+:global(:root.dark .project-zip-progress-fill) {
   @apply bg-emerald-500;
 }
 </style>

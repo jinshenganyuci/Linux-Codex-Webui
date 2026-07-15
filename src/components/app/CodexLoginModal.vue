@@ -168,36 +168,36 @@ defineExpose({ focusCallbackInput })
   @apply border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800;
 }
 
-:global(:root.dark) .codex-login-modal {
+:global(:root.dark .codex-login-modal) {
   @apply border-zinc-700 bg-zinc-900;
 }
 
-:global(:root.dark) .codex-login-modal-title {
+:global(:root.dark .codex-login-modal-title) {
   @apply text-zinc-100;
 }
 
-:global(:root.dark) .codex-login-modal-close,
-:global(:root.dark) .codex-login-modal-cancel {
+:global(:root.dark .codex-login-modal-close),
+:global(:root.dark .codex-login-modal-cancel) {
   @apply border-zinc-600 bg-zinc-800 text-zinc-200 hover:bg-zinc-700;
 }
 
-:global(:root.dark) .codex-login-modal-copy {
+:global(:root.dark .codex-login-modal-copy) {
   @apply text-zinc-300;
 }
 
-:global(:root.dark) .codex-login-modal-link {
+:global(:root.dark .codex-login-modal-link) {
   @apply text-sky-300 hover:text-sky-200;
 }
 
-:global(:root.dark) .codex-login-modal-input {
+:global(:root.dark .codex-login-modal-input) {
   @apply border-zinc-600 bg-zinc-950 text-zinc-100 placeholder:text-zinc-500 focus:border-zinc-400;
 }
 
-:global(:root.dark) .codex-login-modal-error {
+:global(:root.dark .codex-login-modal-error) {
   @apply bg-rose-950/40 text-rose-200;
 }
 
-:global(:root.dark) .codex-login-modal-submit {
+:global(:root.dark .codex-login-modal-submit) {
   @apply border-zinc-200 bg-zinc-100 text-zinc-900 hover:bg-white;
 }
 </style>
