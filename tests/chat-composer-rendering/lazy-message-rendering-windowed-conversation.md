@@ -3,6 +3,9 @@
 #### Prerequisites
 - App is running from this repository.
 - A thread exists with more than 50 messages (send many short messages, or use a long-running session).
+- Browser developer tools are available with the Elements and Network panels open.
+- The thread contains one completed command with a known output smaller than 256 KiB, including unique first and last lines.
+- A separate historical fixture contains a `commandExecution.aggregatedOutput` larger than 256 KiB (262,144 UTF-8 bytes), with unique early and final markers. Reload the thread after creating the fixture so it is read through `thread/read`, `thread/resume`, or the live-state history response rather than only from an in-memory live turn.
 
 #### Steps — initial load window
 
@@ -38,11 +41,34 @@
 18. Verify the conversation does **not** go blank — messages still render after the list shrinks.
 19. Confirm `renderWindowStart` recovers gracefully and earlier messages remain accessible.
 
+#### Steps — collapsed command output and historical payload limit
+
+20. Reload the thread, leave the known-output command collapsed, and select its `.command-execution-block` in the Elements panel.
+21. Confirm the block contains no `pre.cmd-output` element. As an exact console check, run `$0.querySelectorAll('pre.cmd-output').length` with the block selected and verify the result is `0`.
+22. Expand the known-output command and rerun the same check; verify the result is `1`, and verify the `<pre>` contains the complete first line, intermediate text, and final line without an omission marker.
+23. Collapse the command again and verify its `pre.cmd-output` is removed from the DOM, not merely hidden with CSS.
+24. Reload the oversized historical fixture while recording Network traffic. Inspect the relevant history response and locate the oversized `commandExecution` item.
+25. Verify that item has `aggregatedOutputTruncated: true`, `aggregatedOutputOriginalBytes` greater than `262144`, and `aggregatedOutput` beginning with `[较早输出已省略]\n` while retaining the fixture's unique final marker.
+26. Expand that command, select its `pre.cmd-output`, and run the following console expression:
+    ```js
+    ({
+      byteLength: new TextEncoder().encode($0.textContent ?? '').byteLength,
+      markerOk: ($0.textContent ?? '').startsWith('[较早输出已省略]\n'),
+      tailOk: ($0.textContent ?? '').includes('<unique-final-marker>'),
+      earlyTextRemoved: !($0.textContent ?? '').includes('<unique-early-marker>'),
+    })
+    ```
+27. Verify `byteLength` is at most `262144` and all three Boolean checks are `true`. Collapse it and confirm the `<pre>` is removed again.
+
 #### Expected Results
 - Only ≤50 messages are in the DOM on initial load.
 - Scrolling to the top (or clicking the button) appends older messages without a viewport jump.
 - During live output, the rendered window stays bounded; old messages are trimmed from the top while the user follows the bottom.
 - After a rollback the conversation remains visible; no blank screen.
+- A collapsed command mounts no output `<pre>` or output text; expansion mounts one accessible output region, and collapsing it unmounts the `<pre>` again.
+- Command outputs at or below the limit remain complete when expanded.
+- Oversized historical command output is bounded to 256 KiB by UTF-8 byte count, starts with the omission marker, retains the newest valid UTF-8 tail, and exposes the original byte count and truncation flag in the response.
 
 #### Rollback/Cleanup
-- No persistent state is changed — closing or refreshing the tab resets the render window.
+- Closing or refreshing the tab resets the render window.
+- Delete the disposable long-thread and oversized-output fixtures if they were created only for this test; no application preference needs to be restored.
