@@ -101,7 +101,6 @@
             :project-cwd-by-name="projectCwdByName"
             v-if="!isSidebarCollapsed"
             :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads"
-            :is-thread-list-fully-loaded="isThreadListFullyLoaded"
             :search-query="sidebarSearchQuery"
             :search-matched-thread-ids="serverMatchedThreadIds"
             @select="onSelectThread"
@@ -1000,6 +999,7 @@
                     :has-more-persisted-above="hasMoreOlderMessages"
                     :is-loading-persisted-above="isLoadingOlderMessages"
                     :load-earlier-messages="loadOlderMessages"
+                    :load-agent-result="loadAgentResult"
                     @fork-thread="onForkThreadFromMessage"
                     @rollback="onRollback"
                     @implement-plan="onImplementPlan"
@@ -1435,6 +1435,7 @@ const {
   selectedThreadTerminalOpen,
   selectedThreadServerRequests,
   selectedLiveOverlay,
+  loadAgentResult,
   codexQuota,
   selectedThreadId,
   availableCollaborationModes,
@@ -1451,7 +1452,6 @@ const {
   messages,
   hasMoreOlderMessages,
   isLoadingThreads,
-  isThreadListFullyLoaded,
   isLoadingMessages,
   isLoadingOlderMessages,
   isSendingMessage,

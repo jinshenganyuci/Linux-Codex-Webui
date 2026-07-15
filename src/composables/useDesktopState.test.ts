@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildWorkspaceRootsProjectOrderState,
   collectWorkspaceRootPathsForProjectRemoval,
+  capUtf8Tail,
   filterGroupsByWorkspaceRoots,
   findAdjacentThreadId,
   removeThreadFromGroups,
@@ -15,6 +16,8 @@ const gatewayMocks = vi.hoisted(() => ({
   archiveThread: vi.fn(),
   forkThread: vi.fn(),
   getAccountRateLimits: vi.fn(),
+  getAgentProgress: vi.fn(),
+  getAgentResult: vi.fn(),
   getAvailableCollaborationModes: vi.fn(),
   getAvailableModels: vi.fn(),
   getCurrentModelConfig: vi.fn(),
@@ -29,6 +32,7 @@ const gatewayMocks = vi.hoisted(() => ({
   getWorkspaceRootsState: vi.fn(),
   generateThreadTitle: vi.fn(),
   interruptThreadTurn: vi.fn(),
+  normalizeAgentProgressSnapshot: vi.fn((value) => value),
   persistThreadTitle: vi.fn(),
   persistThreadModelPreference: vi.fn(),
   renameThread: vi.fn(),
@@ -117,6 +121,9 @@ beforeEach(() => {
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
   gatewayMocks.getThreadModelPreferences.mockResolvedValue({})
   gatewayMocks.getThreadRuntimeStates.mockResolvedValue([])
+  gatewayMocks.getAgentProgress.mockResolvedValue(null)
+  gatewayMocks.getAgentResult.mockResolvedValue({ threadId: '', text: '', truncated: false })
+  gatewayMocks.normalizeAgentProgressSnapshot.mockImplementation((value) => value)
   gatewayMocks.persistThreadModelPreference.mockImplementation(async (_threadId, preference) => preference)
   gatewayMocks.setThreadQueueState.mockResolvedValue(undefined)
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
@@ -124,6 +131,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -748,7 +756,7 @@ describe('startup request deduplication', () => {
 })
 
 describe('live error overlay', () => {
-  it('shows the default thinking overlay while a selected thread is in progress without activity events', async () => {
+  it('does not show an empty thinking card while live progress is still loading', async () => {
     installTestWindow()
     gatewayMocks.getPendingServerRequests.mockResolvedValue(modelCapabilities())
     gatewayMocks.resumeThread.mockResolvedValue(null)
@@ -771,8 +779,28 @@ describe('live error overlay', () => {
     state.primeSelectedThread('thread-thinking')
     await state.loadMessages('thread-thinking')
 
+    expect(state.selectedLiveOverlay.value).toBeNull()
+  })
+
+  it('shows a localized activity overlay after a real turn activity event', () => {
+    installTestWindow()
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-thinking')
+    state.startPolling()
+    notificationHandler({
+      method: 'turn/started',
+      params: { threadId: 'thread-thinking', turn: { id: 'turn-thinking' } },
+    })
+
     expect(state.selectedLiveOverlay.value).toMatchObject({
-      activityLabel: 'Thinking',
+      activityLabel: 'Thinking activity',
       reasoningText: '',
       errorText: '',
     })
@@ -1750,8 +1778,17 @@ describe('findAdjacentThreadId', () => {
   })
 })
 
+describe('live output bounds', () => {
+  it('keeps UTF-8 output within the configured byte ceiling', () => {
+    const result = capUtf8Tail('你好世界hello', 10)
+    expect(new TextEncoder().encode(result).byteLength).toBeLessThanOrEqual(10)
+    expect(result.endsWith('hello')).toBe(true)
+  })
+})
+
 describe('notification recovery', () => {
   it('keeps live deltas for a background thread when switching back', async () => {
+    vi.useFakeTimers()
     installTestWindow()
     let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
     gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
@@ -1775,11 +1812,141 @@ describe('notification recovery', () => {
       method: 'item/agentMessage/delta',
       params: { threadId: 'thread-a', itemId: 'agent-a', delta: 'background text' },
     })
+    await vi.advanceTimersByTimeAsync(180)
 
     state.primeSelectedThread('thread-a')
     expect(state.messages.value).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'agent-a', text: 'background text' }),
     ]))
+  })
+
+  it('batches agent message deltas before updating reactive message state', async () => {
+    vi.useFakeTimers()
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    notificationHandler!({ method: 'item/agentMessage/delta', params: { threadId: 'thread-a', itemId: 'agent-a', delta: 'hello ' } })
+    notificationHandler!({ method: 'item/agentMessage/delta', params: { threadId: 'thread-a', itemId: 'agent-a', delta: 'world' } })
+
+    expect(state.messages.value).toEqual([])
+    await vi.advanceTimersByTimeAsync(179)
+    expect(state.messages.value).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(state.messages.value).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'agent-a', text: 'hello world' }),
+    ]))
+  })
+
+  it('batches reasoning and command output deltas in the same flush window', async () => {
+    vi.useFakeTimers()
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    notificationHandler!({ method: 'turn/started', params: { threadId: 'thread-a', turn: { id: 'turn-a' } } })
+    notificationHandler!({ method: 'item/started', params: { threadId: 'thread-a', turnId: 'turn-a', item: { id: 'reason-a', type: 'reasoning' } } })
+    notificationHandler!({ method: 'item/reasoning/textDelta', params: { threadId: 'thread-a', itemId: 'reason-a', delta: 'deep ' } })
+    notificationHandler!({ method: 'item/reasoning/textDelta', params: { threadId: 'thread-a', itemId: 'reason-a', delta: 'thought' } })
+    notificationHandler!({
+      method: 'item/started',
+      params: { threadId: 'thread-a', turnId: 'turn-a', item: { id: 'command-a', type: 'commandExecution', command: 'printf test' } },
+    })
+    notificationHandler!({ method: 'item/commandExecution/outputDelta', params: { threadId: 'thread-a', itemId: 'command-a', delta: 'one ' } })
+    notificationHandler!({ method: 'item/commandExecution/outputDelta', params: { threadId: 'thread-a', itemId: 'command-a', delta: 'two' } })
+
+    expect(state.selectedLiveOverlay.value?.reasoningText).toBe('')
+    expect(state.messages.value.find((message) => message.id === 'command-a')?.commandExecution?.aggregatedOutput).toBe('')
+    await vi.advanceTimersByTimeAsync(180)
+    expect(state.selectedLiveOverlay.value?.reasoningText).toBe('deep thought')
+    expect(state.messages.value.find((message) => message.id === 'command-a')?.commandExecution?.aggregatedOutput).toBe('one two')
+  })
+
+  it('stores six-agent progress notifications, connection state, and lazy results', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getAgentResult.mockResolvedValue({ threadId: 'child-1', text: 'child result', truncated: false })
+
+    const agents = Array.from({ length: 6 }, (_, index) => ({
+      threadId: `child-${index + 1}`,
+      parentThreadId: index === 5 ? 'child-1' : 'thread-a',
+      path: `/root/child-${index + 1}`,
+      nickname: index === 0 ? 'Darwin' : '',
+      depth: index === 5 ? 2 : 1,
+      taskSummary: `task ${index + 1}`,
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'ultra',
+      status: index === 0 ? 'completed' : 'running',
+      startedAtMs: 1_000 + index,
+      lastActivityAtMs: 2_000 + index,
+      completedAtMs: index === 0 ? 3_000 : null,
+      currentActivity: index === 0 ? '' : 'working',
+      resultAvailable: index === 0,
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    notificationHandler!({ method: 'connection/status', params: { status: 'connected' } })
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: {
+        threadId: 'thread-a',
+        progress: {
+          rootThreadId: 'thread-a',
+          turnId: 'turn-a',
+          status: 'running',
+          phase: 'waitingForAgents',
+          startedAtMs: 1_000,
+          lastActivityAtMs: 2_000,
+          mainLastActivityAtMs: 1_800,
+          updatedAtMs: 2_000,
+          agents,
+          events: [],
+        },
+      },
+    })
+
+    expect(state.selectedLiveOverlay.value).toMatchObject({
+      connectionState: 'connected',
+      turnProgress: {
+        phase: 'waitingForAgents',
+        agents: expect.arrayContaining([
+          expect.objectContaining({ threadId: 'child-6', parentThreadId: 'child-1', depth: 2 }),
+        ]),
+      },
+    })
+
+    await state.loadAgentResult('child-1')
+    expect(state.selectedLiveOverlay.value?.turnProgress?.agents[0]).toMatchObject({
+      resultText: 'child result',
+      resultLoading: false,
+    })
+
+    notificationHandler!({
+      method: 'turn/started',
+      params: { threadId: 'thread-a', turn: { id: 'turn-b', status: 'inProgress' } },
+    })
+    expect(state.selectedLiveOverlay.value?.turnProgress).toBeNull()
   })
 
   it('forces the selected thread to reload when replay is unavailable', async () => {
@@ -1806,19 +1973,215 @@ describe('notification recovery', () => {
     const state = useDesktopState()
     state.primeSelectedThread('thread-a')
     await state.refreshAll({ includeSelectedThreadMessages: true })
-    const callsBeforeReconnect = gatewayMocks.getThreadDetail.mock.calls.length
+    const callsBeforeInitialReady = gatewayMocks.getThreadDetail.mock.calls.length
     state.startPolling()
+    notificationHandler!({
+      method: 'ready',
+      params: { replayAvailable: true, streamChanged: false },
+    })
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadDetail.mock.calls.length).toBeGreaterThan(callsBeforeInitialReady)
+    })
+    const callsBeforeReconnect = gatewayMocks.getThreadDetail.mock.calls.length
     notificationHandler!({
       method: 'ready',
       params: { replayAvailable: false, streamChanged: true },
     })
     await vi.waitFor(() => {
       expect(gatewayMocks.getThreadDetail.mock.calls.length).toBeGreaterThan(callsBeforeReconnect)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledWith('thread-a')
     })
   })
 })
 
 describe('authoritative thread runtime reconciliation', () => {
+  it('backs off missing agent progress instead of retrying on every active runtime poll', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let now = 100_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    gatewayMocks.subscribeCodexNotifications.mockReturnValue(vi.fn())
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'running',
+      isRunning: true,
+      source: 'local',
+      startedAtIso: '2026-07-10T00:00:00.000Z',
+      completedAtIso: null,
+      owner: null,
+    }])
+    gatewayMocks.getAgentProgress
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error('progress unavailable'))
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+
+    async function runRuntimePoll(delay: number, nextNow: number): Promise<void> {
+      const timerIndex = timers.findIndex((timer) => timer.delay === delay)
+      expect(timerIndex).toBeGreaterThanOrEqual(0)
+      const [timer] = timers.splice(timerIndex, 1)
+      const expectedRuntimeCalls = gatewayMocks.getThreadRuntimeStates.mock.calls.length + 1
+      now = nextNow
+      timer?.callback()
+      await vi.waitFor(() => expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(expectedRuntimeCalls))
+      await Promise.resolve()
+      await Promise.resolve()
+      await vi.waitFor(() => expect(timers.some((candidate) => candidate.delay === 2_000)).toBe(true))
+    }
+
+    try {
+      await runRuntimePoll(0, 100_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(1))
+
+      await runRuntimePoll(2_000, 104_999)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(1)
+
+      await runRuntimePoll(2_000, 105_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(2))
+
+      await runRuntimePoll(2_000, 114_999)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(2)
+
+      await runRuntimePoll(2_000, 115_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(3))
+      await runRuntimePoll(2_000, 134_999)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(3)
+
+      await runRuntimePoll(2_000, 135_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(4))
+      await runRuntimePoll(2_000, 174_999)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(4)
+
+      await runRuntimePoll(2_000, 175_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(5))
+      await runRuntimePoll(2_000, 234_999)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(5)
+
+      await runRuntimePoll(2_000, 235_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(6))
+      await runRuntimePoll(2_000, 294_999)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(6)
+
+      await runRuntimePoll(2_000, 295_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(7))
+    } finally {
+      state.stopPolling()
+      nowSpy.mockRestore()
+    }
+  })
+
+  it('ignores a stale progress failure after a new turn invalidates the old request', async () => {
+    installTestWindow()
+    let nextTimerId = 0
+    const timers: Array<{ id: number; callback: () => void; delay: number; cancelled: boolean }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      nextTimerId += 1
+      if (typeof callback === 'function') {
+        timers.push({ id: nextTimerId, callback: callback as () => void, delay: delay ?? 0, cancelled: false })
+      }
+      return nextTimerId
+    }) as typeof window.setTimeout)
+    vi.mocked(window.clearTimeout).mockImplementation(((timerId?: number) => {
+      const timer = timers.find((candidate) => candidate.id === timerId)
+      if (timer) timer.cancelled = true
+    }) as typeof window.clearTimeout)
+    let now = 100_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    let runtimeTurnId = 'turn-a'
+    gatewayMocks.getThreadRuntimeStates.mockImplementation(async () => [{
+      threadId: 'thread-a',
+      turnId: runtimeTurnId,
+      state: 'running',
+      isRunning: true,
+      source: 'local',
+      startedAtIso: '2026-07-10T00:00:00.000Z',
+      completedAtIso: null,
+      owner: null,
+    }])
+    let rejectFirstProgress: (error: Error) => void = () => {}
+    let resolveSecondProgress: (value: null) => void = () => {}
+    const firstProgress = new Promise<null>((_resolve, reject) => {
+      rejectFirstProgress = reject
+    })
+    const secondProgress = new Promise<null>((resolve) => {
+      resolveSecondProgress = resolve
+    })
+    gatewayMocks.getAgentProgress
+      .mockImplementationOnce(() => firstProgress)
+      .mockImplementationOnce(() => secondProgress)
+      .mockResolvedValue(null)
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+
+    async function runRuntimePoll(delay: number, nextNow: number): Promise<void> {
+      const timerIndex = timers.findIndex((timer) => !timer.cancelled && timer.delay === delay)
+      expect(timerIndex).toBeGreaterThanOrEqual(0)
+      const [timer] = timers.splice(timerIndex, 1)
+      const expectedRuntimeCalls = gatewayMocks.getThreadRuntimeStates.mock.calls.length + 1
+      now = nextNow
+      timer?.callback()
+      await vi.waitFor(() => expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(expectedRuntimeCalls))
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+
+    try {
+      await runRuntimePoll(0, 100_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(1))
+
+      notificationHandler?.({
+        method: 'turn/completed',
+        params: { threadId: 'thread-a', turnId: 'turn-a', turn: { id: 'turn-a', status: 'completed' } },
+      })
+      runtimeTurnId = 'turn-b'
+      notificationHandler?.({
+        method: 'turn/started',
+        params: { threadId: 'thread-a', turn: { id: 'turn-b', status: 'inProgress' } },
+      })
+
+      await runRuntimePoll(0, 103_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(2))
+      resolveSecondProgress(null)
+      await Promise.resolve()
+      await Promise.resolve()
+      rejectFirstProgress(new Error('old request failed late'))
+      await Promise.resolve()
+      await Promise.resolve()
+
+      await runRuntimePoll(2_000, 108_000)
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(3))
+    } finally {
+      state.stopPolling()
+      nowSpy.mockRestore()
+    }
+  })
+
   it('clears a silent-WebSocket spinner on the next active runtime poll', async () => {
     installTestWindow()
     const timers: Array<{ callback: () => void; delay: number }> = []

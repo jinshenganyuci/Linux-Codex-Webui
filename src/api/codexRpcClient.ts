@@ -188,6 +188,17 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
   let reconnectTimer: number | null = null
   let activeStreamId = ''
   let lastSequence = 0
+  let connectionStatus = ''
+
+  const emitConnectionStatus = (status: 'connecting' | 'connected' | 'reconnecting' | 'unavailable') => {
+    if (connectionStatus === status) return
+    connectionStatus = status
+    onNotification({
+      method: 'connection/status',
+      params: { status },
+      atIso: new Date().toISOString(),
+    })
+  }
 
   const clearReconnectTimer = () => {
     if (reconnectTimer === null) return
@@ -234,6 +245,7 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
     const streamChanged = Boolean(activeStreamId) && Boolean(streamId) && activeStreamId !== streamId
     if (streamChanged) lastSequence = 0
     if (streamId) activeStreamId = streamId
+    emitConnectionStatus('connected')
     emitReadyNotification(onNotification, {
       ...(ready ?? { ok: true }),
       streamChanged,
@@ -242,10 +254,18 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
   }
 
   const attachSse = (attempt = 0) => {
-    if (typeof EventSource === 'undefined' || closed) return
+    if (typeof EventSource === 'undefined' || closed) {
+      if (!closed) emitConnectionStatus('unavailable')
+      return
+    }
+    emitConnectionStatus(attempt > 0 ? 'reconnecting' : 'connecting')
     cleanup?.()
     const source = new EventSource(`/codex-api/events${cursorQuery()}`)
     let isConnectionClosed = false
+
+    source.onopen = () => {
+      emitConnectionStatus('connected')
+    }
 
     source.onmessage = (event) => {
       try {
@@ -267,6 +287,7 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
       if (closed || isConnectionClosed) return
       isConnectionClosed = true
       source.close()
+      emitConnectionStatus('reconnecting')
       scheduleReconnect(() => attachSse(attempt + 1), attempt)
     }
 
@@ -282,6 +303,7 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
       return
     }
 
+    emitConnectionStatus(attempt > 0 ? 'reconnecting' : 'connecting')
     cleanup?.()
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const socket = new WebSocket(`${protocol}//${window.location.host}/codex-api/ws${cursorQuery()}`)
@@ -294,6 +316,7 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
       if (didOpen || closed || intentionallyClosed) return
       intentionallyClosed = true
       socket.close()
+      emitConnectionStatus('reconnecting')
       attachSse()
     }, 2500)
 
@@ -306,6 +329,7 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
     socket.onopen = () => {
       didOpen = true
       lastFrameAt = Date.now()
+      emitConnectionStatus('connected')
       clearReconnectTimer()
       if (fallbackTimer !== null) {
         window.clearTimeout(fallbackTimer)
@@ -316,6 +340,7 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
         if (Date.now() - lastFrameAt < 25_000) return
         watchdogTriggered = true
         clearWatchdog()
+        emitConnectionStatus('reconnecting')
         socket.close()
         scheduleReconnect(() => attachWebSocket(0), 0)
       }, 5_000)
@@ -348,6 +373,7 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
       }
       if (closed || intentionallyClosed) return
       if (watchdogTriggered) return
+      emitConnectionStatus('reconnecting')
       if (!didOpen) {
         attachSse()
         return

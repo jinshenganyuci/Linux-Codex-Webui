@@ -12,7 +12,7 @@
           <IconTablerChevronRight v-if="!isPinnedSectionExpanded" class="thread-icon" />
           <IconTablerChevronDown v-else class="thread-icon" />
         </template>
-        <span class="thread-tree-header">{{ t('Pinned') }}</span>
+        <span class="thread-tree-header">{{ t('Pinned chats') }}</span>
       </SidebarMenuRow>
 
       <ul v-if="isPinnedSectionExpanded" class="thread-list">
@@ -81,6 +81,10 @@
         </li>
       </ul>
     </section>
+
+    <p v-if="pinnedThreadActionError" class="thread-tree-action-error" role="alert">
+      {{ pinnedThreadActionError }}
+    </p>
 
     <section class="projects-section">
       <SidebarMenuRow
@@ -596,13 +600,23 @@
         <button class="thread-menu-item" type="button" @click="onForkThread(openThreadMenuThread.id)">
           {{ t('Create chat fork') }}
         </button>
-        <button class="thread-menu-item" type="button" @click="onTogglePinFromMenu(openThreadMenuThread.id)">
-          {{ isPinned(openThreadMenuThread.id) ? t('Unpin thread') : t('Pin thread') }}
+        <button
+          class="thread-menu-item"
+          type="button"
+          :disabled="!hasLoadedPinnedThreadState || isSavingPinnedThreadState"
+          @click="onTogglePinFromMenu(openThreadMenuThread.id)"
+        >
+          {{ isPinned(openThreadMenuThread.id) ? t('Unpin this chat') : t('Pin this chat') }}
         </button>
         <button class="thread-menu-item" type="button" @click="openRenameThreadDialog(openThreadMenuThread.id, openThreadMenuThread.title)">
           {{ t('Rename thread') }}
         </button>
-        <button class="thread-menu-item" type="button" @click="archiveThreadFromMenu(openThreadMenuThread.id)">
+        <button
+          class="thread-menu-item"
+          type="button"
+          :disabled="!hasLoadedPinnedThreadState || isSavingPinnedThreadState"
+          @click="archiveThreadFromMenu(openThreadMenuThread.id)"
+        >
           {{ t('Archive chat') }}
         </button>
       </div>
@@ -840,7 +854,7 @@ import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics
 import { getPathLeafName, getPathParent, isAbsoluteLikePath, isProjectlessChatPath } from '../../pathUtils.js'
 import ComposerDropdown from '../content/ComposerDropdown.vue'
 import SidebarMenuRow from './SidebarMenuRow.vue'
-import { reconcilePinnedThreadIds } from './pinnedThreadUtils'
+import { mapWithConcurrency, togglePinnedThreadId } from './pinnedThreadUtils'
 
 const props = defineProps<{
   groups: UiProjectGroup[]
@@ -849,7 +863,6 @@ const props = defineProps<{
   projectCwdByName: Record<string, string>
   selectedThreadId: string
   isLoading: boolean
-  isThreadListFullyLoaded: boolean
   searchQuery: string
   searchMatchedThreadIds: string[] | null
 }>()
@@ -921,6 +934,7 @@ type AutomationScheduleDraft = {
 
 const DRAG_START_THRESHOLD_PX = 4
 const PROJECT_GROUP_EXPANDED_GAP_PX = 6
+const PINNED_THREAD_HYDRATION_CONCURRENCY = 4
 const SECTION_EXPANSION_STORAGE_KEY = 'codex-web-local.sidebar-section-expansion.v1'
 const CHATS_FIRST_STORAGE_KEY = 'codex-web-local.sidebar-chats-first.v1'
 const CHAT_SORT_MODE_STORAGE_KEY = 'codex-web-local.sidebar-chat-sort-mode.v1'
@@ -932,9 +946,11 @@ const isChatsSectionExpanded = ref(true)
 const isChatsListExpanded = ref(false)
 const showChatsFirst = ref(loadBooleanStorage(CHATS_FIRST_STORAGE_KEY, false))
 const chatSortMode = ref<ChatSortMode>(loadChatSortMode())
-let hasLoadedPinnedThreadState = false
+const hasLoadedPinnedThreadState = ref(false)
 const pinnedThreadIds = ref<string[]>([])
 const hydratedPinnedThreadById = ref<Record<string, UiThread>>({})
+const isSavingPinnedThreadState = ref(false)
+const pinnedThreadActionError = ref('')
 const openProjectMenuId = ref('')
 const openThreadMenuId = ref('')
 const projectMenuDirectionById = ref<Record<string, MenuDirection>>({})
@@ -1246,69 +1262,60 @@ const threadById = computed(() => {
   return map
 })
 
-watch(
-  pinnedThreadIds,
-  (threadIds) => {
-    if (!hasLoadedPinnedThreadState) return
-    void persistPinnedThreadIds(threadIds)
-  },
-)
-
-watch([threadById, () => props.isThreadListFullyLoaded], ([threadsById]) => {
-  const filtered = reconcilePinnedThreadIds(pinnedThreadIds.value, new Set(threadsById.keys()), {
-    canPruneMissing: props.isThreadListFullyLoaded,
-  })
-  if (filtered.length === pinnedThreadIds.value.length) return
-  const filteredIdSet = new Set(filtered)
-  const nextHydratedPinnedThreads = Object.fromEntries(
-    Object.entries(hydratedPinnedThreadById.value).filter(([threadId]) => filteredIdSet.has(threadId)),
-  )
-  hydratedPinnedThreadById.value = nextHydratedPinnedThreads
-  pinnedThreadIds.value = filtered
-})
-
-let pinnedThreadHydrationVersion = 0
+const hydratingPinnedThreadIds = new Set<string>()
 
 async function hydrateMissingPinnedThreads(): Promise<void> {
   if (props.isLoading) return
-  const missingThreadIds = pinnedThreadIds.value.filter((threadId) => !threadById.value.has(threadId) && !hydratedPinnedThreadById.value[threadId])
+  const missingThreadIds = pinnedThreadIds.value.filter((threadId) => (
+    !threadById.value.has(threadId)
+    && !hydratedPinnedThreadById.value[threadId]
+    && !hydratingPinnedThreadIds.has(threadId)
+  ))
   if (missingThreadIds.length === 0) return
 
-  const version = (pinnedThreadHydrationVersion += 1)
-  const loadedThreads = await Promise.all(
-    missingThreadIds.map(async (threadId) => {
+  for (const threadId of missingThreadIds) hydratingPinnedThreadIds.add(threadId)
+  const loadedThreads = await mapWithConcurrency(
+    missingThreadIds,
+    PINNED_THREAD_HYDRATION_CONCURRENCY,
+    async (threadId) => {
       try {
         return await getThreadSummary(threadId)
       } catch {
         return null
       }
-    }),
+    },
   )
-  if (version !== pinnedThreadHydrationVersion) return
+  for (const threadId of missingThreadIds) hydratingPinnedThreadIds.delete(threadId)
 
   const next = { ...hydratedPinnedThreadById.value }
+  const currentPinnedThreadIds = new Set(pinnedThreadIds.value)
   for (const thread of loadedThreads) {
-    if (thread) next[thread.id] = thread
+    if (thread && currentPinnedThreadIds.has(thread.id)) next[thread.id] = thread
   }
   hydratedPinnedThreadById.value = next
 }
 
 watch([pinnedThreadIds, threadById, () => props.isLoading], () => {
-  if (!hasLoadedPinnedThreadState) return
+  if (!hasLoadedPinnedThreadState.value) return
   void hydrateMissingPinnedThreads()
 })
 
 onMounted(async () => {
-  const { threadIds } = await getPinnedThreadState()
-  const normalized = Array.isArray(threadIds)
-    ? threadIds
-      .filter((item): item is string => typeof item === 'string')
-      .map((item) => item.trim())
-      .filter((item, index, rows) => item.length > 0 && rows.indexOf(item) === index)
-    : []
-
-  if (normalized.length > 0) {
-    pinnedThreadIds.value = normalized
+  try {
+    const { threadIds } = await getPinnedThreadState()
+    pinnedThreadIds.value = Array.isArray(threadIds)
+      ? threadIds
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter((item, index, rows) => item.length > 0 && rows.indexOf(item) === index)
+      : []
+    pinnedThreadActionError.value = ''
+    hasLoadedPinnedThreadState.value = true
+    void hydrateMissingPinnedThreads()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : t('Failed to load pinned chats')
+    pinnedThreadActionError.value = message
+    recordVisibleFailure(message)
   }
   try {
     automationByThreadId.value = await getThreadAutomationMap()
@@ -1320,8 +1327,6 @@ onMounted(async () => {
   } catch {
     automationByProjectName.value = {}
   }
-  hasLoadedPinnedThreadState = true
-  void hydrateMissingPinnedThreads()
 })
 
 const threadProjectNameById = computed(() => {
@@ -1456,18 +1461,32 @@ function isPinned(threadId: string): boolean {
   return pinnedThreadIdSet.value.has(threadId)
 }
 
-function togglePin(threadId: string): void {
-  if (isPinned(threadId)) {
-    pinnedThreadIds.value = pinnedThreadIds.value.filter((id) => id !== threadId)
-    return
-  }
+async function togglePin(threadId: string): Promise<boolean> {
+  if (!hasLoadedPinnedThreadState.value || isSavingPinnedThreadState.value) return false
+  const previousThreadIds = pinnedThreadIds.value
+  const nextThreadIds = togglePinnedThreadId(previousThreadIds, threadId)
+  if (nextThreadIds === previousThreadIds) return false
 
-  pinnedThreadIds.value = [threadId, ...pinnedThreadIds.value]
+  pinnedThreadActionError.value = ''
+  pinnedThreadIds.value = nextThreadIds
+  isSavingPinnedThreadState.value = true
+  try {
+    await persistPinnedThreadIds(nextThreadIds)
+    return true
+  } catch (error) {
+    pinnedThreadIds.value = previousThreadIds
+    const message = error instanceof Error ? error.message : t('Failed to update pinned chats')
+    pinnedThreadActionError.value = message
+    recordVisibleFailure(message)
+    return false
+  } finally {
+    isSavingPinnedThreadState.value = false
+  }
 }
 
 function onTogglePinFromMenu(threadId: string): void {
-  togglePin(threadId)
   closeThreadMenu()
+  void togglePin(threadId)
 }
 
 function onSelect(threadId: string): void {
@@ -1739,8 +1758,10 @@ function submitRenameThread(): void {
   closeRenameThreadDialog()
 }
 
-function archiveThreadFromMenu(threadId: string): void {
+async function archiveThreadFromMenu(threadId: string): Promise<void> {
+  if (!hasLoadedPinnedThreadState.value || isSavingPinnedThreadState.value) return
   closeThreadMenu()
+  if (isPinned(threadId) && !(await togglePin(threadId))) return
   emit('archive', threadId)
 }
 
