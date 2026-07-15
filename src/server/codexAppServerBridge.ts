@@ -60,6 +60,13 @@ import {
   writeThreadModelPreference,
   type ThreadModelPreference,
 } from './threadModelPreferences.js'
+import {
+  limitCommandOutputsInTurns,
+  limitThreadCommandOutputs,
+  THREAD_METHODS_WITH_TURNS,
+  THREAD_RESPONSE_TURN_LIMIT,
+  trimAndLimitThreadCommandOutputs,
+} from './threadPayloadLimits.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import {
   resolveCodexCommand,
@@ -247,10 +254,8 @@ const COMPOSIO_CONNECTORS_PAGE_LIMIT_MAX = 1000
 
 const PROVIDER_MODELS_FETCH_TIMEOUT_MS = 5_000
 
-const THREAD_RESPONSE_TURN_LIMIT = 10
 const THREAD_TURN_PAGE_READ_CACHE_TTL_MS = 30_000
 const AGENT_PROGRESS_HYDRATION_CACHE_TTL_MS = 5_000
-const THREAD_METHODS_WITH_TURNS = new Set(['thread/read', 'thread/resume', 'thread/fork', 'thread/rollback'])
 const THREAD_METHODS_WITH_THREAD_SNAPSHOT = new Set([...THREAD_METHODS_WITH_TURNS, 'thread/start'])
 const THREAD_SEARCH_FULL_TEXT_THREAD_LIMIT = 100
 const PROJECTLESS_THREAD_DIRECTORY_MAX_ATTEMPTS = 100
@@ -907,25 +912,6 @@ export async function sanitizeThreadTurnsInlinePayloads(method: string, result: 
     thread: {
       ...thread,
       turns: nextTurns,
-    },
-  }
-}
-
-function trimThreadTurnsInRpcResult(method: string, result: unknown): unknown {
-  if (!THREAD_METHODS_WITH_TURNS.has(method)) return result
-
-  const record = asRecord(result)
-  const thread = asRecord(record?.thread)
-  const turns = Array.isArray(thread?.turns) ? thread.turns : null
-  if (!record || !thread || !turns || turns.length <= THREAD_RESPONSE_TURN_LIMIT) return result
-  const startTurnIndex = Math.max(0, turns.length - THREAD_RESPONSE_TURN_LIMIT)
-
-  return {
-    ...record,
-    threadTurnStartIndex: startTurnIndex,
-    thread: {
-      ...thread,
-      turns: turns.slice(startTurnIndex),
     },
   }
 }
@@ -8589,7 +8575,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             const threadId = typeof params?.threadId === 'string' ? params.threadId.trim() : ''
             const snapshot = threadId ? appServer.getLastThreadReadSnapshot(threadId) : null
             if (snapshot) {
-              setJson(res, 200, { result: snapshot })
+              setJson(res, 200, { result: trimAndLimitThreadCommandOutputs(body.method, snapshot) })
               return
             }
           }
@@ -8611,7 +8597,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }
           throw error
         }
-        const trimmedResult = trimThreadTurnsInRpcResult(body.method, rpcResult)
+        const trimmedResult = trimAndLimitThreadCommandOutputs(body.method, rpcResult)
         const errorMergedResult = THREAD_METHODS_WITH_TURNS.has(body.method)
           ? mergeStreamTurnErrorsIntoThreadResult(appServer, trimmedResult)
           : trimmedResult
@@ -8684,7 +8670,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
               turns: pageTurns,
             },
           }
-          const sanitized = await sanitizeThreadTurnsInlinePayloads('thread/read', pagedResult)
+          const boundedPageResult = limitThreadCommandOutputs(pagedResult)
+          const sanitized = await sanitizeThreadTurnsInlinePayloads('thread/read', boundedPageResult)
           const result = await mergeSessionSkillInputsIntoThreadResult(sanitized)
 
           setJson(res, 200, {
@@ -8772,7 +8759,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             threadId,
             includeTurns: true,
           }))
-          const sanitized = await sanitizeThreadTurnsInlinePayloads('thread/read', threadReadResult)
+          const boundedThreadReadResult = limitThreadCommandOutputs(threadReadResult)
+          const sanitized = await sanitizeThreadTurnsInlinePayloads('thread/read', boundedThreadReadResult)
           appServer.storeThreadReadSnapshot(threadId, sanitized)
 
           const record = asRecord(sanitized)
@@ -8804,6 +8792,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
               // Session log not available — continue without command recovery
             }
           }
+
+          turns = limitCommandOutputsInTurns(turns)
 
           const lastTurn = turns.length > 0 ? asRecord(turns[turns.length - 1]) : null
           const isInProgress = lastTurn?.status === 'inProgress'
@@ -8840,7 +8830,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             const record = asRecord(snapshot)
             const thread = asRecord(record?.thread)
             const rawTurns = Array.isArray(thread?.turns) ? thread.turns : []
-            const turns = appServer.mergeItemsIntoTurns(threadId, rawTurns)
+            const turns = limitCommandOutputsInTurns(appServer.mergeItemsIntoTurns(threadId, rawTurns))
             setJson(res, 200, {
               threadId,
               conversationState: { turns },
