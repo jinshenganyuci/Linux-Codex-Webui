@@ -76,6 +76,11 @@ import type {
   UiTurnProgress,
 } from '../types/codex'
 import { getPathParent, isProjectlessChatPath, normalizePathForUi, toProjectName } from '../pathUtils.js'
+import {
+  collectThreadRuntimeStateIds,
+  createThreadRuntimePollingController,
+  shouldIgnoreOlderTerminalRuntimeState as shouldIgnoreOlderRuntimeState,
+} from './desktop/threadRuntimePolling'
 
 function flattenThreads(groups: UiProjectGroup[]): UiThread[] {
   return groups.flatMap((group) => group.threads)
@@ -110,8 +115,6 @@ const EVENT_SYNC_RETRY_DELAY_MS = 1_000
 const BACKGROUND_THREAD_PAGINATION_DELAY_MS = 10_000
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 500
 const TURN_START_FOLLOW_UP_SYNC_DELAY_MS = 3000
-const ACTIVE_RUNTIME_STATE_POLL_INTERVAL_MS = 2_000
-const IDLE_RUNTIME_STATE_POLL_INTERVAL_MS = 15_000
 const RECENT_THREAD_MESSAGE_LOAD_REUSE_MS = 2000
 const RECENT_AGENT_PROGRESS_LOAD_REUSE_MS = 30_000
 const AGENT_PROGRESS_RETRY_BASE_DELAY_MS = 5_000
@@ -1703,10 +1706,6 @@ export function useDesktopState() {
   let stopNotificationStream: (() => void) | null = null
   let hasReceivedNotificationReady = false
   let eventSyncTimer: number | null = null
-  let runtimeStatePollTimer: number | null = null
-  let runtimeStatePollInFlight = false
-  let runtimeStatePollingGeneration = 0
-  let removeRuntimeStateLifecycleListeners: (() => void) | null = null
   const terminalRuntimeRefreshThreadIds = new Set<string>()
   const latestRuntimeStateByThreadId = new Map<string, ThreadRuntimeState>()
   const optimisticTurnStartedAtByThreadId = new Map<string, number>()
@@ -2852,7 +2851,7 @@ export function useDesktopState() {
     }
     applyThreadFlags()
     if (nextInProgress && stopNotificationStream) {
-      scheduleRuntimeStatePoll(0, true)
+      threadRuntimePolling.requestImmediate()
     }
     if (!nextInProgress && !hasActiveInProgressThreads() && threadListNextCursor) {
       scheduleRemainingThreadPages()
@@ -6346,32 +6345,13 @@ export function useDesktopState() {
     }
   }
 
-  function collectRuntimeStateThreadIds(): string[] {
-    const threadIds = new Set<string>()
-    for (const thread of allThreads.value) threadIds.add(thread.id)
-    for (const threadId of Object.keys(inProgressById.value)) threadIds.add(threadId)
-    const selected = selectedThreadId.value.trim()
-    if (selected) threadIds.add(selected)
-    return Array.from(threadIds)
-  }
-
-  function isUuidV7TurnId(value: string): boolean {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value)
-  }
-
   function shouldIgnoreOlderTerminalRuntimeState(state: ThreadRuntimeState): boolean {
-    const optimisticStartedAtMs = optimisticTurnStartedAtByThreadId.get(state.threadId)
-    if (optimisticStartedAtMs) {
-      const runtimeStartedAtMs = state.startedAtIso ? Date.parse(state.startedAtIso) : NaN
-      if (!Number.isFinite(runtimeStartedAtMs)) {
-        return Date.now() - optimisticStartedAtMs < 60_000
-      }
-      if (runtimeStartedAtMs + 1_000 < optimisticStartedAtMs) return true
-    }
-    const currentTurnId = activeTurnIdByThreadId.value[state.threadId]?.trim() ?? ''
-    if (!currentTurnId || !state.turnId || currentTurnId === state.turnId) return false
-    if (!isUuidV7TurnId(currentTurnId) || !isUuidV7TurnId(state.turnId)) return false
-    return currentTurnId.localeCompare(state.turnId) > 0
+    return shouldIgnoreOlderRuntimeState({
+      state,
+      optimisticStartedAtMs: optimisticTurnStartedAtByThreadId.get(state.threadId),
+      currentTurnId: activeTurnIdByThreadId.value[state.threadId] ?? '',
+      nowMs: Date.now(),
+    })
   }
 
   function refreshTerminalThreadFromServer(state: ThreadRuntimeState): void {
@@ -6438,77 +6418,19 @@ export function useDesktopState() {
     }
   }
 
-  function scheduleRuntimeStatePoll(delayMs: number, replaceExisting = false): void {
-    if (typeof window === 'undefined' || !stopNotificationStream) return
-    if (runtimeStatePollTimer !== null) {
-      if (!replaceExisting) return
-      window.clearTimeout(runtimeStatePollTimer)
-      runtimeStatePollTimer = null
-    }
-    const generation = runtimeStatePollingGeneration
-    runtimeStatePollTimer = window.setTimeout(() => {
-      runtimeStatePollTimer = null
-      void pollThreadRuntimeStates(generation)
-    }, Math.max(0, delayMs))
-  }
+  const threadRuntimePolling = createThreadRuntimePollingController({
+    collectThreadIds: () => collectThreadRuntimeStateIds(
+      allThreads.value,
+      inProgressById.value,
+      selectedThreadId.value,
+    ),
+    hasActiveThreads: hasActiveInProgressThreads,
+    fetchStates: getThreadRuntimeStates,
+    applyStates: applyThreadRuntimeStates,
+  })
 
-  async function pollThreadRuntimeStates(generation: number): Promise<void> {
-    if (generation !== runtimeStatePollingGeneration || !stopNotificationStream) return
-    if (runtimeStatePollInFlight) {
-      scheduleRuntimeStatePoll(250, true)
-      return
-    }
-
-    const threadIds = collectRuntimeStateThreadIds()
-    if (threadIds.length === 0) {
-      scheduleRuntimeStatePoll(IDLE_RUNTIME_STATE_POLL_INTERVAL_MS)
-      return
-    }
-
-    runtimeStatePollInFlight = true
-    let anyRunning = hasActiveInProgressThreads()
-    try {
-      const states = await getThreadRuntimeStates(threadIds)
-      if (generation !== runtimeStatePollingGeneration || !stopNotificationStream) return
-      applyThreadRuntimeStates(states)
-      anyRunning = states.some((state) => state.isRunning) || hasActiveInProgressThreads()
-    } catch {
-      anyRunning = hasActiveInProgressThreads()
-    } finally {
-      runtimeStatePollInFlight = false
-      if (generation === runtimeStatePollingGeneration) {
-        scheduleRuntimeStatePoll(
-          anyRunning ? ACTIVE_RUNTIME_STATE_POLL_INTERVAL_MS : IDLE_RUNTIME_STATE_POLL_INTERVAL_MS,
-        )
-      }
-    }
-  }
-
-  async function reconcileThreadRuntimeState(threadId: string): Promise<ThreadRuntimeState | null> {
-    try {
-      const state = (await getThreadRuntimeStates([threadId]))[0] ?? null
-      if (state) applyThreadRuntimeStates([state])
-      return state
-    } catch {
-      return null
-    }
-  }
-
-  function installRuntimeStateLifecycleListeners(): void {
-    if (typeof window === 'undefined' || removeRuntimeStateLifecycleListeners) return
-    const requestImmediatePoll = () => scheduleRuntimeStatePoll(0, true)
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') requestImmediatePoll()
-    }
-    window.addEventListener('focus', requestImmediatePoll)
-    window.addEventListener('online', requestImmediatePoll)
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    removeRuntimeStateLifecycleListeners = () => {
-      window.removeEventListener('focus', requestImmediatePoll)
-      window.removeEventListener('online', requestImmediatePoll)
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-      removeRuntimeStateLifecycleListeners = null
-    }
+  function reconcileThreadRuntimeState(threadId: string): Promise<ThreadRuntimeState | null> {
+    return threadRuntimePolling.reconcile(threadId)
   }
 
   async function syncThreadStatus(): Promise<void> {
@@ -6617,7 +6539,6 @@ export function useDesktopState() {
     if (typeof window === 'undefined') return
     if (stopNotificationStream) return
     hasReceivedNotificationReady = false
-    runtimeStatePollingGeneration += 1
     void loadPendingServerRequestsFromBridge()
     stopNotificationStream = subscribeCodexNotifications((notification) => {
       if (notification.method === 'connection/status') {
@@ -6640,15 +6561,14 @@ export function useDesktopState() {
         const forceRefresh = hasReceivedNotificationReady && replayRecoveryRequired
         hasReceivedNotificationReady = true
         void recoverBridgeState(forceRefresh)
-        scheduleRuntimeStatePoll(0, true)
+        threadRuntimePolling.requestImmediate()
         return
       }
       if (notification.method === 'heartbeat') return
       applyRealtimeUpdates(notification)
       queueEventDrivenSync(notification)
     })
-    installRuntimeStateLifecycleListeners()
-    scheduleRuntimeStatePoll(0, true)
+    threadRuntimePolling.start()
   }
 
   async function loadPendingServerRequestsFromBridge(): Promise<void> {
@@ -6682,18 +6602,13 @@ export function useDesktopState() {
 
   function stopPolling(): void {
     agentProgressLoadGeneration += 1
-    runtimeStatePollingGeneration += 1
+    threadRuntimePolling.stop()
     if (stopNotificationStream) {
       stopNotificationStream()
       stopNotificationStream = null
     }
     hasReceivedNotificationReady = false
 
-    if (runtimeStatePollTimer !== null && typeof window !== 'undefined') {
-      window.clearTimeout(runtimeStatePollTimer)
-      runtimeStatePollTimer = null
-    }
-    removeRuntimeStateLifecycleListeners?.()
     terminalRuntimeRefreshThreadIds.clear()
     latestRuntimeStateByThreadId.clear()
     optimisticTurnStartedAtByThreadId.clear()
