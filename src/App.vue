@@ -1121,6 +1121,7 @@ import { useMobile } from './composables/useMobile'
 import { useUiLanguage } from './composables/useUiLanguage'
 import { useFeedbackDiagnostics } from './composables/useFeedbackDiagnostics'
 import { useAppPreferences } from './composables/app/useAppPreferences'
+import { useProjectZipTransfer } from './composables/app/useProjectZipTransfer'
 import {
   checkoutGitBranch,
   cloneGithubRepository,
@@ -1128,7 +1129,6 @@ import {
   createPermanentWorktree,
   createWorktree,
   createProjectlessThreadDirectory,
-  downloadProjectZip,
   getGitBranchState,
   getGitBranchCommits,
   getGitCommitFiles,
@@ -1146,7 +1146,6 @@ import {
   getThreadTerminalQuickCommands,
   getThreadTerminalStatus,
   getWorkspaceRootsState,
-  importProjectZip,
   listLocalDirectories,
   openProjectRoot,
   persistFirstLaunchPluginsCardPreference,
@@ -1159,7 +1158,6 @@ import {
 } from './api/codexGateway'
 import type { CodexPermissionMode, ReasoningEffort, SpeedMode, UiAccountEntry, UiRateLimitWindow, UiServerRequest, UiServerRequestReply, UiThreadAutomation } from './types/codex'
 import type { ComposerDraftPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
-import type { ProjectZipExportStatus } from './components/app/projectZipExportModal'
 import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, TelegramStatus, ThreadTerminalQuickCommand, WorktreeBranchOption } from './api/codexGateway'
 import { getFreeModeStatus, setFreeMode, setFreeModeCustomKey, setCustomProvider } from './api/codexGateway'
 import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
@@ -1347,14 +1345,6 @@ const workspaceRootOptionsState = ref<{ order: string[]; labels: Record<string, 
   labels: {},
   projectOrder: [],
 })
-const projectZipExportStatus = ref<ProjectZipExportStatus>({
-  phase: 'idle',
-  loaded: 0,
-  total: null,
-  blob: null,
-  fileName: '',
-  error: '',
-})
 const worktreeInitStatus = ref<{ phase: 'idle' | 'running' | 'error'; title: string; message: string }>({
   phase: 'idle',
   title: '',
@@ -1475,11 +1465,35 @@ const projectSetupMode = ref<'create' | 'clone'>('create')
 const projectSetupBaseDir = ref('')
 const projectNameDraft = ref('')
 const githubCloneUrlDraft = ref('')
-const isProjectImporting = ref(false)
 const projectSetupError = ref('')
 const isProjectSetupSubmitting = ref(false)
 const projectSetupPrimaryInputRef = ref<HTMLInputElement | null>(null)
-const projectImportInputRef = ref<HTMLInputElement | null>(null)
+const {
+  projectZipExportStatus,
+  isProjectImporting,
+  projectImportInputRef,
+  exportProjectZipForCwd,
+  onCloseProjectZipExportModal,
+  onDownloadProjectZipExport,
+  onShareProjectZipExport,
+  onChooseProjectImportZip,
+  onDirectProjectImportFileChange,
+} = useProjectZipTransfer({
+  resolveProjectBaseDirectory,
+  setImportedProjectPath: (path) => {
+    newThreadCwd.value = path
+  },
+  pinImportedProject: (path) => {
+    pinProjectToTop(getProjectOrderNameForPath(path))
+  },
+  refreshWorkspaceRootOptions: loadWorkspaceRootOptionsState,
+  refreshThreadsAfterImport: () => refreshAll({
+    includeSelectedThreadMessages: false,
+    forceThreadRefresh: true,
+  }),
+  refreshDefaultProjectName,
+  translate: t,
+})
 const isExistingFolderPickerOpen = ref(false)
 const existingFolderPathInputRef = ref<HTMLInputElement | null>(null)
 const existingFolderFilterInputRef = ref<HTMLInputElement | null>(null)
@@ -2594,80 +2608,6 @@ function getThreadCwd(threadId: string): string {
   return ''
 }
 
-function downloadProjectZipFallback(blob: Blob, fileName: string): void {
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = fileName
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  window.setTimeout(() => URL.revokeObjectURL(url), 30000)
-}
-
-async function shareProjectZip(blob: Blob, fileName: string): Promise<void> {
-  const file = new File([blob], fileName, { type: blob.type || 'application/zip' })
-  const shareData = {
-    files: [file],
-    title: fileName,
-  }
-  const canShareFiles = typeof navigator !== 'undefined'
-    && typeof navigator.share === 'function'
-    && (typeof navigator.canShare !== 'function' || navigator.canShare(shareData))
-  if (!canShareFiles) {
-    throw new Error('File sharing is not supported in this browser.')
-  }
-  await navigator.share(shareData)
-}
-
-function onCloseProjectZipExportModal(): void {
-  if (projectZipExportStatus.value.phase === 'exporting') return
-  projectZipExportStatus.value = { phase: 'idle', loaded: 0, total: null, blob: null, fileName: '', error: '' }
-}
-
-function onDownloadProjectZipExport(): void {
-  const { blob, fileName } = projectZipExportStatus.value
-  if (!blob || !fileName) return
-  projectZipExportStatus.value = { ...projectZipExportStatus.value, error: '' }
-  downloadProjectZipFallback(blob, fileName)
-}
-
-async function onShareProjectZipExport(): Promise<void> {
-  const { blob, fileName } = projectZipExportStatus.value
-  if (!blob || !fileName) return
-  try {
-    projectZipExportStatus.value = { ...projectZipExportStatus.value, error: '' }
-    await shareProjectZip(blob, fileName)
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') return
-    const message = error instanceof Error ? error.message : ''
-    const wasBlocked = error instanceof DOMException && error.name === 'NotAllowedError'
-      || /permission denied|notallowed|not allowed|gesture/iu.test(message)
-    projectZipExportStatus.value = {
-      ...projectZipExportStatus.value,
-      error: wasBlocked
-        ? t('This browser blocked sharing the ZIP. Use Download instead.')
-        : (message || t('Failed to share project. Use Download instead.')),
-    }
-  }
-}
-
-async function exportProjectZipForCwd(targetCwd: string): Promise<void> {
-  if (!targetCwd || typeof document === 'undefined') return
-  projectZipExportStatus.value = { phase: 'exporting', loaded: 0, total: null, blob: null, fileName: '', error: '' }
-  try {
-    const { blob, fileName } = await downloadProjectZip(targetCwd, ({ loaded, total }) => {
-      projectZipExportStatus.value = { ...projectZipExportStatus.value, phase: 'exporting', loaded, total }
-    })
-    projectZipExportStatus.value = { phase: 'ready', loaded: blob.size, total: blob.size, blob, fileName, error: '' }
-  } catch (error) {
-    projectZipExportStatus.value = { phase: 'idle', loaded: 0, total: null, blob: null, fileName: '', error: '' }
-    if (error instanceof DOMException && error.name === 'AbortError') return
-    const message = error instanceof Error ? error.message : 'Failed to export project.'
-    window.alert(message)
-  }
-}
-
 async function onCreateProjectWorktree(projectName: string): Promise<void> {
   const sourceCwd = getProjectCwd(projectName)
   if (!sourceCwd || typeof window === 'undefined') return
@@ -3521,49 +3461,6 @@ async function onSubmitProjectSetup(): Promise<void> {
   } finally {
     isProjectSetupSubmitting.value = false
   }
-}
-
-function onChooseProjectImportZip(): void {
-  openProjectImportInput(projectImportInputRef.value)
-}
-
-function openProjectImportInput(input: HTMLInputElement | null): void {
-  if (isProjectImporting.value || !input) return
-  input.value = ''
-  input.click()
-}
-
-async function finishProjectImport(
-  input: HTMLInputElement | null,
-  importer: (baseDir: string) => Promise<{ path: string }>,
-  fallbackMessage: string,
-): Promise<void> {
-  isProjectImporting.value = true
-  try {
-    const baseDir = await resolveProjectBaseDirectory()
-    if (!baseDir) return
-    const result = await importer(baseDir)
-    if (!result.path) return
-    newThreadCwd.value = result.path
-    pinProjectToTop(getProjectOrderNameForPath(result.path))
-    await loadWorkspaceRootOptionsState()
-    await refreshAll({ includeSelectedThreadMessages: false, forceThreadRefresh: true })
-    await refreshDefaultProjectName()
-  } catch (error) {
-    const message = error instanceof Error ? error.message : fallbackMessage
-    window.alert(message)
-  } finally {
-    isProjectImporting.value = false
-    if (input) input.value = ''
-  }
-}
-
-async function onDirectProjectImportFileChange(event: Event): Promise<void> {
-  const input = event.target instanceof HTMLInputElement ? event.target : null
-  const file = input?.files?.[0] ?? null
-  if (!file || isProjectImporting.value) return
-
-  await finishProjectImport(input, (baseDir) => importProjectZip(file, baseDir), 'Failed to import project.')
 }
 
 async function onOpenExistingFolder(): Promise<void> {
