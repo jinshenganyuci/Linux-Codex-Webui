@@ -14,7 +14,7 @@
 3. While the request is in progress, confirm the modal reports `Exporting`, updates its byte progress, and keeps Close, Download, and Share disabled. Attempt to close it and verify the active transfer modal remains open.
 4. After the request succeeds, verify the modal reports `Ready`, shows the response filename and final size, and enables Close, Download, and Share.
 5. Click `Download`; verify one ZIP is saved with the displayed filename, then inspect its contents and exclusions.
-6. Click `Share`. On a supported browser, verify the native share sheet receives that ZIP. If sharing is unsupported or permission-blocked, verify an inline alert tells the user to use Download, the ready modal remains usable, and clicking Download still succeeds. Cancelling the native sheet must not show a failure.
+6. Click `Share`. On a supported browser, verify the native share sheet receives that ZIP. If the browser does not support file sharing, verify the inline alert says file sharing is unsupported; if permission is blocked, verify it tells the user to use Download instead. In both cases the ready modal must remain usable and Download must still succeed. Cancelling the native sheet must not show a failure.
 7. Close the ready modal. Open a thread action menu for a thread inside the same project, click `Export Project`, and verify it issues one export request for the same project path and prepares the same project ZIP.
 8. On the new-thread screen, select the prepared child test folder so its parent is the intended disposable import directory. Click `Import Project` next to `Create Project`, then choose the downloaded archive in the ZIP file picker; no separate destination picker is expected.
 9. Verify exactly one `POST /codex-api/project-import?parent=<encoded-parent-path>` request sends the selected file with `Content-Type: application/zip` and returns HTTP 200 with a non-empty `data.path`.
@@ -29,7 +29,7 @@
 - Clicking `Export Project` opens a modal, shows progress while the ZIP downloads into a blob, then keeps the modal open with `Download` and `Share` buttons.
 - The export flow issues one GET for the chosen project; the modal cannot be dismissed and file actions cannot run until preparation finishes.
 - Clicking `Download` saves the prepared ZIP; clicking `Share` invokes the browser file share flow when supported.
-- Unsupported or blocked sharing shows a recoverable inline message and leaves Download available; user cancellation is silent.
+- Unsupported sharing reports that the browser cannot share files, permission-blocked sharing directs the user to Download, and both paths leave Download available; user cancellation is silent.
 - The archive includes project files under relative paths.
 - `.git`, `node_modules`, common language/package cache folders, standard virtualenv folders, build output folders, coverage folders, OS metadata files, and Git-ignored files are not included when export runs inside a Git repo.
 - Existing non-chat files under a project's `.codex-project/` folder round-trip through import; chat JSONL files under `.codex-project/chats/` are handled as imported Codex sessions.

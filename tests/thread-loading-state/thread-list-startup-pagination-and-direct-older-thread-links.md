@@ -13,7 +13,7 @@ Thread loading uses a smaller initial list page, hydrates later pages in the bac
 1. Open the app home route and filter Network requests by RPC payload method `thread/list`.
 2. Inspect the first `thread/list` request body. Verify `archived` is `false`, `limit` is `50`, and `cursor` is `null`.
 3. Wait 9 seconds without using a force-refresh action. Verify the startup window contains exactly one request for `(cursor: null, limit: 50)` and no duplicate first-page request is in flight.
-4. Keep the app open for at least 22 seconds. Inspect each later `thread/list` request in order: each uses `limit: 100`, and its `cursor` exactly equals the non-null `nextCursor` returned by the preceding page.
+4. After the first-page response completes, wait through two complete 10-second pagination intervals plus each response time, or continue until a page returns `nextCursor: null`. Inspect each later `thread/list` request in order: each uses `limit: 100`, and its `cursor` exactly equals the non-null `nextCursor` returned by the preceding page.
 5. Group the recorded requests by `(cursor, limit)` and verify every pair occurs once, no two background `thread/list` requests overlap, and pagination stops when the response returns `nextCursor: null`.
 6. Verify the sidebar gains the known thread titles as their pages complete, contains each thread only once, and preserves descending recency order across merged pages.
 7. Open a fresh browser page/context so no in-memory thread list is retained, clear its Network log, and navigate directly to `/#/thread/<older-thread-id>` for a valid thread outside the first 50 without first visiting Home.
