@@ -22,7 +22,7 @@ Invalid Codex auth failed-turn error rendering.
 - Once the failed turn is persisted, the live `Thinking` error overlay is gone so the final auth error is not duplicated.
 - The conversation does not silently show only the user message after a failed turn.
 - Reloaded thread history preserves the failed-turn error message.
-- Transient retry messages may appear while reconnecting, but the final non-retry error remains visible after completion.
+- Automatic retry notifications such as `Reconnecting... 2/5` do not appear as a red final-error alert or expose a `Send feedback` action; the final non-retry error remains visible after completion.
 - In dark theme and light theme, the feedback button remains readable and opens a feedback mailto with the visible auth error included in the diagnostic body.
 
 #### Rollback/Cleanup

@@ -32,11 +32,15 @@
    - Connection loss is shown separately from a silent/stale agent.
    - A stopped app-server reconciles active work to interrupted instead of leaving an endless spinner.
    - Completed, failed, and interrupted rows show a frozen `Duration` / `耗时`; their labels do not keep increasing after completion.
-6. Repeat in light and dark themes at desktop width, `768x1024`, and `375x812`.
+6. While a turn is running, deliver an app-server `error` notification with `willRetry: true`, followed by a non-retry error.
+   - Automatic retry text such as `Reconnecting... 2/5` does not render as a red final-error alert and does not show a feedback action.
+   - The active progress card remains visible while Codex retries.
+   - A notification with `willRetry: false`, or a failed `turn/completed`, still renders the actionable error.
+7. Repeat in light and dark themes at desktop width, `768x1024`, and `375x812`.
    - Desktop shows the compact card first and reveals the inline tree only after the explicit agent-details toggle.
    - Mobile shows a compact summary and an accessible bottom sheet; focus enters the sheet, remains trapped while open, and returns to the opener after close.
    - Text, status dots, hierarchy rails, buttons, results, and errors remain readable in both themes.
-7. Stream many small agent-message, reasoning, and command-output deltas.
+8. Stream many small agent-message, reasoning, and command-output deltas.
    - UI updates are grouped rather than rendered once per character.
    - Background-thread output stays isolated from the selected thread.
    - Live output remains byte-bounded and the page stays responsive.

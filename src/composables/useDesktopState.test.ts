@@ -806,6 +806,52 @@ describe('live error overlay', () => {
     })
   })
 
+  it('hides auto-retry notifications until Codex reports a final error', () => {
+    installTestWindow()
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-retrying')
+    state.startPolling()
+    notificationHandler({
+      method: 'turn/started',
+      params: { threadId: 'thread-retrying', turn: { id: 'turn-retrying' } },
+    })
+    notificationHandler({
+      method: 'error',
+      params: {
+        threadId: 'thread-retrying',
+        turnId: 'turn-retrying',
+        message: 'Reconnecting... 2/5',
+        willRetry: true,
+      },
+    })
+
+    expect(state.selectedLiveOverlay.value).toMatchObject({
+      activityLabel: 'Thinking activity',
+      errorText: '',
+    })
+    expect(state.error.value).toBe('')
+
+    notificationHandler({
+      method: 'error',
+      params: {
+        threadId: 'thread-retrying',
+        turnId: 'turn-retrying',
+        message: 'Provider connection failed',
+        willRetry: false,
+      },
+    })
+
+    expect(state.selectedLiveOverlay.value?.errorText).toBe('Provider connection failed')
+    expect(state.error.value).toBe('Provider connection failed')
+  })
+
   it('keeps a new live error visible when an older persisted turn error exists', async () => {
     installTestWindow()
     let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}

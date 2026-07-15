@@ -3663,19 +3663,17 @@ export function useDesktopState() {
     return readString(errorPayload?.message)
   }
 
-  function readNotificationErrorState(notification: RpcNotification): { message: string; transient: boolean } | null {
+  function readNotificationErrorState(notification: RpcNotification): { message: string } | null {
     if (notification.method !== 'error') return null
     const params = asRecord(notification.params)
+    if (params?.willRetry === true) return null
     const message = (
       readString(params?.message) ||
       readString(asRecord(params?.error)?.message)
     )
     if (!message) return null
 
-    return {
-      message,
-      transient: params?.willRetry === true,
-    }
+    return { message }
   }
 
   function normalizeServerRequest(params: unknown): UiServerRequest | null {
@@ -4644,9 +4642,7 @@ export function useDesktopState() {
       const errorThreadId = notificationThreadId
       const errorThreadModelId = errorThreadId ? readModelIdForThread(errorThreadId) : selectedModelId.value.trim()
       if (errorThreadId) {
-        setTurnErrorForThread(errorThreadId, notificationErrorState.message, {
-          transient: notificationErrorState.transient,
-        })
+        setTurnErrorForThread(errorThreadId, notificationErrorState.message)
       }
       error.value = notificationErrorState.message
       if (errorThreadModelId !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(new Error(notificationErrorState.message))) {
