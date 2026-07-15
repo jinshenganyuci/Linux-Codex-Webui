@@ -15,15 +15,27 @@ describe('useAppPreferences', () => {
   it('loads browser defaults while preserving the no-storage in-progress fallback', () => {
     const preferences = useAppPreferences({ storage: createStorage() })
 
-    expect(preferences.sendWithEnter.value).toBe(true)
+    expect(preferences.sendWithEnter.value).toBe(false)
     expect(preferences.inProgressSendMode.value).toBe('queue')
     expect(preferences.darkMode.value).toBe('system')
-    expect(preferences.chatWidth.value).toBe('standard')
+    expect(preferences.chatWidth.value).toBe('wide')
     expect(preferences.dictationClickToToggle.value).toBe(false)
     expect(preferences.dictationAutoSend.value).toBe(true)
     expect(preferences.dictationLanguage.value).toBe('auto')
 
     expect(useAppPreferences({ storage: null }).inProgressSendMode.value).toBe('steer')
+  })
+
+  it('keeps explicit Enter-to-send and standard-width preferences', () => {
+    const preferences = useAppPreferences({
+      storage: createStorage({
+        'codex-web-local.send-with-enter.v1': '1',
+        'codex-web-local.chat-width.v1': 'standard',
+      }),
+    })
+
+    expect(preferences.sendWithEnter.value).toBe(true)
+    expect(preferences.chatWidth.value).toBe('standard')
   })
 
   it('loads and normalizes persisted preferences', () => {
@@ -71,7 +83,7 @@ describe('useAppPreferences', () => {
     expect(preferences.sendWithEnter.value).toBe(false)
     expect(preferences.inProgressSendMode.value).toBe('queue')
     expect(preferences.darkMode.value).toBe('system')
-    expect(preferences.chatWidth.value).toBe('standard')
+    expect(preferences.chatWidth.value).toBe('wide')
     expect(preferences.dictationClickToToggle.value).toBe(false)
     expect(preferences.dictationAutoSend.value).toBe(false)
     expect(preferences.dictationLanguage.value).toBe('auto')
@@ -98,10 +110,10 @@ describe('useAppPreferences', () => {
     preferences.toggleDictationAutoSend()
 
     expect(storage.setItem.mock.calls).toEqual([
-      ['codex-web-local.send-with-enter.v1', '0'],
+      ['codex-web-local.send-with-enter.v1', '1'],
       ['codex-web-local.in-progress-send-mode.v1', 'steer'],
       ['codex-web-local.dark-mode.v1', 'light'],
-      ['codex-web-local.chat-width.v1', 'wide'],
+      ['codex-web-local.chat-width.v1', 'extra-wide'],
       ['codex-web-local.dictation-click-to-toggle.v1', '1'],
       ['codex-web-local.dictation-auto-send.v1', '0'],
     ])

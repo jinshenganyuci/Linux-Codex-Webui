@@ -10,7 +10,7 @@ Invalid Codex auth failed-turn error rendering.
 4. Open the container URL in the browser.
 
 #### Steps
-1. Confirm `config/read` uses the default Codex provider path, not OpenCode Zen fallback.
+1. Confirm `config/read` uses the default Codex provider path with no WebUI-injected provider fallback.
 2. Send `hi` from the composer.
 3. Wait until the turn stops running.
 4. Reload or reopen the same thread.

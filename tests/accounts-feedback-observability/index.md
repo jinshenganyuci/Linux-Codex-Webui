@@ -21,4 +21,3 @@ Return to the [manual test index](../../tests.md).
 | [Browser runtime profiling with Playwright](browser-runtime-profiling-with-playwright.md) |
 | [Accounts panel Codex login callback modal](accounts-panel-codex-login-callback-modal.md) |
 | [Startup profiler request dedupe](startup-profiler-request-dedupe.md) |
-| [Qodo free-mode state write fixes](qodo-free-mode-state-write-fixes.md) |

@@ -252,7 +252,7 @@
               <div class="sidebar-settings-row sidebar-settings-row--select" :title="t('Choose the interface language for the app.')">
                 <span class="sidebar-settings-label">{{ t('UI language') }}</span>
                 <ComposerDropdown
-                  class="sidebar-settings-provider-dropdown"
+                  class="sidebar-settings-dropdown"
                   :model-value="uiLanguage"
                   :options="uiLanguageOptions"
                   :placeholder="t('UI language')"
@@ -282,157 +282,9 @@
                 <span class="sidebar-settings-value">{{ t('Issue detected') }}</span>
               </a>
 
-              <div class="sidebar-settings-row sidebar-settings-row--select" :title="t('Choose the API provider for the Codex backend')">
+              <div class="sidebar-settings-row">
                 <span class="sidebar-settings-label">{{ t('Provider') }}</span>
-                <ComposerDropdown
-                  class="sidebar-settings-provider-dropdown"
-                  :model-value="selectedProvider"
-                  :options="providerDropdownOptions"
-                  :placeholder="t('Provider')"
-                  :disabled="freeModeLoading"
-                  menu-align="end"
-                  @update:model-value="onProviderChange"
-                />
-              </div>
-              <div v-if="providerError" class="sidebar-settings-row sidebar-settings-error">
-                <span>{{ providerError }}</span>
-                <a class="visible-error-feedback" :href="feedbackMailto" @click="prepareFeedbackLink($event, providerError)">{{ t('Send feedback') }}</a>
-              </div>
-              <div v-if="selectedProvider === 'openrouter'" class="sidebar-settings-row sidebar-settings-row--input">
-                <div class="sidebar-settings-provider-info">
-                  <span class="sidebar-settings-label">{{ t('OpenRouter API key') }}</span>
-                  <a
-                    class="sidebar-settings-provider-link"
-                    href="https://openrouter.ai/keys"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >{{ t('Get API key') }}</a>
-                </div>
-                <div class="sidebar-settings-key-group">
-                  <template v-if="freeModeHasCustomKey && !freeModeCustomKey">
-                    <span class="sidebar-settings-key-masked">{{ freeModeCustomKeyMasked }}</span>
-                    <button
-                      class="sidebar-settings-key-clear"
-                      type="button"
-                      :disabled="freeModeCustomKeySaving"
-                      :title="t('Remove custom key, use community keys')"
-                      @click="clearFreeModeCustomKey"
-                    >&#x2715;</button>
-                  </template>
-                  <template v-else>
-                    <input
-                      v-model="freeModeCustomKey"
-                      class="sidebar-settings-key-input"
-                      type="password"
-                      :placeholder="t('sk-or-v1-... (optional, uses free keys if empty)')"
-                      @keydown.enter="saveFreeModeCustomKey"
-                    />
-                    <button
-                      class="sidebar-settings-key-save"
-                      type="button"
-                      :disabled="freeModeCustomKeySaving || !freeModeCustomKey.trim()"
-                      @click="saveFreeModeCustomKey"
-                    >{{ freeModeCustomKeySaving ? '...' : t('Set') }}</button>
-                  </template>
-                </div>
-                <div class="sidebar-settings-row sidebar-settings-row--select" style="margin-top: 4px; padding: 0">
-                  <span class="sidebar-settings-label">{{ t('API format') }}</span>
-                  <div class="sidebar-settings-segmented" role="group" :aria-label="t('OpenRouter API format')">
-                    <button
-                      type="button"
-                      class="sidebar-settings-segmented-option"
-                      :class="{ 'is-active': openRouterWireApi === 'responses' }"
-                      :disabled="freeModeCustomKeySaving || freeModeLoading"
-                      @click="setOpenRouterWireApi('responses')"
-                    >
-                      Responses
-                    </button>
-                    <button
-                      type="button"
-                      class="sidebar-settings-segmented-option"
-                      :class="{ 'is-active': openRouterWireApi === 'chat' }"
-                      :disabled="freeModeCustomKeySaving || freeModeLoading"
-                      @click="setOpenRouterWireApi('chat')"
-                    >
-                      Completions
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <div v-if="selectedProvider === 'opencode-zen'" class="sidebar-settings-row sidebar-settings-row--input">
-                <div class="sidebar-settings-provider-info">
-                  <span class="sidebar-settings-label">{{ t('OpenCode Zen API key') }}</span>
-                  <a
-                    class="sidebar-settings-provider-link"
-                    href="https://opencode.ai/auth"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >{{ t('Get API key') }}</a>
-                </div>
-                <div class="sidebar-settings-key-group">
-                  <input
-                    v-model="opencodeZenKey"
-                    class="sidebar-settings-key-input"
-                    type="password"
-                    :placeholder="t('sk-...')"
-                    @keydown.enter="saveOpencodeZen"
-                  />
-                  <button
-                    class="sidebar-settings-key-save"
-                    type="button"
-                    :disabled="freeModeCustomKeySaving || !opencodeZenKey.trim()"
-                    @click="saveOpencodeZen"
-                  >{{ freeModeCustomKeySaving ? '...' : t('Save') }}</button>
-                </div>
-              </div>
-              <div v-if="selectedProvider === 'custom'" class="sidebar-settings-row sidebar-settings-row--input">
-                <span class="sidebar-settings-label">{{ t('Custom endpoint URL') }}</span>
-                <div class="sidebar-settings-key-group">
-                  <input
-                    v-model="customEndpointUrl"
-                    class="sidebar-settings-key-input"
-                    type="url"
-                    :placeholder="t('https://api.example.com/v1')"
-                    @keydown.enter="saveCustomEndpoint"
-                  />
-                </div>
-                <span class="sidebar-settings-label" style="margin-top: 4px">{{ t('API key') }}</span>
-                <div class="sidebar-settings-key-group">
-                  <input
-                    v-model="customEndpointKey"
-                    class="sidebar-settings-key-input"
-                    type="password"
-                    :placeholder="t('Bearer token (optional)')"
-                    @keydown.enter="saveCustomEndpoint"
-                  />
-                  <button
-                    class="sidebar-settings-key-save"
-                    type="button"
-                    :disabled="freeModeCustomKeySaving || !customEndpointUrl.trim()"
-                    @click="saveCustomEndpoint"
-                  >{{ freeModeCustomKeySaving ? '...' : t('Save') }}</button>
-                </div>
-                <div class="sidebar-settings-row sidebar-settings-row--select" style="margin-top: 4px; padding: 0">
-                  <span class="sidebar-settings-label">{{ t('API format') }}</span>
-                  <div class="sidebar-settings-segmented" role="group" :aria-label="t('Custom endpoint API format')">
-                    <button
-                      type="button"
-                      class="sidebar-settings-segmented-option"
-                      :class="{ 'is-active': customEndpointWireApi === 'responses' }"
-                      @click="customEndpointWireApi = 'responses'"
-                    >
-                      Responses
-                    </button>
-                    <button
-                      type="button"
-                      class="sidebar-settings-segmented-option"
-                      :class="{ 'is-active': customEndpointWireApi === 'chat' }"
-                      @click="customEndpointWireApi = 'chat'"
-                    >
-                      Completions
-                    </button>
-                  </div>
-                </div>
+                <span class="sidebar-settings-value">{{ t('Codex') }}</span>
               </div>
               <div class="sidebar-settings-row sidebar-settings-row--select" :title="SETTINGS_HELP.dictationLanguage">
                 <span class="sidebar-settings-label">{{ t('Dictation language') }}</span>
@@ -1159,7 +1011,6 @@ import {
 import type { CodexPermissionMode, ReasoningEffort, SpeedMode, UiAccountEntry, UiRateLimitWindow, UiServerRequest, UiServerRequestReply, UiThreadAutomation } from './types/codex'
 import type { ComposerDraftPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
 import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, TelegramStatus, ThreadTerminalQuickCommand, WorktreeBranchOption } from './api/codexGateway'
-import { getFreeModeStatus, setFreeMode, setFreeModeCustomKey, setCustomProvider } from './api/codexGateway'
 import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
 import { copyTextToClipboard } from './utils/clipboard'
 
@@ -1178,7 +1029,7 @@ const TOGGLE_TERMINAL_COMMAND_VALUE = '__toggle_terminal__'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
 const SETTINGS_HELP = {
-  sendWithEnter: t('When enabled, press Enter to send. When disabled, use Command+Enter to send.'),
+  sendWithEnter: t('When enabled, use Command/Ctrl+Enter to send. When disabled, press Enter to send.'),
   inProgressSendMode: t('If a turn is still running, choose whether a new prompt should steer the current turn or be queued.'),
   appearance: t('Switch between system theme, light mode, and dark mode.'),
   chatWidth: t('Choose how wide the conversation column and composer can grow on desktop screens.'),
@@ -1432,25 +1283,6 @@ const {
   applyDarkMode,
 } = useAppPreferences({ translate: t })
 const showFirstLaunchPluginsCard = ref(false)
-const freeModeEnabled = ref(false)
-const freeModeLoading = ref(false)
-const freeModeCustomKey = ref('')
-const freeModeHasCustomKey = ref(false)
-const freeModeCustomKeyMasked = ref<string | null>(null)
-const freeModeCustomKeySaving = ref(false)
-const providerError = ref('')
-const selectedProvider = ref<'codex' | 'openrouter' | 'opencode-zen' | 'custom'>('codex')
-const providerDropdownOptions = computed(() => [
-  { value: 'codex', label: t('Codex') },
-  { value: 'openrouter', label: t('OpenRouter') },
-  { value: 'opencode-zen', label: t('OpenCode Zen') },
-  { value: 'custom', label: t('Custom endpoint') },
-])
-const customEndpointUrl = ref('')
-const customEndpointKey = ref('')
-const customEndpointWireApi = ref<'responses' | 'chat'>('responses')
-const openRouterWireApi = ref<'responses' | 'chat'>('responses')
-const opencodeZenKey = ref('')
 const isTelegramConfigOpen = ref(false)
 const telegramBotTokenDraft = ref('')
 const telegramAllowedUserIdsDraft = ref('')
@@ -1512,7 +1344,6 @@ const visibleFeedbackErrors = [
   threadBranchError,
   threadBranchCommitsError,
   accountActionError,
-  providerError,
   telegramConfigError,
   createFolderError,
   projectSetupError,
@@ -1536,7 +1367,6 @@ const visualViewportOffsetTop = ref(typeof window !== 'undefined' ? window.visua
 const layoutViewportHeight = ref(typeof window !== 'undefined' ? window.innerHeight : 0)
 let accountStatePollTimer: number | null = null
 let isAccountStatePollInFlight = false
-let externalCodexAuthAvailable = false
 let externalAuthImportAttempted = false
 let existingFolderBrowseRequestId = 0
 
@@ -1905,7 +1735,6 @@ onMounted(() => {
   void refreshDefaultProjectName()
   void refreshTelegramConfig()
   void refreshTelegramStatus()
-  void loadFreeModeStatus()
   void refreshThreadTerminalStatus()
   void refreshTerminalQuickCommands()
 })
@@ -2010,9 +1839,7 @@ watch(accountRateLimitSnapshots, () => {
 }, { deep: true })
 
 async function maybeImportExternalCodexAuthAccount(): Promise<boolean> {
-  if (!externalCodexAuthAvailable) return false
   if (externalAuthImportAttempted) return false
-  if (selectedProvider.value !== 'codex') return false
   if (accounts.value.length > 0) return false
   if (accountRateLimitSnapshots.value.length === 0) return false
   externalAuthImportAttempted = true
@@ -3914,185 +3741,6 @@ function escapeMarkdownText(value: string): string {
   return value.replace(/([\\`*_{}\[\]()#+\-.!])/g, '\\$1')
 }
 
-async function onProviderChange(provider: string): Promise<void> {
-  if (freeModeLoading.value) return
-  freeModeLoading.value = true
-  try {
-    if (provider === 'codex') {
-      selectedProvider.value = 'codex'
-      const result = await setFreeMode(false)
-      freeModeEnabled.value = result.enabled
-    } else if (provider === 'openrouter') {
-      selectedProvider.value = 'openrouter'
-      const result = await setFreeMode(true)
-      freeModeEnabled.value = result.enabled
-      await setCustomProvider('', '', {
-        wireApi: openRouterWireApi.value,
-        provider: 'openrouter',
-      })
-    } else if (provider === 'opencode-zen') {
-      selectedProvider.value = 'opencode-zen'
-      await setCustomProvider('', opencodeZenKey.value.trim(), {
-        wireApi: 'responses',
-        provider: 'opencode-zen',
-      })
-      freeModeEnabled.value = true
-    } else if (provider === 'custom') {
-      selectedProvider.value = 'custom'
-      if (customEndpointUrl.value.trim() && customEndpointKey.value.trim()) {
-        await setCustomProvider(customEndpointUrl.value.trim(), customEndpointKey.value.trim(), {
-          wireApi: customEndpointWireApi.value,
-        })
-        freeModeEnabled.value = true
-      }
-    }
-    providerError.value = ''
-    await refreshAll({ includeSelectedThreadMessages: false, providerChanged: true, awaitAncillaryRefreshes: true })
-  } catch (err) {
-    providerError.value = err instanceof Error ? err.message : 'Failed to switch provider'
-  } finally {
-    freeModeLoading.value = false
-  }
-}
-
-async function saveCustomEndpoint(): Promise<void> {
-  if (freeModeCustomKeySaving.value) return
-  const url = customEndpointUrl.value.trim()
-  if (!url) return
-  freeModeCustomKeySaving.value = true
-  try {
-    providerError.value = ''
-    await setCustomProvider(url, customEndpointKey.value.trim(), {
-      wireApi: customEndpointWireApi.value,
-    })
-    freeModeEnabled.value = true
-    await refreshAll({ includeSelectedThreadMessages: false, providerChanged: true, awaitAncillaryRefreshes: true })
-  } catch (err) {
-    providerError.value = err instanceof Error ? err.message : 'Failed to save custom endpoint'
-  } finally {
-    freeModeCustomKeySaving.value = false
-  }
-}
-
-async function setOpenRouterWireApi(nextWireApi: 'responses' | 'chat'): Promise<void> {
-  if (freeModeCustomKeySaving.value || freeModeLoading.value) return
-  if (openRouterWireApi.value === nextWireApi) return
-  const previousWireApi = openRouterWireApi.value
-  openRouterWireApi.value = nextWireApi
-  freeModeCustomKeySaving.value = true
-  try {
-    providerError.value = ''
-    await setCustomProvider('', '', {
-      wireApi: nextWireApi,
-      provider: 'openrouter',
-    })
-    freeModeEnabled.value = true
-    await refreshAll({ includeSelectedThreadMessages: false, providerChanged: true, awaitAncillaryRefreshes: true })
-  } catch (err) {
-    openRouterWireApi.value = previousWireApi
-    providerError.value = err instanceof Error ? err.message : 'Failed to save OpenRouter API format'
-  } finally {
-    freeModeCustomKeySaving.value = false
-  }
-}
-
-async function saveOpencodeZen(): Promise<void> {
-  if (freeModeCustomKeySaving.value) return
-  const key = opencodeZenKey.value.trim()
-  if (!key) return
-  freeModeCustomKeySaving.value = true
-  try {
-    providerError.value = ''
-    await setCustomProvider('', key, {
-      wireApi: 'responses',
-      provider: 'opencode-zen',
-    })
-    freeModeEnabled.value = true
-    await refreshAll({ includeSelectedThreadMessages: false, providerChanged: true, awaitAncillaryRefreshes: true })
-  } catch (err) {
-    providerError.value = err instanceof Error ? err.message : 'Failed to save OpenCode Zen config'
-  } finally {
-    freeModeCustomKeySaving.value = false
-  }
-}
-
-async function saveFreeModeCustomKey(): Promise<void> {
-  if (freeModeCustomKeySaving.value) return
-  freeModeCustomKeySaving.value = true
-  try {
-    const key = freeModeCustomKey.value.trim()
-    await setFreeModeCustomKey(key)
-    freeModeCustomKey.value = ''
-    await loadFreeModeStatus()
-    await refreshAll({ includeSelectedThreadMessages: false })
-  } catch {
-    // Silently fail
-  } finally {
-    freeModeCustomKeySaving.value = false
-  }
-}
-
-async function clearFreeModeCustomKey(): Promise<void> {
-  if (freeModeCustomKeySaving.value) return
-  freeModeCustomKeySaving.value = true
-  try {
-    await setFreeModeCustomKey('')
-    freeModeCustomKey.value = ''
-    await loadFreeModeStatus()
-    await refreshAll({ includeSelectedThreadMessages: false })
-  } catch {
-    // Silently fail
-  } finally {
-    freeModeCustomKeySaving.value = false
-  }
-}
-
-async function loadFreeModeStatus(): Promise<void> {
-  try {
-    const previousProvider = selectedProvider.value
-    const status = await getFreeModeStatus()
-    freeModeEnabled.value = status.enabled
-    freeModeHasCustomKey.value = status.customKey ?? false
-    freeModeCustomKeyMasked.value = status.maskedKey ?? null
-    if (status.enabled) {
-      if (status.provider === 'opencode-zen') {
-        selectedProvider.value = 'opencode-zen'
-      } else if (status.provider === 'custom') {
-        selectedProvider.value = 'custom'
-        customEndpointUrl.value = status.customBaseUrl ?? ''
-        customEndpointWireApi.value = status.wireApi === 'chat' ? 'chat' : 'responses'
-      } else {
-        selectedProvider.value = 'openrouter'
-        openRouterWireApi.value = status.wireApi === 'chat' ? 'chat' : 'responses'
-      }
-    } else {
-      selectedProvider.value = 'codex'
-    }
-    externalCodexAuthAvailable = status.hasCodexAuth === true
-    if (!externalCodexAuthAvailable) {
-      externalAuthImportAttempted = false
-    }
-    const providerChanged = selectedProvider.value !== previousProvider
-    if (providerChanged) {
-      await refreshAll({
-        includeSelectedThreadMessages: false,
-        providerChanged: true,
-        awaitAncillaryRefreshes: true,
-      })
-    }
-    const importedExternalAuth = await maybeImportExternalCodexAuthAccount()
-    if (importedExternalAuth) {
-      await refreshAll({
-        includeSelectedThreadMessages: false,
-        providerChanged: providerChanged || importedExternalAuth,
-        awaitAncillaryRefreshes: true,
-      })
-    }
-  } catch {
-    // Ignore — free mode status unknown
-  }
-}
-
 function loadSidebarCollapsed(): boolean {
   if (typeof window === 'undefined') return false
   return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === '1'
@@ -5317,104 +4965,16 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
   transform: translateX(16px);
 }
 
-.sidebar-settings-row--input {
-  @apply flex flex-col gap-1 py-1.5;
-}
-
-.sidebar-settings-error {
-  @apply text-xs text-red-600 bg-red-50 rounded px-2 py-1.5 break-words;
-}
-
-.sidebar-settings-key-group {
-  @apply flex items-center gap-1.5 w-full;
-}
-
-.sidebar-settings-key-input {
-  @apply flex-1 min-w-0 text-xs rounded border border-zinc-200 bg-white px-2 py-1 outline-none transition-colors placeholder:text-zinc-400;
-}
-
-.sidebar-settings-key-input:focus {
-  @apply border-zinc-400;
-}
-
-.sidebar-settings-key-save {
-  @apply shrink-0 rounded border border-zinc-200 bg-white px-2.5 py-1 text-xs text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-default;
-}
-
-.sidebar-settings-key-masked {
-  @apply flex-1 min-w-0 text-xs text-zinc-500 font-mono truncate;
-}
-
-.sidebar-settings-key-clear {
-  @apply shrink-0 w-6 h-6 flex items-center justify-center rounded-full border border-zinc-200 text-xs text-zinc-400 transition-colors hover:text-zinc-600 hover:border-zinc-300 disabled:opacity-40;
-}
-
-.sidebar-settings-provider-dropdown {
+.sidebar-settings-dropdown {
   @apply min-w-0 max-w-44;
 }
 
-.sidebar-settings-provider-dropdown :deep(.composer-dropdown-trigger) {
+.sidebar-settings-dropdown :deep(.composer-dropdown-trigger) {
   @apply h-auto rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-700;
 }
 
-.sidebar-settings-provider-dropdown :deep(.composer-dropdown-value) {
+.sidebar-settings-dropdown :deep(.composer-dropdown-value) {
   @apply max-w-36;
-}
-
-.sidebar-settings-segmented {
-  @apply inline-flex items-center rounded-md border border-zinc-200 bg-white p-0.5;
-}
-
-.sidebar-settings-segmented-option {
-  @apply rounded px-2 py-1 text-xs text-zinc-600 transition-colors;
-}
-
-.sidebar-settings-segmented-option.is-active {
-  @apply bg-zinc-800 text-white;
-}
-
-.sidebar-settings-provider-info {
-  @apply flex items-center justify-between w-full;
-}
-
-.sidebar-settings-provider-link {
-  @apply text-xs text-blue-600 hover:text-blue-700 underline shrink-0;
-}
-
-:root.dark .sidebar-settings-segmented {
-  @apply border-zinc-600 bg-zinc-800;
-}
-
-:root.dark .sidebar-settings-segmented-option {
-  @apply text-zinc-300;
-}
-
-:root.dark .sidebar-settings-segmented-option.is-active {
-  @apply bg-zinc-100 text-zinc-900;
-}
-
-:root.dark .sidebar-settings-provider-link {
-  @apply text-blue-400 hover:text-blue-300;
-}
-
-:root.dark .sidebar-settings-key-input {
-  @apply border-zinc-600 bg-zinc-800 text-zinc-200 placeholder:text-zinc-500;
-}
-
-:root.dark .sidebar-settings-key-input:focus {
-  @apply border-zinc-500;
-}
-
-:root.dark .sidebar-settings-key-save {
-  @apply border-zinc-600 bg-zinc-700 text-zinc-200 hover:bg-zinc-600;
-}
-
-:root.dark .sidebar-settings-key-masked {
-  @apply text-zinc-400;
-}
-
-:root.dark .sidebar-settings-key-clear {
-  @apply border-zinc-600 text-zinc-500 hover:text-zinc-300 hover:border-zinc-500;
 }
 
 .settings-panel-enter-active,

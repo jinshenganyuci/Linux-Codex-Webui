@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -13,14 +13,12 @@ import {
   callRpcWithArchiveRecovery,
   canonicalizeThreadListResponseForRead,
   canonicalizeWorkspaceRootsStateForRead,
-  ensureDefaultFreeModeStateForMissingAuthSync,
   hasUsableCodexAuth,
   isEmptyThreadReadError,
   isThreadMaterializationPendingError,
   isThreadNotFoundError,
   isUnauthenticatedRateLimitError,
   startThreadAndTurn,
-  writeFreeModeStateFile,
   writeWorkspaceRootsState,
 } from './codexAppServerBridge'
 
@@ -950,207 +948,6 @@ describe('hasUsableCodexAuth', () => {
       )
     } finally {
       warn.mockRestore()
-      await rm(codexHome, { recursive: true, force: true })
-    }
-  })
-})
-
-describe('ensureDefaultFreeModeStateForMissingAuthSync', () => {
-  it('creates CODEX_HOME before writing free-mode state', async () => {
-    const codexHome = join(tmpdir(), `codex-home-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`)
-    const statePath = join(codexHome, 'webui-custom-providers.json')
-    try {
-      await writeFreeModeStateFile(statePath, {
-        enabled: true,
-        apiKey: 'community-key',
-        model: 'openrouter/free',
-        customKey: false,
-        provider: 'openrouter',
-        wireApi: 'responses',
-      })
-
-      const info = await stat(statePath)
-      expect(info.isFile()).toBe(true)
-      expect(info.mode & 0o777).toBe(0o600)
-    } finally {
-      await rm(codexHome, { recursive: true, force: true })
-    }
-  })
-
-  it('uses OpenCode Zen as a runtime fallback without creating a state file', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-runtime-zen-'))
-    const statePath = join(codexHome, 'webui-custom-providers.json')
-    process.env.CODEX_HOME = codexHome
-    try {
-      const state = ensureDefaultFreeModeStateForMissingAuthSync(statePath)
-
-      expect(state?.enabled).toBe(true)
-      expect(state?.provider).toBe('opencode-zen')
-      await expect(stat(statePath)).rejects.toThrow()
-    } finally {
-      await rm(codexHome, { recursive: true, force: true })
-    }
-  })
-
-  it('does not synthesize OpenCode Zen after Codex auth exists and no state file is present', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-auth-no-state-'))
-    const statePath = join(codexHome, 'webui-custom-providers.json')
-    process.env.CODEX_HOME = codexHome
-    try {
-      await writeFile(join(codexHome, 'auth.json'), JSON.stringify({ tokens: { access_token: 'access-token' } }))
-
-      expect(ensureDefaultFreeModeStateForMissingAuthSync(statePath)).toBeNull()
-      await expect(stat(statePath)).rejects.toThrow()
-    } finally {
-      await rm(codexHome, { recursive: true, force: true })
-    }
-  })
-
-  it('does not synthesize OpenCode Zen when config.toml explicitly selects a model provider', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-config-provider-'))
-    const statePath = join(codexHome, 'webui-custom-providers.json')
-    process.env.CODEX_HOME = codexHome
-    try {
-      await writeFile(join(codexHome, 'config.toml'), [
-        'model = "gpt-5.5"',
-        'model_provider = "azure"',
-        '',
-        '[model_providers.azure]',
-        'base_url = "https://example.openai.azure.com/openai/v1"',
-        'wire_api = "responses"',
-      ].join('\n'))
-
-      expect(ensureDefaultFreeModeStateForMissingAuthSync(statePath)).toBeNull()
-      await expect(stat(statePath)).rejects.toThrow()
-    } finally {
-      await rm(codexHome, { recursive: true, force: true })
-    }
-  })
-
-  it('detects quoted top-level model_provider keys in config.toml', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-quoted-config-provider-'))
-    const statePath = join(codexHome, 'webui-custom-providers.json')
-    process.env.CODEX_HOME = codexHome
-    try {
-      await writeFile(join(codexHome, 'config.toml'), [
-        '"model_provider" = "azure"',
-        '',
-        '[model_providers.azure]',
-        'base_url = "https://example.openai.azure.com/openai/v1"',
-        'wire_api = "responses"',
-      ].join('\n'))
-
-      expect(ensureDefaultFreeModeStateForMissingAuthSync(statePath)).toBeNull()
-      await expect(stat(statePath)).rejects.toThrow()
-    } finally {
-      await rm(codexHome, { recursive: true, force: true })
-    }
-  })
-
-  it('ignores commented and nested model_provider keys when deciding the runtime fallback', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-nested-provider-config-'))
-    const statePath = join(codexHome, 'webui-custom-providers.json')
-    process.env.CODEX_HOME = codexHome
-    try {
-      await writeFile(join(codexHome, 'config.toml'), [
-        '# model_provider = "azure"',
-        '',
-        '[profiles.work]',
-        'model_provider = "azure"',
-      ].join('\n'))
-
-      const state = ensureDefaultFreeModeStateForMissingAuthSync(statePath)
-
-      expect(state?.enabled).toBe(true)
-      expect(state?.provider).toBe('opencode-zen')
-      await expect(stat(statePath)).rejects.toThrow()
-    } finally {
-      await rm(codexHome, { recursive: true, force: true })
-    }
-  })
-
-  it('ignores model_provider text inside multiline TOML strings', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-multiline-provider-config-'))
-    const statePath = join(codexHome, 'webui-custom-providers.json')
-    process.env.CODEX_HOME = codexHome
-    try {
-      await writeFile(join(codexHome, 'config.toml'), [
-        'banner = """',
-        'model_provider = "azure"',
-        '"""',
-      ].join('\n'))
-
-      const state = ensureDefaultFreeModeStateForMissingAuthSync(statePath)
-
-      expect(state?.enabled).toBe(true)
-      expect(state?.provider).toBe('opencode-zen')
-      await expect(stat(statePath)).rejects.toThrow()
-    } finally {
-      await rm(codexHome, { recursive: true, force: true })
-    }
-  })
-
-  it('ignores community provider state after Codex auth appears', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-auth-community-provider-'))
-    const statePath = join(codexHome, 'webui-custom-providers.json')
-    process.env.CODEX_HOME = codexHome
-    try {
-      await writeFile(join(codexHome, 'auth.json'), JSON.stringify({ tokens: { access_token: 'access-token' } }))
-      await writeFile(statePath, JSON.stringify({
-        enabled: true,
-        apiKey: 'community-openrouter-key',
-        model: 'openrouter/free',
-        customKey: false,
-        provider: 'openrouter',
-        wireApi: 'responses',
-      }))
-
-      expect(ensureDefaultFreeModeStateForMissingAuthSync(statePath)).toBeNull()
-    } finally {
-      await rm(codexHome, { recursive: true, force: true })
-    }
-  })
-
-  it('keeps user configured provider state after Codex auth appears', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-auth-custom-provider-'))
-    const statePath = join(codexHome, 'webui-custom-providers.json')
-    process.env.CODEX_HOME = codexHome
-    try {
-      await writeFile(join(codexHome, 'auth.json'), JSON.stringify({ tokens: { access_token: 'access-token' } }))
-      const configuredState = {
-        enabled: true,
-        apiKey: 'user-openrouter-key',
-        model: 'openrouter/model',
-        customKey: true,
-        provider: 'openrouter',
-        wireApi: 'responses',
-      }
-      await writeFile(statePath, JSON.stringify(configuredState))
-
-      expect(ensureDefaultFreeModeStateForMissingAuthSync(statePath)).toEqual(configuredState)
-    } finally {
-      await rm(codexHome, { recursive: true, force: true })
-    }
-  })
-
-  it('ignores the legacy free-mode state filename instead of migrating it', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-legacy-free-mode-'))
-    const legacyStatePath = join(codexHome, 'webui-free-mode.json')
-    const statePath = join(codexHome, 'webui-custom-providers.json')
-    process.env.CODEX_HOME = codexHome
-    try {
-      await writeFile(legacyStatePath, JSON.stringify({
-        enabled: true,
-        apiKey: null,
-        model: 'legacy-model',
-        provider: 'opencode-zen',
-        wireApi: 'responses',
-      }))
-      await writeFile(join(codexHome, 'auth.json'), JSON.stringify({ tokens: { access_token: 'access-token' } }))
-
-      expect(ensureDefaultFreeModeStateForMissingAuthSync(statePath)).toBeNull()
-      await expect(stat(statePath)).rejects.toThrow()
-    } finally {
       await rm(codexHome, { recursive: true, force: true })
     }
   })

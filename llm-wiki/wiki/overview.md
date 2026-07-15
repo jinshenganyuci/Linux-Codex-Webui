@@ -10,7 +10,6 @@ This wiki tracks knowledge about the `codex-web-local` project and related workf
 - Realtime chat rendering performance and inline media sanitization
 - Skills route UI, first-launch Plugins card behavior, and dark-theme verification lessons
 - Directory Hub tab routing, Composio connector behavior, and Skills registry search/install semantics
-- OpenCode Zen fallback, Docker auth switching, and provider-backed model loading
 
 ## Primary source
 - [codex-web-local project snapshot](../raw/projects/codex-web-local.md)
@@ -18,7 +17,6 @@ This wiki tracks knowledge about the `codex-web-local` project and related workf
 - [directory hub Composio and Skills search source](../raw/features/directory-hub-composio-skills-search.md)
 - [realtime chat rendering and inline media source](../raw/features/realtime-chat-rendering-inline-media.md)
 - [skills route UI and first-launch card source](../raw/features/skills-route-ui-and-first-launch-card.md)
-- [OpenCode Zen Docker auth/provider models source](../raw/fixes/opencode-zen-docker-auth-provider-models.md)
 - [manual test domain folders source](../raw/features/manual-test-domain-folders.md)
 
 ## Linked pages
@@ -28,4 +26,3 @@ This wiki tracks knowledge about the `codex-web-local` project and related workf
 - [Concept: Realtime chat rendering](./concepts/realtime-chat-rendering.md)
 - [Concept: Merge-to-main workflow](./concepts/merge-to-main-workflow.md)
 - [Concept: Skills route UI](./concepts/skills-route-ui.md)
-- [Concept: OpenCode Zen + Big Pickle](./concepts/opencode-zen-big-pickle.md)

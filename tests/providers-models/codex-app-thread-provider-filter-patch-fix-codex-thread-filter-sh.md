@@ -11,7 +11,7 @@
    - Verify output shows "Patch marker verified in installed asar".
 3. **Verify in Codex.app**:
    - Open Codex.app after patch.
-   - If threads were created with different model providers (e.g. `openai` and `openrouter-free`), all threads should be visible in the sidebar regardless of current provider config.
+   - If threads were created with different model providers (e.g. `openai` and `myproxy`), all threads should be visible in the sidebar regardless of current provider config.
 4. **Restore**: `bash scripts/fix-codex-thread-filter.sh --restore`
    - Restores the backup `app.asar.bak` and reverts to original behavior.
 

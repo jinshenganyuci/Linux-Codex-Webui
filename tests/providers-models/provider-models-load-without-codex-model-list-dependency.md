@@ -1,26 +1,23 @@
 ### Provider models load without Codex model-list dependency
 
 #### Feature/Change Name
-Provider-backed model selector startup loading.
+Models from a Codex-configured `model_provider` remain available when `model/list` is slow or unavailable.
 
 #### Prerequisites/Setup
-1. Build the project with `pnpm run build`.
-2. Run a no-auth Docker container so Codex Web Local starts with OpenCode Zen fallback.
-3. Open `http://127.0.0.1:<port>/#/` in the browser.
+1. Run a temporary Responses-compatible test backend whose `/v1/models` route returns `proxy-default` and `proxy-fast`.
+2. In an isolated `CODEX_HOME/config.toml`, set `model_provider = "myproxy"` and configure `[model_providers.myproxy]` with that base URL and `wire_api = "responses"`.
+3. Start the current build and open the home screen.
 
 #### Steps
-1. In light theme, open the home screen and wait for initial model loading.
-2. Open the model selector.
-3. Confirm Zen provider models are visible even if Codex `model/list` is slow or unavailable.
-4. Confirm the selector starts with `big-pickle` and includes current Zen models such as `deepseek-v4-flash-free`.
-5. Switch to dark theme and repeat steps 2 through 4.
+1. In light theme, wait for initial model loading and open the model selector.
+2. Simulate a slow or failed Codex `model/list` call while keeping the configured provider `/models` route available.
+3. Confirm `proxy-default` and `proxy-fast` remain available through `/codex-api/provider-models`.
+4. Switch to dark theme and repeat the selector check.
 
 #### Expected Results
-- Provider-backed model loading asks `/codex-api/provider-models` before depending on `model/list`.
-- OpenCode Zen models populate the selector without falling back to a blank list or stale Codex-only model list.
-- The selector remains readable and usable in light theme and dark theme.
+- Provider-backed model loading does not require a successful `model/list` response.
+- The configured Codex provider models populate the selector without a blank list.
+- The selector remains readable in light and dark themes.
 
 #### Rollback/Cleanup
-- Stop the temporary Docker container when finished.
-
----
+- Stop the temporary backend and restore the isolated `config.toml`.

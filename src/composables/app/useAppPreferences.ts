@@ -194,9 +194,9 @@ function loadInProgressSendModePref(storage: PreferenceStorage | null): InProgre
 }
 
 function loadChatWidthPref(storage: PreferenceStorage | null): ChatWidthMode {
-  if (!storage) return 'standard'
+  if (!storage) return 'wide'
   const value = storage.getItem(CHAT_WIDTH_KEY)
-  return value === 'standard' || value === 'wide' || value === 'extra-wide' ? value : 'standard'
+  return value === 'standard' || value === 'wide' || value === 'extra-wide' ? value : 'wide'
 }
 
 export function normalizeToWhisperLanguage(raw: string): string {
@@ -220,7 +220,7 @@ export function useAppPreferences(options: UseAppPreferencesOptions = {}) {
   const getThemeClassList = options.getThemeClassList ?? defaultThemeClassList
   const prefersDark = options.prefersDark ?? defaultPrefersDark
 
-  const sendWithEnter = ref(loadBoolPref(storage, SEND_WITH_ENTER_KEY, true))
+  const sendWithEnter = ref(loadBoolPref(storage, SEND_WITH_ENTER_KEY, false))
   const inProgressSendMode = ref<InProgressSendMode>(loadInProgressSendModePref(storage))
   const darkMode = ref<DarkMode>(loadDarkModePref(storage))
   const chatWidth = ref<ChatWidthMode>(loadChatWidthPref(storage))

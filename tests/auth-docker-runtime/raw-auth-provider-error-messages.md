@@ -8,7 +8,7 @@ Surface upstream auth/provider errors without rewriting them in the client norma
 2. A provider/backend request that can return an error
 
 #### Steps
-1. Trigger a provider/backend error, such as an auth refresh failure or invalid custom-provider response
+1. Trigger a Codex auth/backend error, such as an auth refresh failure or invalid Codex backend response
 2. Observe the surfaced error text in the UI/failed RPC path
 
 #### Expected Results
@@ -16,6 +16,6 @@ Surface upstream auth/provider errors without rewriting them in the client norma
 - No replacement copy like `Authentication session conflict detected...` is injected
 
 #### Rollback/Cleanup
-- Restore provider/session settings to the preferred state
+- Restore the account/session state used for the check
 
 ---

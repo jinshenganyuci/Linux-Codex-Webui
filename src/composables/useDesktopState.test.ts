@@ -1312,7 +1312,7 @@ describe('provider model selection', () => {
     expect(gatewayMocks.persistThreadModelPreference).not.toHaveBeenCalled()
   })
 
-  it('ignores global selected-model localStorage when OpenCode Zen is the active provider', async () => {
+  it('ignores global selected-model localStorage when a custom Codex provider is active', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
         '__new-thread__': 'gpt-5.5',
@@ -1324,15 +1324,15 @@ describe('provider model selection', () => {
     gatewayMocks.getSkillsList.mockResolvedValue([])
     gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
     gatewayMocks.getCurrentModelConfig.mockResolvedValue({
-      model: 'big-pickle',
-      providerId: 'opencode-zen',
+      model: 'proxy-default',
+      providerId: 'myproxy',
       reasoningEffort: 'medium',
       speedMode: 'standard',
     })
     gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities(
-      'big-pickle',
-      'deepseek-v4-flash-free',
-      'ring-2.6-1t-free',
+      'proxy-default',
+      'proxy-reasoning',
+      'proxy-fast',
     ))
 
     const state = useDesktopState()
@@ -1341,15 +1341,15 @@ describe('provider model selection', () => {
     expect(gatewayMocks.getAvailableModels).toHaveBeenCalledWith({
       includeProviderModels: true,
       requireProviderModels: true,
-      providerId: 'opencode-zen',
+      providerId: 'myproxy',
     })
     expect(state.availableModelIds.value).toEqual([
-      'big-pickle',
-      'deepseek-v4-flash-free',
-      'ring-2.6-1t-free',
+      'proxy-default',
+      'proxy-reasoning',
+      'proxy-fast',
     ])
-    expect(state.selectedModelId.value).toBe('big-pickle')
-    expect(state.readModelIdForThread('').trim()).toBe('big-pickle')
+    expect(state.selectedModelId.value).toBe('proxy-default')
+    expect(state.readModelIdForThread('').trim()).toBe('proxy-default')
     expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({})
     expect(window.localStorage.getItem('codex-web-local.selected-model-id.v1')).toBe(null)
   })
@@ -1357,7 +1357,7 @@ describe('provider model selection', () => {
   it('uses the CLI default instead of a stale provider-scoped new-thread model', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
-        '__new-thread-provider__::opencode-zen': 'ring-2.6-1t-free',
+        '__new-thread-provider__::myproxy': 'proxy-fast',
       }),
     })
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
@@ -1365,34 +1365,34 @@ describe('provider model selection', () => {
     gatewayMocks.getSkillsList.mockResolvedValue([])
     gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
     gatewayMocks.getCurrentModelConfig.mockResolvedValue({
-      model: 'big-pickle',
-      providerId: 'opencode-zen',
+      model: 'proxy-default',
+      providerId: 'myproxy',
       reasoningEffort: 'medium',
       speedMode: 'standard',
     })
     gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities(
-      'big-pickle',
-      'deepseek-v4-flash-free',
-      'ring-2.6-1t-free',
+      'proxy-default',
+      'proxy-reasoning',
+      'proxy-fast',
     ))
 
     const state = useDesktopState()
     await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
 
     expect(state.availableModelIds.value).toEqual([
-      'big-pickle',
-      'deepseek-v4-flash-free',
-      'ring-2.6-1t-free',
+      'proxy-default',
+      'proxy-reasoning',
+      'proxy-fast',
     ])
-    expect(state.selectedModelId.value).toBe('big-pickle')
-    expect(state.readModelIdForThread('').trim()).toBe('big-pickle')
+    expect(state.selectedModelId.value).toBe('proxy-default')
+    expect(state.readModelIdForThread('').trim()).toBe('proxy-default')
     expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({})
   })
 
   it('clears stale provider-scoped defaults for the new-thread composer', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
-        '__new-thread-provider__::openrouter-free': 'openrouter/free',
+        '__new-thread-provider__::unused-provider': 'unused-model',
       }),
     })
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
@@ -1421,7 +1421,7 @@ describe('provider model selection', () => {
   it('drops stale non-Codex selected models from the Codex model list', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
-        '__new-thread-provider__::codex': 'big-pickle',
+        '__new-thread-provider__::codex': 'proxy-default',
       }),
     })
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
@@ -1446,16 +1446,16 @@ describe('provider model selection', () => {
       'gpt-5.5',
       'gpt-5.4-mini',
     ])
-    expect(state.availableModelIds.value).not.toContain('big-pickle')
+    expect(state.availableModelIds.value).not.toContain('proxy-default')
     expect(state.selectedModelId.value).toBe('gpt-5.5')
     expect(state.readModelIdForThread('').trim()).toBe('gpt-5.5')
     expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({})
   })
 
-  it('keeps an existing OpenCode Zen thread locked to Zen models after Codex auth becomes active', async () => {
+  it('keeps an existing provider-backed thread scoped to its provider models', async () => {
     installTestWindow()
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({
-      groups: [{ projectName: 'Project', threads: [thread('legacy-zen-thread', '/tmp/project')] }],
+      groups: [{ projectName: 'Project', threads: [thread('provider-thread', '/tmp/project')] }],
       nextCursor: null,
     })
     gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
@@ -1468,14 +1468,14 @@ describe('provider model selection', () => {
       speedMode: 'standard',
     })
     gatewayMocks.getAvailableModels.mockImplementation(async (options?: { providerId?: string }) => {
-      if (options?.providerId === 'opencode-zen') {
-        return modelCapabilities('big-pickle', 'ring-2.6-1t-free')
+      if (options?.providerId === 'myproxy') {
+        return modelCapabilities('proxy-default', 'proxy-fast')
       }
       return modelCapabilities('gpt-5.5', 'gpt-5.4-mini')
     })
     gatewayMocks.resumeThread.mockResolvedValue({
-      model: 'gpt-5.4-mini',
-      modelProvider: 'opencode_zen',
+      model: 'proxy-default',
+      modelProvider: 'myproxy',
       messages: [],
       inProgress: false,
       activeTurnId: '',
@@ -1484,21 +1484,21 @@ describe('provider model selection', () => {
     })
 
     const state = useDesktopState()
-    state.primeSelectedThread('legacy-zen-thread')
-    await state.loadMessages('legacy-zen-thread')
+    state.primeSelectedThread('provider-thread')
+    await state.loadMessages('provider-thread')
     await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
 
     expect(gatewayMocks.getAvailableModels).toHaveBeenLastCalledWith({
       includeProviderModels: true,
       requireProviderModels: true,
-      providerId: 'opencode-zen',
+      providerId: 'myproxy',
     })
     expect(state.availableModelIds.value).toEqual([
-      'big-pickle',
-      'ring-2.6-1t-free',
+      'proxy-default',
+      'proxy-fast',
     ])
-    expect(state.selectedModelId.value).toBe('big-pickle')
-    expect(state.readModelIdForThread('legacy-zen-thread')).toBe('big-pickle')
+    expect(state.selectedModelId.value).toBe('proxy-default')
+    expect(state.readModelIdForThread('provider-thread')).toBe('proxy-default')
     expect(state.readModelIdForThread('')).toBe('gpt-5.4-mini')
   })
 
@@ -1511,7 +1511,7 @@ describe('provider model selection', () => {
       return 1
     }) as typeof window.setTimeout)
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({
-      groups: [{ projectName: 'Project', threads: [thread('legacy-zen-thread', '/tmp/project')] }],
+      groups: [{ projectName: 'Project', threads: [thread('provider-thread', '/tmp/project')] }],
       nextCursor: null,
     })
     gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
@@ -1524,14 +1524,14 @@ describe('provider model selection', () => {
       speedMode: 'standard',
     })
     gatewayMocks.getAvailableModels.mockImplementation(async (options?: { providerId?: string }) => {
-      if (options?.providerId === 'opencode-zen') {
-        return modelCapabilities('big-pickle', 'ring-2.6-1t-free')
+      if (options?.providerId === 'myproxy') {
+        return modelCapabilities('proxy-default', 'proxy-fast')
       }
       return modelCapabilities('gpt-5.5', 'gpt-5.4-mini')
     })
     gatewayMocks.resumeThread.mockResolvedValue({
-      model: 'gpt-5.4-mini',
-      modelProvider: 'opencode_zen',
+      model: 'proxy-default',
+      modelProvider: 'myproxy',
       messages: [],
       inProgress: false,
       activeTurnId: '',
@@ -1540,18 +1540,18 @@ describe('provider model selection', () => {
     })
 
     const state = useDesktopState()
-    state.primeSelectedThread('legacy-zen-thread')
-    await state.loadMessages('legacy-zen-thread')
+    state.primeSelectedThread('provider-thread')
+    await state.loadMessages('provider-thread')
     await state.refreshAll({ includeSelectedThreadMessages: false })
     await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0))
 
     expect(gatewayMocks.getAvailableModels).toHaveBeenLastCalledWith({
       includeProviderModels: true,
       requireProviderModels: true,
-      providerId: 'opencode-zen',
+      providerId: 'myproxy',
     })
-    expect(state.availableModelIds.value).toEqual(['big-pickle', 'ring-2.6-1t-free'])
-    expect(state.selectedModelId.value).toBe('big-pickle')
+    expect(state.availableModelIds.value).toEqual(['proxy-default', 'proxy-fast'])
+    expect(state.selectedModelId.value).toBe('proxy-default')
   })
 
   it('captures the active provider when creating a new thread', async () => {

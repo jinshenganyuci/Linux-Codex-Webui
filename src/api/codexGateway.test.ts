@@ -428,9 +428,9 @@ describe('getAvailableModelIds', () => {
     const requests: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       requests.push(String(input))
-      if (String(input) === '/codex-api/provider-models?provider=opencode-zen') {
+      if (String(input) === '/codex-api/provider-models?provider=myproxy') {
         return new Response(JSON.stringify({
-          data: ['big-pickle', 'ring-2.6-1t-free'],
+          data: ['proxy-default', 'proxy-fast'],
           exclusive: true,
         }), {
           status: 200,
@@ -443,9 +443,9 @@ describe('getAvailableModelIds', () => {
     await expect(getAvailableModelIds({
       includeProviderModels: true,
       requireProviderModels: true,
-      providerId: 'opencode-zen',
-    })).resolves.toEqual(['big-pickle', 'ring-2.6-1t-free'])
-    expect(requests).toEqual(['/codex-api/provider-models?provider=opencode-zen', '/codex-api/rpc'])
+      providerId: 'myproxy',
+    })).resolves.toEqual(['proxy-default', 'proxy-fast'])
+    expect(requests).toEqual(['/codex-api/provider-models?provider=myproxy', '/codex-api/rpc'])
   })
 
   it('falls back to model/list when provider models are optional and unavailable', async () => {
@@ -530,7 +530,7 @@ describe('getThreadDetail', () => {
         result: {
           thread: {
             id: body.params.threadId,
-            modelProvider: 'opencode_zen',
+            modelProvider: 'myproxy',
             turns: [],
           },
         },
@@ -541,7 +541,7 @@ describe('getThreadDetail', () => {
     }))
 
     await expect(getThreadDetail('legacy-thread')).resolves.toMatchObject({
-      modelProvider: 'opencode_zen',
+      modelProvider: 'myproxy',
     })
   })
 })
