@@ -489,6 +489,7 @@ const zhCN: Record<string, string> = {
   'Close agent activity': '关闭代理活动',
   'Agent tree': '代理树',
   'Main agent': '主代理',
+  'Main reasoning model': '主推理模型',
   'Elapsed {time}': '已运行 {time}',
   'Duration {time}': '耗时 {time}',
   'Last activity {time} ago': '上次活动于 {time} 前',

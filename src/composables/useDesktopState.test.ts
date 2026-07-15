@@ -804,6 +804,7 @@ describe('live error overlay', () => {
 
     expect(state.selectedLiveOverlay.value).toMatchObject({
       activityLabel: 'Thinking activity',
+      mainModelDetails: ['Model: default', 'Thinking: medium', 'Speed: Standard'],
       reasoningText: '',
       errorText: '',
     })

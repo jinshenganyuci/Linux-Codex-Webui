@@ -329,6 +329,7 @@ export type UiNotificationConnectionState = 'connecting' | 'connected' | 'reconn
 export type UiLiveOverlay = {
   activityLabel: string
   activityDetails: string[]
+  mainModelDetails?: string[]
   reasoningText: string
   errorText: string
   connectionState?: UiNotificationConnectionState

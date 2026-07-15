@@ -11,7 +11,7 @@
 
 1. Open a thread and send the one-agent task.
    - The live card starts in a compact state; `Show agent details` / `展开代理详情` has `aria-expanded=false`.
-   - Expanding agent details shows the main agent and child in one tree, and collapsing removes the tree from the accessibility tree.
+   - The card header always shows `Main reasoning model` / `主推理模型` with model, thinking, and speed details; expanding agent details shows only child agents, and collapsing removes the child tree from the accessibility tree.
    - The phase changes between preparing, reasoning, dispatching, waiting, executing, applying changes, and summarizing based on real notifications.
    - Elapsed time and last-activity time advance without displaying a fabricated percentage or ETA.
 2. Send the six-agent task.

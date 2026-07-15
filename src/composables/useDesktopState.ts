@@ -1751,9 +1751,22 @@ export function useDesktopState() {
     const connectionState = notificationConnectionState.value
     const hasConnectionWarning = isInProgress && (connectionState === 'reconnecting' || connectionState === 'unavailable')
     if (!activity && !reasoningText && !errorText && !hasAgentProgress && !hasConnectionWarning) return null
+    const activityModelDetails = (activity?.details ?? []).filter((detail) => (
+      detail.startsWith('Model:') || detail.startsWith('Thinking:') || detail.startsWith('Speed:')
+    ))
+    const pendingTurn = pendingTurnRequestByThreadId.value[threadId]
+    const mainModelDetails = activityModelDetails.length > 0
+      ? activityModelDetails
+      : buildPendingTurnDetails(
+          readModelIdForThread(threadId),
+          pendingTurn?.effort || readReasoningEffortForThread(threadId) || selectedReasoningEffort.value,
+          pendingTurn?.collaborationMode ?? selectedCollaborationMode.value,
+          pendingTurn?.speedMode ?? selectedSpeedMode.value,
+        ).filter((detail) => detail.startsWith('Model:') || detail.startsWith('Thinking:') || detail.startsWith('Speed:'))
     return {
       activityLabel: activity?.label || THINKING_ACTIVITY_LABEL,
       activityDetails: activity?.details ?? [],
+      mainModelDetails,
       reasoningText,
       errorText,
       connectionState,

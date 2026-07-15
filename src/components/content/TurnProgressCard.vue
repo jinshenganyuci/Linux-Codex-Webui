@@ -9,9 +9,16 @@
       <div class="turn-progress-title-wrap">
         <span class="turn-progress-pulse" aria-hidden="true"></span>
         <div class="turn-progress-heading">
-          <p class="turn-progress-title">{{ progressTitle }}</p>
+          <div v-if="progress" class="turn-progress-title-line">
+            <p class="turn-progress-title">{{ t('Main reasoning model') }}</p>
+            <span class="turn-progress-status" :data-status="rootTone">{{ rootStatusLabel }}</span>
+          </div>
+          <p v-else class="turn-progress-title">{{ progressTitle }}</p>
+          <p v-if="progress && overlay.mainModelDetails?.length" class="turn-progress-main-model-details">
+            {{ overlay.mainModelDetails.join(' · ') }}
+          </p>
           <p v-if="progress" class="turn-progress-summary">
-            {{ t('{active} active · {completed}/{total} completed', {
+            {{ progressTitle }} · {{ t('{active} active · {completed}/{total} completed', {
               active: counts.active,
               completed: counts.completed,
               total: counts.total,
@@ -84,22 +91,6 @@
         role="list"
         :aria-label="t('Agent tree')"
       >
-        <div class="turn-progress-agent-row turn-progress-agent-main" role="listitem" data-depth="0">
-          <span class="turn-progress-agent-rail" aria-hidden="true"></span>
-          <span class="turn-progress-agent-dot" :data-status="rootTone" aria-hidden="true"></span>
-          <div class="turn-progress-agent-copy">
-            <div class="turn-progress-agent-line">
-              <strong>{{ t('Main agent') }}</strong>
-              <span class="turn-progress-status" :data-status="rootTone">{{ rootStatusLabel }}</span>
-            </div>
-            <p class="turn-progress-agent-meta">
-              {{ progress.status === 'running'
-                ? t('Last activity {time} ago', { time: mainLastActivityText })
-                : t('Duration {time}', { time: elapsedText }) }}
-            </p>
-          </div>
-        </div>
-
         <div
           v-for="(agent, index) in orderedAgents"
           :key="agent.threadId"
@@ -273,7 +264,6 @@ const rootStatusLabel = computed(() => {
 const elapsedText = computed(() => progress.value
   ? formatProgressDuration(progressDurationMs(progress.value, nowMs.value))
   : '0s')
-const mainLastActivityText = computed(() => relativeActivity(progress.value?.mainLastActivityAtMs ?? nowMs.value))
 const visibleEvents = computed(() => progress.value?.events.slice(-24).reverse() ?? [])
 
 function relativeActivity(atMs: number): string {
