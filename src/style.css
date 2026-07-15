@@ -2098,6 +2098,10 @@
   @apply text-rose-700;
 }
 
+.turn-progress-agent-details-toggle {
+  @apply flex w-full items-center justify-between text-left text-slate-600 hover:text-slate-900;
+}
+
 .turn-progress-timeline-toggle {
   @apply mt-1 flex items-center justify-between border-t border-slate-100 pt-2 text-slate-600 hover:text-slate-900;
 }
@@ -2158,10 +2162,12 @@
 
 :root.dark .turn-progress-body,
 :root.dark .turn-progress-reasoning,
+:root.dark .turn-progress-agent-details-toggle,
 :root.dark .turn-progress-timeline-toggle {
   @apply border-zinc-800;
 }
 
+:root.dark .turn-progress-agent-details-toggle,
 :root.dark .turn-progress-timeline-toggle {
   @apply text-zinc-400 hover:text-zinc-100;
 }

@@ -10,7 +10,8 @@
 ## Actions and expected results
 
 1. Open a thread and send the one-agent task.
-   - The live card shows the main agent and child in one tree.
+   - The live card starts in a compact state; `Show agent details` / `展开代理详情` has `aria-expanded=false`.
+   - Expanding agent details shows the main agent and child in one tree, and collapsing removes the tree from the accessibility tree.
    - The phase changes between preparing, reasoning, dispatching, waiting, executing, applying changes, and summarizing based on real notifications.
    - Elapsed time and last-activity time advance without displaying a fabricated percentage or ETA.
 2. Send the six-agent task.
@@ -18,7 +19,7 @@
    - Nested agents are indented beneath their actual parent.
    - Completed, interrupted, failed, running, waiting, stale, and disconnected states are visually distinct.
 3. Expand the timeline.
-   - Structural events appear newest first and remain bounded.
+   - Structural events appear newest first and remain bounded, independently of whether agent details are expanded.
 4. Expand a completed agent result.
    - The result is fetched only after the click.
    - Loading and error states are visible; oversized results show that only the final portion is displayed.
@@ -30,8 +31,9 @@
    - A response from an invalidated previous turn or a stopped polling session cannot overwrite the current turn's retry/progress state.
    - Connection loss is shown separately from a silent/stale agent.
    - A stopped app-server reconciles active work to interrupted instead of leaving an endless spinner.
+   - Completed, failed, and interrupted rows show a frozen `Duration` / `耗时`; their labels do not keep increasing after completion.
 6. Repeat in light and dark themes at desktop width, `768x1024`, and `375x812`.
-   - Desktop shows the inline tree and timeline.
+   - Desktop shows the compact card first and reveals the inline tree only after the explicit agent-details toggle.
    - Mobile shows a compact summary and an accessible bottom sheet; focus enters the sheet, remains trapped while open, and returns to the opener after close.
    - Text, status dots, hierarchy rails, buttons, results, and errors remain readable in both themes.
 7. Stream many small agent-message, reasoning, and command-output deltas.

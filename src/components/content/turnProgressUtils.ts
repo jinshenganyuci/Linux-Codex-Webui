@@ -128,3 +128,20 @@ export function formatProgressDuration(durationMs: number): string {
   const remainingMinutes = minutes % 60
   return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
 }
+
+export function progressDurationMs(progress: UiTurnProgress, nowMs: number): number {
+  let terminalAtMs = 0
+  if (progress.status !== 'running') {
+    for (const event of progress.events) {
+      if (event.kind === 'turnCompleted') terminalAtMs = Math.max(terminalAtMs, event.atMs)
+    }
+  }
+  const endAtMs = progress.status === 'running' ? nowMs : (terminalAtMs || progress.updatedAtMs)
+  return Math.max(0, endAtMs - progress.startedAtMs)
+}
+
+export function agentDurationMs(agent: UiAgentProgressNode, nowMs: number): number {
+  const isActive = agent.status === 'starting' || agent.status === 'running'
+  const endAtMs = isActive ? nowMs : (agent.completedAtMs ?? agent.lastActivityAtMs)
+  return Math.max(0, endAtMs - agent.startedAtMs)
+}

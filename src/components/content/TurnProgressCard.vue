@@ -27,7 +27,9 @@
           {{ connectionLabel }}
         </span>
         <span v-if="progress" class="turn-progress-elapsed">
-          {{ t('Elapsed {time}', { time: elapsedText }) }}
+          {{ progress.status === 'running'
+            ? t('Elapsed {time}', { time: elapsedText })
+            : t('Duration {time}', { time: elapsedText }) }}
         </span>
       </div>
     </header>
@@ -63,7 +65,25 @@
         <button ref="mobileCloseButtonRef" type="button" class="turn-progress-close" :aria-label="t('Close')" @click="mobileOpen = false">×</button>
       </div>
 
-      <div class="turn-progress-tree" role="list" :aria-label="t('Agent tree')">
+      <button
+        v-if="!isMobile"
+        type="button"
+        class="turn-progress-agent-details-toggle"
+        :aria-expanded="agentDetailsOpen"
+        :aria-controls="agentDetailsId"
+        @click="agentDetailsOpen = !agentDetailsOpen"
+      >
+        {{ agentDetailsOpen ? t('Hide agent details') : t('Show agent details') }}
+        <span aria-hidden="true">{{ agentDetailsOpen ? '−' : '+' }}</span>
+      </button>
+
+      <div
+        v-show="agentDetailsOpen || isMobile"
+        :id="agentDetailsId"
+        class="turn-progress-tree"
+        role="list"
+        :aria-label="t('Agent tree')"
+      >
         <div class="turn-progress-agent-row turn-progress-agent-main" role="listitem" data-depth="0">
           <span class="turn-progress-agent-rail" aria-hidden="true"></span>
           <span class="turn-progress-agent-dot" :data-status="rootTone" aria-hidden="true"></span>
@@ -73,7 +93,9 @@
               <span class="turn-progress-status" :data-status="rootTone">{{ rootStatusLabel }}</span>
             </div>
             <p class="turn-progress-agent-meta">
-              {{ t('Last activity {time} ago', { time: mainLastActivityText }) }}
+              {{ progress.status === 'running'
+                ? t('Last activity {time} ago', { time: mainLastActivityText })
+                : t('Duration {time}', { time: elapsedText }) }}
             </p>
           </div>
         </div>
@@ -99,7 +121,9 @@
             <p v-if="agent.taskSummary" class="turn-progress-agent-task">{{ agent.taskSummary }}</p>
             <p class="turn-progress-agent-meta">
               <span v-if="agent.currentActivity">{{ activityLabel(agent.currentActivity) }}</span>
-              <span>{{ t('Last activity {time} ago', { time: relativeActivity(agent.lastActivityAtMs) }) }}</span>
+              <span>{{ agent.status === 'starting' || agent.status === 'running'
+                ? t('Last activity {time} ago', { time: relativeActivity(agent.lastActivityAtMs) })
+                : t('Duration {time}', { time: agentDurationText(agent) }) }}</span>
               <span v-if="agent.model">{{ agent.model }}<template v-if="agent.reasoningEffort"> · {{ agent.reasoningEffort }}</template></span>
             </p>
             <div v-if="agent.resultAvailable" class="turn-progress-result-wrap">
@@ -169,13 +193,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { CSSProperties } from 'vue'
 import type { UiAgentProgressNode, UiLiveOverlay } from '../../types/codex'
 import { useMobile } from '../../composables/useMobile'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import {
   agentDisplayName,
+  agentDurationMs,
   agentStatusTranslationKey,
   countAgentProgress,
   formatProgressDuration,
@@ -183,6 +208,7 @@ import {
   isAgentProgressStale,
   orderedAgentProgressNodes,
   phaseTranslationKey,
+  progressDurationMs,
 } from './turnProgressUtils'
 
 const props = defineProps<{
@@ -194,6 +220,7 @@ const { isMobile } = useMobile()
 const { t } = useUiLanguage()
 const nowMs = ref(Date.now())
 const mobileOpen = ref(false)
+const agentDetailsOpen = ref(false)
 const timelineOpen = ref(false)
 const expandedResultIds = ref<Set<string>>(new Set())
 const mobileOpenButtonRef = ref<HTMLButtonElement | null>(null)
@@ -202,6 +229,10 @@ const mobileSheetRef = ref<HTMLElement | null>(null)
 let clockTimer: ReturnType<typeof setInterval> | null = null
 
 const progress = computed(() => props.overlay.turnProgress ?? null)
+const progressIdentity = computed(() => progress.value
+  ? `${progress.value.rootThreadId}:${progress.value.turnId}`
+  : '')
+const agentDetailsId = computed(() => `agent-details-${progressIdentity.value.replace(/[^a-zA-Z0-9_-]/gu, '-') || 'current'}`)
 const connectionState = computed(() => props.overlay.connectionState ?? 'connected')
 const orderedAgents = computed(() => progress.value ? orderedAgentProgressNodes(progress.value) : [])
 const counts = computed(() => progress.value
@@ -240,13 +271,17 @@ const rootStatusLabel = computed(() => {
   return progress.value ? t(phaseTranslationKey(progress.value.phase)) : t('Running')
 })
 const elapsedText = computed(() => progress.value
-  ? formatProgressDuration((progress.value.status === 'running' ? nowMs.value : progress.value.updatedAtMs) - progress.value.startedAtMs)
+  ? formatProgressDuration(progressDurationMs(progress.value, nowMs.value))
   : '0s')
 const mainLastActivityText = computed(() => relativeActivity(progress.value?.mainLastActivityAtMs ?? nowMs.value))
 const visibleEvents = computed(() => progress.value?.events.slice(-24).reverse() ?? [])
 
 function relativeActivity(atMs: number): string {
   return formatProgressDuration(Math.max(0, nowMs.value - atMs))
+}
+
+function agentDurationText(agent: UiAgentProgressNode): string {
+  return formatProgressDuration(agentDurationMs(agent, nowMs.value))
 }
 
 function agentIsStale(agent: UiAgentProgressNode): boolean {
@@ -347,11 +382,24 @@ watch(mobileOpen, async (isOpen) => {
   else mobileOpenButtonRef.value?.focus()
 })
 
-onMounted(() => {
+watch(progressIdentity, () => {
+  agentDetailsOpen.value = false
+  timelineOpen.value = false
+  expandedResultIds.value = new Set()
+  mobileOpen.value = false
+})
+
+watch(() => progress.value?.status, (status) => {
+  if (clockTimer !== null) {
+    clearInterval(clockTimer)
+    clockTimer = null
+  }
+  if (status !== 'running') return
+  nowMs.value = Date.now()
   clockTimer = setInterval(() => {
     nowMs.value = Date.now()
   }, 1_000)
-})
+}, { immediate: true })
 
 onBeforeUnmount(() => {
   if (clockTimer !== null) clearInterval(clockTimer)

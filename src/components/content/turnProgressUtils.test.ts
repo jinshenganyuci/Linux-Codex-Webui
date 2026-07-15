@@ -7,6 +7,8 @@ import {
   isAgentNodeStale,
   isAgentProgressStale,
   orderedAgentProgressNodes,
+  agentDurationMs,
+  progressDurationMs,
 } from './turnProgressUtils'
 
 function agent(threadId: string, parentThreadId: string, depth: number, status: UiAgentProgressNode['status'] = 'running'): UiAgentProgressNode {
@@ -84,5 +86,50 @@ describe('turnProgressUtils', () => {
   it('formats names and elapsed durations compactly', () => {
     expect(agentDisplayName(agent('frontend_scan', 'root', 1), 0)).toBe('frontend_scan')
     expect(formatProgressDuration(65_000)).toBe('1m 5s')
+  })
+
+  it('freezes root and agent durations after they reach a terminal state', () => {
+    const completedAgent = {
+      ...agent('completed-agent', 'root', 1, 'completed'),
+      startedAtMs: 2_000,
+      lastActivityAtMs: 7_000,
+      completedAtMs: 8_000,
+    }
+    const completedProgress = {
+      ...progress([completedAgent]),
+      status: 'completed' as const,
+      phase: 'completed' as const,
+      startedAtMs: 1_000,
+      updatedAtMs: 11_000,
+      events: [{
+        id: 'turn:turn:completed',
+        atMs: 11_000,
+        kind: 'turnCompleted',
+        threadId: 'root',
+        agentThreadId: '',
+        phase: 'completed' as const,
+        detail: 'completed',
+      }],
+    }
+
+    expect(progressDurationMs(completedProgress, 20_000)).toBe(10_000)
+    expect(progressDurationMs(completedProgress, 80_000)).toBe(10_000)
+    expect(progressDurationMs({ ...completedProgress, updatedAtMs: 70_000 }, 80_000)).toBe(10_000)
+    expect(agentDurationMs(completedAgent, 20_000)).toBe(6_000)
+    expect(agentDurationMs(completedAgent, 80_000)).toBe(6_000)
+  })
+
+  it('continues active durations against the current clock', () => {
+    const runningAgent = {
+      ...agent('running-agent', 'root', 1),
+      startedAtMs: 2_000,
+    }
+    const runningProgress = {
+      ...progress([runningAgent]),
+      startedAtMs: 1_000,
+    }
+
+    expect(progressDurationMs(runningProgress, 11_000)).toBe(10_000)
+    expect(agentDurationMs(runningAgent, 12_000)).toBe(10_000)
   })
 })
