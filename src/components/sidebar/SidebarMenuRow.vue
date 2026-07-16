@@ -117,7 +117,8 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
 
   .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true'] .sidebar-menu-row-right-hover {
     @apply static opacity-100 visible pointer-events-auto;
-    translate: none;
+    --tw-translate-x: 0px;
+    --tw-translate-y: 0px;
     transform: none;
   }
 
