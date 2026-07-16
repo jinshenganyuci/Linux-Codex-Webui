@@ -104,12 +104,21 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
     min-height: 2.5rem;
   }
 
-  .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true'] .sidebar-menu-row-right-default {
-    @apply opacity-0 invisible pointer-events-none;
+  .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true'] .sidebar-menu-row-right {
+    @apply gap-0.5;
+  }
+
+  .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true'] .sidebar-menu-row-right-default,
+  .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true']:hover .sidebar-menu-row-right-default,
+  .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true']:focus-within .sidebar-menu-row-right-default,
+  .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true'][data-force-right-hover='true'] .sidebar-menu-row-right-default {
+    @apply opacity-100 visible pointer-events-auto;
   }
 
   .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true'] .sidebar-menu-row-right-hover {
-    @apply opacity-100 visible pointer-events-auto;
+    @apply static opacity-100 visible pointer-events-auto;
+    translate: none;
+    transform: none;
   }
 
   .sidebar-menu-row-right-hover :deep(button) {
