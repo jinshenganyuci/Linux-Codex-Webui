@@ -24,6 +24,8 @@ export interface InlineHtmlContext {
 export interface MessageBlockHtmlContext {
   renderInlineSegmentsAsHtml: (text: string) => string
   renderHighlightedCodeAsHtml: (language: string, value: string) => string
+  copyCodeLabel?: () => string
+  copiedCodeLabel?: () => string
 }
 
 export function escapeHtml(value: string): string {
@@ -167,10 +169,28 @@ export function renderMessageBlockToHtml(
     return `<div class="message-table-wrap"><table class="message-table"><thead><tr>${headerCells}</tr></thead>${body}</table></div>`
   }
   if (block.kind === 'codeBlock') {
+    const copyLabel = escapeHtml(context.copyCodeLabel?.() ?? 'Copy')
+    const copiedLabel = escapeHtml(context.copiedCodeLabel?.() ?? 'Copied')
     const language = block.language
-      ? `<div class="message-code-language">${escapeHtml(block.language)}</div>`
-      : ''
-    return `<div class="message-code-block">${language}<pre class="message-code-pre"><code class="hljs">${context.renderHighlightedCodeAsHtml(block.language, block.value)}</code></pre></div>`
+      ? `<span class="message-code-language" title="${escapeHtml(block.language)}">${escapeHtml(block.language)}</span>`
+      : '<span class="message-code-language" aria-hidden="true"></span>'
+    const copyButton = [
+      '<button',
+      ' type="button"',
+      ' class="message-code-copy-button"',
+      ' data-message-code-copy="true"',
+      ` data-copy-label="${copyLabel}"`,
+      ` data-copied-label="${copiedLabel}"`,
+      ` aria-label="${copyLabel}"`,
+      ` title="${copyLabel}"`,
+      '>',
+      '<svg class="message-code-copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">',
+      '<path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2zm-4 4a2 2 0 0 1-2 2V8m4 8h10" />',
+      '</svg>',
+      `<span class="message-code-copy-label">${copyLabel}</span>`,
+      '</button>',
+    ].join('')
+    return `<div class="message-code-block"><div class="message-code-header">${language}${copyButton}</div><pre class="message-code-pre"><code class="hljs">${context.renderHighlightedCodeAsHtml(block.language, block.value)}</code></pre></div>`
   }
   if (block.kind === 'thematicBreak') {
     return '<hr class="message-divider">'

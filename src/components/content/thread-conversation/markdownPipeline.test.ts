@@ -165,10 +165,43 @@ describe('markdown block parsing and HTML rendering', () => {
     ])
     expect(normalizeCodeLanguage('ts title')).toBe('typescript')
     expect(renderMarkdown(source)).toBe(
-      '<div class="message-code-block"><div class="message-code-language">ts title</div>' +
+      '<div class="message-code-block"><div class="message-code-header">' +
+      '<span class="message-code-language" title="ts title">ts title</span>' +
+      '<button type="button" class="message-code-copy-button" data-message-code-copy="true" data-copy-label="Copy" data-copied-label="Copied" aria-label="Copy" title="Copy">' +
+      '<svg class="message-code-copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">' +
+      '<path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2zm-4 4a2 2 0 0 1-2 2V8m4 8h10" />' +
+      '</svg><span class="message-code-copy-label">Copy</span></button></div>' +
       '<pre class="message-code-pre"><code class="hljs">const value = `&lt;tag&gt;`</code></pre></div>' +
       '<p class="message-text">after</p>',
     )
+  })
+
+  it('adds independent copy actions for YAML and shell fences without changing their source', () => {
+    const source = [
+      '```yaml',
+      'services:',
+      '  app:',
+      '    image: example/app:latest',
+      '```',
+      '',
+      '```bash',
+      'docker compose up -d',
+      '```',
+    ].join('\n')
+
+    expect(parseMessageBlocks(source)).toEqual([
+      {
+        kind: 'codeBlock',
+        language: 'yaml',
+        value: 'services:\n  app:\n    image: example/app:latest',
+      },
+      { kind: 'codeBlock', language: 'bash', value: 'docker compose up -d' },
+    ])
+
+    const html = renderMarkdown(source)
+    expect(html.match(/data-message-code-copy="true"/gu)).toHaveLength(2)
+    expect(html).toContain('<code class="hljs">services:\n  app:\n    image: example/app:latest</code>')
+    expect(html).toContain('<code class="hljs">docker compose up -d</code>')
   })
 
   it('calls inline and highlight renderers in source order', () => {

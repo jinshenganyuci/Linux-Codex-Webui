@@ -539,7 +539,27 @@
                       </table>
                     </div>
                     <div v-else-if="block.kind === 'codeBlock'" class="message-code-block">
-                      <div v-if="block.language" class="message-code-language">{{ block.language }}</div>
+                      <div class="message-code-header">
+                        <span
+                          v-if="block.language"
+                          class="message-code-language"
+                          :title="block.language"
+                        >{{ block.language }}</span>
+                        <span v-else class="message-code-language" aria-hidden="true" />
+                        <button
+                          type="button"
+                          class="message-code-copy-button"
+                          data-message-code-copy="true"
+                          :data-copy-label="t('Copy')"
+                          :data-copied-label="t('Copied')"
+                          :aria-label="t('Copy')"
+                          :title="t('Copy')"
+                          @click.stop="onCodeBlockCopyClick(block.value, $event)"
+                        >
+                          <IconTablerCopy class="icon-svg message-code-copy-icon" />
+                          <span class="message-code-copy-label">{{ t('Copy') }}</span>
+                        </button>
+                      </div>
                       <pre class="message-code-pre"><code class="hljs" v-html="renderCachedHighlightedCodeAsHtml(block.language, block.value)"></code></pre>
                     </div>
                     <hr v-else-if="block.kind === 'thematicBreak'" class="message-divider" />
@@ -934,7 +954,7 @@ const fileLinkContextMenuY = ref(0)
 const fileLinkContextBrowseUrl = ref('')
 const fileLinkContextEditUrl = ref('')
 const { isMobile } = useMobile()
-const { t } = useUiLanguage()
+const { t, uiLanguage } = useUiLanguage()
 const { buildFeedbackMailto, feedbackMailtoBase, recordVisibleFailure } = useFeedbackDiagnostics()
 const feedbackMailto = feedbackMailtoBase()
 
@@ -1330,6 +1350,8 @@ let conversationScrollFrame = 0
 let bottomLockFrame = 0
 let bottomLockFramesLeft = 0
 let copiedMessageResetTimer: ReturnType<typeof setTimeout> | null = null
+let copiedCodeBlockButton: HTMLButtonElement | null = null
+let copiedCodeBlockResetTimer: ReturnType<typeof setTimeout> | null = null
 let conversationScrollPromise: Promise<void> | null = null
 const trackedPendingImages = new WeakSet<HTMLImageElement>()
 const highlightJsModule = ref<HighlightJsModule | null>(null)
@@ -2097,6 +2119,57 @@ async function copyResponse(anchorMessageId: string): Promise<void> {
   }, 1800)
 }
 
+function resetCodeBlockCopyButton(button: HTMLButtonElement): void {
+  const copyLabel = button.dataset.copyLabel ?? t('Copy')
+  button.dataset.copied = 'false'
+  button.setAttribute('aria-label', copyLabel)
+  button.setAttribute('title', copyLabel)
+  const label = button.querySelector<HTMLElement>('.message-code-copy-label')
+  if (label) label.textContent = copyLabel
+}
+
+function showCodeBlockCopied(button: HTMLButtonElement): void {
+  if (copiedCodeBlockButton && copiedCodeBlockButton !== button) {
+    resetCodeBlockCopyButton(copiedCodeBlockButton)
+  }
+  if (copiedCodeBlockResetTimer) {
+    clearTimeout(copiedCodeBlockResetTimer)
+  }
+
+  const copiedLabel = button.dataset.copiedLabel ?? t('Copied')
+  button.dataset.copied = 'true'
+  button.setAttribute('aria-label', copiedLabel)
+  button.setAttribute('title', copiedLabel)
+  const label = button.querySelector<HTMLElement>('.message-code-copy-label')
+  if (label) label.textContent = copiedLabel
+
+  copiedCodeBlockButton = button
+  copiedCodeBlockResetTimer = setTimeout(() => {
+    if (copiedCodeBlockButton === button) {
+      resetCodeBlockCopyButton(button)
+      copiedCodeBlockButton = null
+    }
+    copiedCodeBlockResetTimer = null
+  }, 1800)
+}
+
+async function copyCodeBlock(value: string, button: HTMLButtonElement): Promise<void> {
+  let copied = false
+  try {
+    await copyTextToClipboard(value)
+    copied = true
+  } catch {
+    copied = copyTextWithSelectionFallback(value)
+  }
+  if (copied) showCodeBlockCopied(button)
+}
+
+function onCodeBlockCopyClick(value: string, event: MouseEvent): void {
+  const button = event.currentTarget
+  if (!(button instanceof HTMLButtonElement)) return
+  void copyCodeBlock(value, button)
+}
+
 function forkResponse(anchorMessageId: string): void {
   const turnIndex = forkableTurnIndexByAnchorId.value[anchorMessageId]
   if (typeof turnIndex !== 'number') return
@@ -2313,6 +2386,8 @@ function renderInlineSegmentsAsHtml(text: string): string {
 const messageBlockHtmlContext = {
   renderInlineSegmentsAsHtml,
   renderHighlightedCodeAsHtml: renderCachedHighlightedCodeAsHtml,
+  copyCodeLabel: () => t('Copy'),
+  copiedCodeLabel: () => t('Copied'),
 }
 
 function renderListItemContentAsHtml(item: ListItem): string {
@@ -2324,7 +2399,7 @@ function renderMessageBlockAsHtml(block: MessageBlock): string {
 }
 
 function renderMarkdownBlocksAsHtml(text: string): string {
-  const cacheKey = `${props.cwd}\u0000${highlightCacheVersion.value}\u0000${text}`
+  const cacheKey = `${props.cwd}\u0000${uiLanguage.value}\u0000${highlightCacheVersion.value}\u0000${text}`
   const cached = markdownHtmlCache.get(cacheKey)
   if (cached && cached.text === text && cached.cwd === props.cwd && cached.highlightVersion === highlightCacheVersion.value) {
     markdownHtmlCache.delete(cacheKey)
@@ -3061,6 +3136,16 @@ function onConversationClick(event: MouseEvent): void {
   const container = conversationListRef.value
   if (!container) return
 
+  const copyButton = target.closest('button[data-message-code-copy]') as HTMLButtonElement | null
+  if (copyButton && container.contains(copyButton)) {
+    const code = copyButton.closest('.message-code-block')?.querySelector('code')
+    if (!code) return
+    event.preventDefault()
+    event.stopPropagation()
+    void copyCodeBlock(code.textContent ?? '', copyButton)
+    return
+  }
+
   const image = target.closest('img.message-image-preview') as HTMLImageElement | null
   const button = target.closest('button.message-image-button') as HTMLButtonElement | null
   const source = image?.currentSrc || image?.getAttribute('src') || button?.dataset.imageSrc || ''
@@ -3092,6 +3177,10 @@ onBeforeUnmount(() => {
   if (copiedMessageResetTimer) {
     clearTimeout(copiedMessageResetTimer)
     copiedMessageResetTimer = null
+  }
+  if (copiedCodeBlockResetTimer) {
+    clearTimeout(copiedCodeBlockResetTimer)
+    copiedCodeBlockResetTimer = null
   }
   window.removeEventListener('pointerdown', onWindowPointerDownForFileLinkContextMenu)
   window.removeEventListener('blur', onWindowBlurForFileLinkContextMenu)
@@ -3514,8 +3603,28 @@ onBeforeUnmount(() => {
   @apply overflow-hidden rounded-xl border border-slate-200 bg-slate-950/95 text-slate-100;
 }
 
+.plan-card-markdown :deep(.message-code-header) {
+  @apply flex min-h-10 items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/90 px-3 py-1.5;
+}
+
 .plan-card-markdown :deep(.message-code-language) {
-  @apply border-b border-slate-800 bg-slate-900/90 px-3 py-2 text-[11px] font-medium uppercase tracking-[0.08em] text-slate-400;
+  @apply min-w-0 flex-1 truncate text-[11px] font-mono uppercase tracking-[0.08em] text-slate-400;
+}
+
+.plan-card-markdown :deep(.message-code-copy-button) {
+  @apply inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-md border border-slate-700/80 bg-slate-800/80 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:border-slate-500 hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300;
+}
+
+.plan-card-markdown :deep(.message-code-copy-button[data-copied='true']) {
+  @apply border-emerald-500/70 bg-emerald-500/15 text-emerald-200;
+}
+
+.plan-card-markdown :deep(.message-code-copy-icon) {
+  @apply h-3.5 w-3.5 shrink-0;
+}
+
+.plan-card-markdown :deep(.message-code-copy-label) {
+  @apply leading-4;
 }
 
 .plan-card-markdown :deep(.message-code-pre) {
@@ -3715,8 +3824,28 @@ onBeforeUnmount(() => {
   @apply overflow-hidden rounded-xl border border-slate-200 bg-slate-950 text-slate-100;
 }
 
+.message-code-header {
+  @apply flex min-h-10 items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/90 px-3 py-1.5;
+}
+
 .message-code-language {
-  @apply border-b border-slate-800 px-3 py-2 text-[11px] font-mono uppercase tracking-[0.08em] text-slate-400;
+  @apply min-w-0 flex-1 truncate text-[11px] font-mono uppercase tracking-[0.08em] text-slate-400;
+}
+
+.message-code-copy-button {
+  @apply inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-md border border-slate-700/80 bg-slate-800/80 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:border-slate-500 hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300;
+}
+
+.message-code-copy-button[data-copied='true'] {
+  @apply border-emerald-500/70 bg-emerald-500/15 text-emerald-200;
+}
+
+.message-code-copy-icon {
+  @apply h-3.5 w-3.5 shrink-0;
+}
+
+.message-code-copy-label {
+  @apply leading-4;
 }
 
 .message-code-pre {
