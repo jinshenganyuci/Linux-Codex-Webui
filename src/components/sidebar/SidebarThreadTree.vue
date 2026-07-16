@@ -112,7 +112,12 @@
               <IconTablerDots class="thread-icon" />
             </button>
 
-            <div v-if="isOrganizeMenuOpen" class="organize-menu-panel" @click.stop>
+            <div
+              v-if="isOrganizeMenuOpen"
+              class="organize-menu-panel"
+              :data-open-direction="organizeMenuDirection"
+              @click.stop
+            >
               <p class="organize-menu-title">{{ t('Organize') }}</p>
               <button
                 class="organize-menu-item"
@@ -829,6 +834,7 @@
               :model-value="automationDraft.status"
               :options="automationStatusOptions"
               :placeholder="t('Status')"
+              open-direction="up"
               @update:model-value="onAutomationStatusChange"
             />
           </div>
@@ -1122,6 +1128,7 @@ const projectNameByElement = new WeakMap<HTMLElement, string>()
 const organizeMenuWrapRef = ref<HTMLElement | null>(null)
 const openThreadMenuPanelRef = ref<HTMLElement | null>(null)
 const isOrganizeMenuOpen = ref(false)
+const organizeMenuDirection = ref<MenuDirection>('down')
 const THREAD_VIEW_MODE_STORAGE_KEY = 'codex-web-local.thread-view-mode.v1'
 const threadViewMode = ref<'project' | 'chronological'>(loadThreadViewMode())
 const projectGroupResizeObserver =
@@ -2203,6 +2210,9 @@ function toggleOrganizeMenu(): void {
     closeThreadMenu()
   }
   isOrganizeMenuOpen.value = nextValue
+  if (nextValue) {
+    nextTick(updateOrganizeMenuDirection)
+  }
 }
 
 function setThreadViewMode(mode: 'project' | 'chronological'): void {
@@ -2433,6 +2443,14 @@ function resolveMenuDirection(menuWrapElement: HTMLElement, panelHeight: number)
   return 'down'
 }
 
+function updateOrganizeMenuDirection(): void {
+  const menuWrapElement = organizeMenuWrapRef.value
+  if (!menuWrapElement) return
+  const menuPanelElement = menuWrapElement.querySelector<HTMLElement>('.organize-menu-panel')
+  const panelHeight = menuPanelElement?.getBoundingClientRect().height ?? 0
+  organizeMenuDirection.value = resolveMenuDirection(menuWrapElement, panelHeight)
+}
+
 function updateThreadMenuDirection(threadId: string, panelHeight: number): MenuDirection {
   const menuWrapElement = threadMenuWrapElementById.get(threadId)
   if (!menuWrapElement) return 'down'
@@ -2554,14 +2572,13 @@ function onProjectMenuPointerDown(event: PointerEvent): void {
     }
   }
 
-  if (!openProjectMenuId.value) return
-  if (!isEventInsideOpenProjectMenu(event)) {
+  if (openProjectMenuId.value && !isEventInsideOpenProjectMenu(event)) {
     closeProjectMenu()
   }
 
-  if (!openThreadMenuId.value) return
-  if (isEventInsideOpenThreadMenu(event)) return
-  closeThreadMenu()
+  if (openThreadMenuId.value && !isEventInsideOpenThreadMenu(event)) {
+    closeThreadMenu()
+  }
 }
 
 function onProjectMenuFocusIn(event: FocusEvent): void {
@@ -3039,6 +3056,12 @@ onBeforeUnmount(() => {
   @apply absolute right-0 top-full mt-1 z-30 min-w-44 rounded-xl border border-zinc-200 bg-white/95 p-1.5 shadow-lg backdrop-blur-sm;
 }
 
+.organize-menu-panel[data-open-direction='up'] {
+  top: auto;
+  bottom: calc(100% + 0.25rem);
+  margin-top: 0;
+}
+
 .organize-menu-title {
   @apply px-2 py-1 text-xs text-zinc-500;
 }
@@ -3330,6 +3353,23 @@ onBeforeUnmount(() => {
   @apply opacity-0;
 }
 
+@media (hover: none), (pointer: coarse) {
+  .chats-section-action,
+  .organize-menu-trigger,
+  .thread-start-button,
+  .project-menu-trigger,
+  .thread-menu-trigger {
+    @apply h-9 w-9;
+  }
+
+  .organize-menu-item,
+  .project-menu-item,
+  .thread-menu-item,
+  .rename-thread-button {
+    min-height: 2.5rem;
+  }
+}
+
 .rename-thread-overlay {
   @apply fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4;
 }
@@ -3508,6 +3548,12 @@ onBeforeUnmount(() => {
 
   .automation-thread-textarea {
     min-height: 7rem;
+  }
+}
+
+@media (max-width: 639px) {
+  .automation-thread-panel .rename-thread-actions {
+    position: static;
   }
 }
 </style>

@@ -2065,7 +2065,7 @@ watch(
 }
 
 .thread-composer:has(.thread-composer-input-wrap--expanded) {
-  @apply fixed inset-x-0 bottom-0 top-0 z-50 max-w-none bg-white/95 px-3 pb-3 pt-8 sm:px-6 sm:pb-6 sm:pt-10;
+  @apply fixed inset-x-0 bottom-0 top-0 z-[300] max-w-none bg-white/95 px-3 pb-3 pt-8 sm:px-6 sm:pb-6 sm:pt-10;
   height: 100dvh;
 }
 
@@ -2110,12 +2110,12 @@ watch(
 }
 
 .thread-composer-image-modal-backdrop {
-  @apply fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-6;
+  @apply fixed inset-0 z-[320] flex items-center justify-center bg-black/40 p-6;
   cursor: zoom-out;
 }
 
 .thread-composer-image-modal-content {
-  @apply relative max-w-[min(92vw,1100px)] max-h-[92vh];
+  @apply relative z-10 max-w-[min(92vw,1100px)] max-h-[92vh];
   cursor: default;
 }
 

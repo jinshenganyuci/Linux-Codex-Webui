@@ -3322,6 +3322,18 @@ onBeforeUnmount(() => {
   @apply leading-none;
 }
 
+@media (pointer: coarse) {
+  .message-toolbar {
+    @apply opacity-100;
+  }
+
+  .message-copy-button,
+  .message-fork-button,
+  .message-edit-button {
+    @apply min-h-8 min-w-8 justify-center px-2 py-1.5 text-xs;
+  }
+}
+
 .message-image-list {
   @apply list-none m-0 mb-2 p-0 flex flex-wrap gap-2;
 }
@@ -3811,12 +3823,12 @@ onBeforeUnmount(() => {
 }
 
 .image-modal-backdrop {
-  @apply fixed inset-0 z-50 bg-black/40 p-6 flex items-center justify-center;
+  @apply fixed inset-0 z-[300] bg-black/40 p-6 flex items-center justify-center;
   cursor: zoom-out;
 }
 
 .image-modal-content {
-  @apply relative max-w-[min(92vw,1100px)] max-h-[92vh];
+  @apply relative z-10 max-w-[min(92vw,1100px)] max-h-[92vh];
   cursor: default;
 }
 
@@ -4002,11 +4014,11 @@ onBeforeUnmount(() => {
 }
 
 .diff-viewer-backdrop {
-  @apply fixed inset-0 z-50 bg-black/45 p-3 sm:p-6 flex items-center justify-center;
+  @apply fixed inset-0 z-[300] bg-black/45 p-3 sm:p-6 flex items-center justify-center;
 }
 
 .diff-viewer-shell {
-  @apply relative grid h-[min(88vh,920px)] w-[min(96vw,1320px)] grid-cols-1 overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-2xl lg:grid-cols-[320px_minmax(0,1fr)];
+  @apply relative z-10 grid h-[min(88vh,920px)] w-[min(96vw,1320px)] grid-cols-1 overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-2xl lg:grid-cols-[320px_minmax(0,1fr)];
 }
 
 .diff-viewer-sidebar {

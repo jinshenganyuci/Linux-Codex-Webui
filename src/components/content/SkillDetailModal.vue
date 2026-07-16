@@ -225,7 +225,7 @@ function onBrowseFiles(): void {
 @reference "tailwindcss";
 
 .sdm-overlay {
-  @apply fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40;
+  @apply fixed inset-0 z-[300] flex items-end sm:items-center justify-center bg-black/40;
 }
 
 .sdm-panel {
@@ -342,5 +342,17 @@ function onBrowseFiles(): void {
 
 .sdm-btn-secondary {
   @apply bg-zinc-100 text-zinc-700 hover:bg-zinc-200;
+}
+
+@media (max-width: 639px) {
+  .sdm-footer-actions {
+    flex-wrap: wrap;
+  }
+
+  .sdm-btn {
+    flex: 1 1 calc(50% - 0.5rem);
+    min-width: 0;
+    min-height: 2.5rem;
+  }
 }
 </style>

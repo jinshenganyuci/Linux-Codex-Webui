@@ -4199,6 +4199,16 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
   @apply w-3.5 h-3.5;
 }
 
+@media (hover: none), (pointer: coarse) {
+  .sidebar-search-toggle {
+    @apply h-10 w-10;
+  }
+
+  .sidebar-search-clear {
+    @apply h-8 w-8;
+  }
+}
+
 .sidebar-skills-link {
   @apply mx-2 flex items-center gap-3 rounded-2xl border border-transparent bg-transparent px-3 py-2.5 text-left text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950 cursor-pointer;
 }
@@ -4943,6 +4953,12 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 
 .sidebar-settings-account-remove.is-confirming {
   @apply border-amber-300 bg-amber-50 text-amber-700 font-medium;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-settings-account-remove {
+    @apply visible min-h-8 opacity-100 pointer-events-auto;
+  }
 }
 
 .sidebar-settings-label {

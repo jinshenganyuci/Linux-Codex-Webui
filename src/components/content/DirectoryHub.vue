@@ -1973,7 +1973,7 @@ button.directory-card {
 }
 
 .directory-modal-overlay {
-  @apply fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center;
+  @apply fixed inset-0 z-[300] flex items-end justify-center bg-black/40 sm:items-center;
 }
 
 .directory-modal {

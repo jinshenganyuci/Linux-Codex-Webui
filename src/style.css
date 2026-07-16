@@ -2270,7 +2270,23 @@
   .sidebar-search-input,
   .project-menu-input,
   .rename-thread-input,
-  .request-input {
+  .request-input,
+  .sidebar-settings-input,
+  .sidebar-settings-textarea,
+  .new-thread-open-folder-path,
+  .new-thread-open-folder-filter,
+  .new-thread-open-folder-create-input,
+  .codex-login-modal-input,
+  .archived-search input,
+  .skill-picker-search,
+  .directory-search,
+  .header-git-search,
+  .skills-search-input,
+  .thread-pending-request-inline-control,
+  .thread-pending-request-input,
+  .automation-thread-textarea,
+  .automation-schedule-time,
+  .automation-schedule-number {
     font-size: 16px !important;
   }
 }
@@ -2293,7 +2309,7 @@
   }
 
   .turn-progress-body.turn-progress-body-mobile-open {
-    @apply fixed inset-x-0 bottom-0 z-[70] flex max-h-[78dvh] overflow-y-auto rounded-t-2xl border border-slate-200 bg-white px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl;
+    @apply fixed inset-x-0 bottom-0 z-[300] flex max-h-[78dvh] overflow-y-auto rounded-t-2xl border border-slate-200 bg-white px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl;
   }
 
   .turn-progress-mobile-sheet-header {
@@ -2305,7 +2321,7 @@
   }
 
   .turn-progress-mobile-backdrop {
-    @apply fixed inset-0 z-[60] block border-0 bg-black/45;
+    @apply fixed inset-0 z-[290] block border-0 bg-black/45;
   }
 
   .turn-progress-agent-path {
@@ -2331,5 +2347,603 @@
 
   :root.dark .turn-progress-close {
     @apply bg-zinc-800 text-zinc-300 hover:bg-zinc-700;
+  }
+}
+
+/* macOS-inspired glass paint layer. Layout and stacking remain component-owned. */
+:root:not(.dark) {
+  --mac-canvas: linear-gradient(145deg, #f8fafc 0%, #eef3f8 48%, #e7edf5 100%);
+  --mac-sidebar: rgb(243 247 251 / 82%);
+  --mac-main: rgb(255 255 255 / 88%);
+  --mac-surface: rgb(255 255 255 / 76%);
+  --mac-surface-strong: rgb(252 253 255 / 94%);
+  --mac-solid: rgb(253 254 255 / 99%);
+  --mac-input: rgb(255 255 255 / 96%);
+  --mac-hover: rgb(74 103 137 / 8%);
+  --mac-selected: rgb(220 231 243 / 90%);
+  --mac-border: rgb(75 96 121 / 18%);
+  --mac-border-strong: rgb(67 89 115 / 28%);
+  --mac-text: #172130;
+  --mac-muted: #657386;
+  --mac-accent: #0071e3;
+  --mac-accent-hover: #0066cc;
+  --mac-shadow-soft: 0 10px 30px rgb(44 62 82 / 8%), inset 0 1px 0 rgb(255 255 255 / 82%);
+  --mac-shadow-card: 0 18px 48px rgb(42 59 79 / 12%), inset 0 1px 0 rgb(255 255 255 / 90%);
+  --mac-shadow-menu: 0 22px 60px rgb(35 49 67 / 20%), inset 0 1px 0 rgb(255 255 255 / 95%);
+  --mac-overlay: rgb(31 41 55 / 36%);
+  --mac-code: #111823;
+  --mac-code-border: rgb(56 70 88 / 72%);
+  --mac-diff: #fbfcfe;
+}
+
+:root.dark {
+  --mac-canvas: linear-gradient(145deg, #111720 0%, #171f2a 50%, #10151d 100%);
+  --mac-sidebar: rgb(25 33 44 / 90%);
+  --mac-main: rgb(17 23 32 / 94%);
+  --mac-surface: rgb(35 44 57 / 84%);
+  --mac-surface-strong: rgb(31 40 52 / 95%);
+  --mac-solid: rgb(29 37 49 / 99%);
+  --mac-input: rgb(24 31 42 / 98%);
+  --mac-hover: rgb(232 240 250 / 8%);
+  --mac-selected: rgb(102 144 194 / 20%);
+  --mac-border: rgb(190 205 225 / 17%);
+  --mac-border-strong: rgb(198 213 232 / 27%);
+  --mac-text: #eef3fa;
+  --mac-muted: #a4b0c0;
+  --mac-accent: #0071e3;
+  --mac-accent-hover: #0066cc;
+  --mac-shadow-soft: 0 12px 32px rgb(0 0 0 / 24%), inset 0 1px 0 rgb(255 255 255 / 5%);
+  --mac-shadow-card: 0 20px 52px rgb(0 0 0 / 32%), inset 0 1px 0 rgb(255 255 255 / 7%);
+  --mac-shadow-menu: 0 24px 64px rgb(0 0 0 / 46%), inset 0 1px 0 rgb(255 255 255 / 8%);
+  --mac-overlay: rgb(0 0 0 / 58%);
+  --mac-code: #090d13;
+  --mac-code-border: rgb(108 124 145 / 34%);
+  --mac-diff: #151c26;
+}
+
+:root:not(.dark) body,
+:root:not(.dark) .desktop-layout,
+:root.dark body,
+:root.dark .desktop-layout {
+  background: var(--mac-canvas);
+  color: var(--mac-text);
+}
+
+:root:not(.dark) .desktop-sidebar,
+:root.dark .desktop-sidebar {
+  background-color: var(--mac-sidebar);
+  box-shadow: inset -1px 0 0 var(--mac-border), var(--mac-shadow-soft);
+}
+
+:root:not(.dark) .mobile-drawer,
+:root.dark .mobile-drawer {
+  background-color: var(--mac-solid);
+  box-shadow: inset -1px 0 0 var(--mac-border), var(--mac-shadow-menu);
+}
+
+:root:not(.dark) .desktop-main,
+:root:not(.dark) .content-root,
+:root.dark .desktop-main,
+:root.dark .content-root {
+  background-color: var(--mac-main);
+  box-shadow: inset 1px 0 0 rgb(255 255 255 / 38%);
+}
+
+:root:not(.dark) .desktop-resize-handle,
+:root.dark .desktop-resize-handle {
+  background-color: var(--mac-border);
+}
+
+:root:not(.dark) .sidebar-root,
+:root:not(.dark) .sidebar-scrollable,
+:root.dark .sidebar-root,
+:root.dark .sidebar-scrollable {
+  background-color: transparent;
+}
+
+:root:not(.dark) .sidebar-skills-link,
+:root.dark .sidebar-skills-link {
+  background-color: transparent;
+  background-image: none;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--mac-text);
+}
+
+:root:not(.dark) .content-header,
+:root.dark .content-header {
+  background-color: var(--mac-surface);
+  border-color: var(--mac-border);
+  box-shadow: inset 0 -1px 0 var(--mac-border), inset 0 1px 0 rgb(255 255 255 / 44%);
+}
+
+:root:not(.dark) .sidebar-settings-area,
+:root.dark .sidebar-settings-area {
+  background-color: var(--mac-surface);
+  border-color: var(--mac-border);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 55%);
+}
+
+:root:not(.dark) .content-title,
+:root:not(.dark) .new-thread-hero,
+:root:not(.dark) .sidebar-settings-account-title,
+:root:not(.dark) .account-menu-title,
+:root:not(.dark) .skills-hub-title,
+:root:not(.dark) .directory-title,
+:root:not(.dark) .directory-card-title,
+:root:not(.dark) .directory-modal-title,
+:root:not(.dark) .automation-row-title,
+:root:not(.dark) .automation-detail-title-wrap h2,
+:root:not(.dark) .skill-picker-name,
+:root.dark .content-title,
+:root.dark .new-thread-hero,
+:root.dark .sidebar-settings-account-title,
+:root.dark .account-menu-title,
+:root.dark .skills-hub-title,
+:root.dark .directory-title,
+:root.dark .directory-card-title,
+:root.dark .directory-modal-title,
+:root.dark .automation-row-title,
+:root.dark .automation-detail-title-wrap h2,
+:root.dark .skill-picker-name {
+  color: var(--mac-text);
+}
+
+:root:not(.dark) .new-thread-folder-selected,
+:root:not(.dark) .sidebar-settings-account-meta,
+:root:not(.dark) .account-menu-item-meta,
+:root:not(.dark) .skills-hub-subtitle,
+:root:not(.dark) .directory-subtitle,
+:root:not(.dark) .directory-card-meta,
+:root:not(.dark) .directory-card-description,
+:root:not(.dark) .automation-row-meta,
+:root:not(.dark) .automation-row-schedule,
+:root:not(.dark) .skill-picker-desc,
+:root.dark .new-thread-folder-selected,
+:root.dark .sidebar-settings-account-meta,
+:root.dark .account-menu-item-meta,
+:root.dark .skills-hub-subtitle,
+:root.dark .directory-subtitle,
+:root.dark .directory-card-meta,
+:root.dark .directory-card-description,
+:root.dark .automation-row-meta,
+:root.dark .automation-row-schedule,
+:root.dark .skill-picker-desc {
+  color: var(--mac-muted);
+}
+
+:root:not(.dark) .thread-composer-shell,
+:root:not(.dark) .rate-limit-card,
+:root:not(.dark) .turn-progress-card,
+:root:not(.dark) .message-card[data-role='user'],
+:root:not(.dark) .skill-card,
+:root:not(.dark) .skills-sync-panel,
+:root:not(.dark) .skills-search-panel,
+:root:not(.dark) .directory-card,
+:root:not(.dark) .automations-list,
+:root:not(.dark) .automation-detail,
+:root:not(.dark) .api-panel-root,
+:root:not(.dark) .archived-panel,
+:root:not(.dark) .composio-preview-card,
+:root:not(.dark) .composio-status-card,
+:root:not(.dark) .file-change-panel-inner,
+:root:not(.dark) .sidebar-settings-telegram-panel,
+:root.dark .thread-composer-shell,
+:root.dark .rate-limit-card,
+:root.dark .turn-progress-card,
+:root.dark .message-card[data-role='user'],
+:root.dark .skill-card,
+:root.dark .skills-sync-panel,
+:root.dark .skills-search-panel,
+:root.dark .directory-card,
+:root.dark .automations-list,
+:root.dark .automation-detail,
+:root.dark .api-panel-root,
+:root.dark .archived-panel,
+:root.dark .composio-preview-card,
+:root.dark .composio-status-card,
+:root.dark .file-change-panel-inner,
+:root.dark .sidebar-settings-telegram-panel {
+  background-color: var(--mac-surface);
+  border-color: var(--mac-border);
+  box-shadow: var(--mac-shadow-soft);
+}
+
+:root:not(.dark) .skill-card,
+:root:not(.dark) .directory-card {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 72%);
+}
+
+:root.dark .skill-card,
+:root.dark .directory-card {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%);
+}
+
+:root:not(.dark) .new-thread-launch-card,
+:root.dark .new-thread-launch-card {
+  background: linear-gradient(145deg, var(--mac-surface-strong), var(--mac-surface));
+  border-color: var(--mac-border);
+  box-shadow: var(--mac-shadow-card);
+}
+
+:root:not(.dark) .plan-card,
+:root.dark .plan-card {
+  background-color: color-mix(in srgb, var(--mac-surface-strong) 88%, #2997ff 12%);
+  border-color: color-mix(in srgb, var(--mac-border-strong) 72%, #2997ff 28%);
+  box-shadow: var(--mac-shadow-soft);
+}
+
+:root:not(.dark) .request-card,
+:root.dark .request-card {
+  background-color: color-mix(in srgb, var(--mac-surface-strong) 88%, #f0a020 12%);
+  border-color: color-mix(in srgb, var(--mac-border-strong) 72%, #e59a20 28%);
+  box-shadow: var(--mac-shadow-soft);
+}
+
+:root:not(.dark) .sidebar-search-bar,
+:root:not(.dark) .sidebar-settings-input,
+:root:not(.dark) .sidebar-settings-textarea,
+:root:not(.dark) .composer-dropdown-search-input,
+:root:not(.dark) .search-dropdown-search,
+:root:not(.dark) .project-menu-input,
+:root:not(.dark) .rename-thread-input,
+:root:not(.dark) .request-input,
+:root:not(.dark) .new-thread-open-folder-path,
+:root:not(.dark) .new-thread-open-folder-filter,
+:root:not(.dark) .new-thread-open-folder-create-input,
+:root:not(.dark) .skills-search-input,
+:root:not(.dark) .directory-search,
+:root:not(.dark) .archived-search,
+:root:not(.dark) .header-git-search,
+:root:not(.dark) .codex-login-modal-input,
+:root:not(.dark) .skill-picker-search,
+:root:not(.dark) .automation-thread-textarea,
+:root.dark .sidebar-search-bar,
+:root.dark .sidebar-settings-input,
+:root.dark .sidebar-settings-textarea,
+:root.dark .composer-dropdown-search-input,
+:root.dark .search-dropdown-search,
+:root.dark .project-menu-input,
+:root.dark .rename-thread-input,
+:root.dark .request-input,
+:root.dark .new-thread-open-folder-path,
+:root.dark .new-thread-open-folder-filter,
+:root.dark .new-thread-open-folder-create-input,
+:root.dark .skills-search-input,
+:root.dark .directory-search,
+:root.dark .archived-search,
+:root.dark .header-git-search,
+:root.dark .codex-login-modal-input,
+:root.dark .skill-picker-search,
+:root.dark .automation-thread-textarea {
+  background-color: var(--mac-input);
+  border-color: var(--mac-border);
+  color: var(--mac-text);
+  box-shadow: inset 0 1px 2px rgb(38 53 72 / 6%), inset 0 1px 0 rgb(255 255 255 / 55%);
+}
+
+:root:not(.dark) .sidebar-settings-panel,
+:root:not(.dark) .composer-dropdown-menu,
+:root:not(.dark) .search-dropdown-menu-wrap-up,
+:root:not(.dark) .search-dropdown-menu-wrap-down,
+:root:not(.dark) .model-reasoning-menu,
+:root:not(.dark) .model-reasoning-model-menu,
+:root:not(.dark) .thread-composer-attach-menu,
+:root:not(.dark) .thread-composer-file-mentions,
+:root:not(.dark) .thread-composer-context-popover,
+:root:not(.dark) .organize-menu-panel,
+:root:not(.dark) .project-menu-panel,
+:root:not(.dark) .thread-menu-panel,
+:root:not(.dark) .account-menu-panel,
+:root:not(.dark) .header-git-menu,
+:root:not(.dark) .thread-type-menu-panel,
+:root:not(.dark) .file-link-context-menu,
+:root:not(.dark) .rename-thread-panel,
+:root:not(.dark) .skill-picker,
+:root:not(.dark) .header-git-state,
+:root:not(.dark) .header-git-commit-panel,
+:root:not(.dark) .header-git-branch-panel,
+:root:not(.dark) .header-git-commit-detail-panel,
+:root.dark .sidebar-settings-panel,
+:root.dark .composer-dropdown-menu,
+:root.dark .search-dropdown-menu-wrap-up,
+:root.dark .search-dropdown-menu-wrap-down,
+:root.dark .model-reasoning-menu,
+:root.dark .model-reasoning-model-menu,
+:root.dark .thread-composer-attach-menu,
+:root.dark .thread-composer-file-mentions,
+:root.dark .thread-composer-context-popover,
+:root.dark .organize-menu-panel,
+:root.dark .project-menu-panel,
+:root.dark .thread-menu-panel,
+:root.dark .account-menu-panel,
+:root.dark .header-git-menu,
+:root.dark .thread-type-menu-panel,
+:root.dark .file-link-context-menu,
+:root.dark .rename-thread-panel,
+:root.dark .skill-picker,
+:root.dark .header-git-state,
+:root.dark .header-git-commit-panel,
+:root.dark .header-git-branch-panel,
+:root.dark .header-git-commit-detail-panel {
+  background-color: var(--mac-solid);
+  border-color: var(--mac-border-strong);
+  color: var(--mac-text);
+  box-shadow: var(--mac-shadow-menu);
+}
+
+:root:not(.dark) .new-thread-open-folder,
+:root:not(.dark) .new-thread-project-modal,
+:root:not(.dark) .codex-login-modal,
+:root:not(.dark) .project-zip-modal,
+:root:not(.dark) .directory-modal,
+:root:not(.dark) .sdm-panel,
+:root:not(.dark) .diff-viewer-shell,
+:root:not(.dark) .review-pane,
+:root:not(.dark) .review-pane-sheet,
+:root:not(.dark) .diff-viewer-mobile-sheet,
+:root:not(.dark) .turn-progress-body.turn-progress-body-mobile-open,
+:root:not(.dark) .archived-dialog,
+:root.dark .new-thread-open-folder,
+:root.dark .new-thread-project-modal,
+:root.dark .codex-login-modal,
+:root.dark .project-zip-modal,
+:root.dark .directory-modal,
+:root.dark .sdm-panel,
+:root.dark .diff-viewer-shell,
+:root.dark .review-pane,
+:root.dark .review-pane-sheet,
+:root.dark .diff-viewer-mobile-sheet,
+:root.dark .turn-progress-body.turn-progress-body-mobile-open,
+:root.dark .archived-dialog {
+  background-color: var(--mac-solid);
+  border-color: var(--mac-border-strong);
+  color: var(--mac-text);
+  box-shadow: var(--mac-shadow-menu);
+}
+
+:root:not(.dark) .mobile-drawer-backdrop,
+:root:not(.dark) .new-thread-open-folder-overlay,
+:root:not(.dark) .codex-login-modal-backdrop,
+:root:not(.dark) .project-zip-modal-backdrop,
+:root:not(.dark) .directory-modal-overlay,
+:root:not(.dark) .thread-composer-image-modal-backdrop,
+:root:not(.dark) .image-modal-backdrop,
+:root:not(.dark) .diff-viewer-backdrop,
+:root:not(.dark) .diff-viewer-mobile-sheet-backdrop,
+:root:not(.dark) .review-pane-sheet-backdrop,
+:root:not(.dark) .turn-progress-mobile-backdrop,
+:root:not(.dark) .archived-dialog-overlay,
+:root:not(.dark) .rename-thread-overlay,
+:root:not(.dark) .sdm-overlay,
+:root.dark .mobile-drawer-backdrop,
+:root.dark .new-thread-open-folder-overlay,
+:root.dark .codex-login-modal-backdrop,
+:root.dark .project-zip-modal-backdrop,
+:root.dark .directory-modal-overlay,
+:root.dark .thread-composer-image-modal-backdrop,
+:root.dark .image-modal-backdrop,
+:root.dark .diff-viewer-backdrop,
+:root.dark .diff-viewer-mobile-sheet-backdrop,
+:root.dark .review-pane-sheet-backdrop,
+:root.dark .turn-progress-mobile-backdrop,
+:root.dark .archived-dialog-overlay,
+:root.dark .rename-thread-overlay,
+:root.dark .sdm-overlay {
+  background-color: var(--mac-overlay);
+}
+
+:root:not(.dark) .header-git-trigger,
+:root:not(.dark) .account-menu-trigger,
+:root:not(.dark) .content-header-terminal-command .composer-dropdown-trigger,
+:root:not(.dark) .content-header-branch-dropdown .composer-dropdown-trigger,
+:root:not(.dark) .new-thread-folder-action,
+:root:not(.dark) .new-thread-launch-card-button,
+:root:not(.dark) .skills-hub-sort,
+:root:not(.dark) .directory-action,
+:root:not(.dark) .directory-action-link,
+:root:not(.dark) .directory-modal-close,
+:root:not(.dark) .automations-refresh,
+:root:not(.dark) .automations-create,
+:root:not(.dark) .automation-edit-button,
+:root:not(.dark) .automation-detail-edit,
+:root.dark .header-git-trigger,
+:root.dark .account-menu-trigger,
+:root.dark .content-header-terminal-command .composer-dropdown-trigger,
+:root.dark .content-header-branch-dropdown .composer-dropdown-trigger,
+:root.dark .new-thread-folder-action,
+:root.dark .new-thread-launch-card-button,
+:root.dark .skills-hub-sort,
+:root.dark .directory-action,
+:root.dark .directory-action-link,
+:root.dark .directory-modal-close,
+:root.dark .automations-refresh,
+:root.dark .automations-create,
+:root.dark .automation-edit-button,
+:root.dark .automation-detail-edit {
+  background-color: var(--mac-surface-strong);
+  border-color: var(--mac-border);
+  color: var(--mac-text);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 42%);
+}
+
+:root:not(.dark) .sidebar-settings-button:hover,
+:root:not(.dark) .sidebar-settings-row:hover,
+:root:not(.dark) .sidebar-skills-link:hover,
+:root:not(.dark) .thread-row:hover,
+:root:not(.dark) .project-header-row:hover,
+:root:not(.dark) .composer-dropdown-option:hover,
+:root:not(.dark) .search-dropdown-option-main:hover,
+:root:not(.dark) .thread-composer-attach-item:hover,
+:root:not(.dark) .organize-menu-item:hover,
+:root:not(.dark) .project-menu-item:hover,
+:root:not(.dark) .thread-menu-item:hover,
+:root:not(.dark) .thread-type-menu-option:hover,
+:root:not(.dark) .file-link-context-menu-item:hover,
+:root:not(.dark) .header-git-branch-button:hover,
+:root:not(.dark) .header-git-commit:hover,
+:root:not(.dark) .header-git-file:hover,
+:root:not(.dark) .skill-picker-item:hover,
+:root.dark .sidebar-settings-button:hover,
+:root.dark .sidebar-settings-row:hover,
+:root.dark .sidebar-skills-link:hover,
+:root.dark .thread-row:hover,
+:root.dark .project-header-row:hover,
+:root.dark .composer-dropdown-option:hover,
+:root.dark .search-dropdown-option-main:hover,
+:root.dark .thread-composer-attach-item:hover,
+:root.dark .organize-menu-item:hover,
+:root.dark .project-menu-item:hover,
+:root.dark .thread-menu-item:hover,
+:root.dark .thread-type-menu-option:hover,
+:root.dark .file-link-context-menu-item:hover,
+:root.dark .header-git-branch-button:hover,
+:root.dark .header-git-commit:hover,
+:root.dark .header-git-file:hover,
+:root.dark .skill-picker-item:hover {
+  background-color: var(--mac-hover);
+}
+
+:root:not(.dark) .sidebar-skills-link.is-active,
+:root:not(.dark) .thread-row[data-active='true'],
+:root:not(.dark) .composer-dropdown-option.is-selected,
+:root:not(.dark) .search-dropdown-option.is-highlighted,
+:root:not(.dark) .organize-menu-item[data-active='true'],
+:root:not(.dark) .header-git-branch-button.is-selected,
+:root:not(.dark) .header-git-commit.is-selected,
+:root:not(.dark) .automation-row.is-selected,
+:root:not(.dark) .skill-picker-item.is-highlighted,
+:root.dark .sidebar-skills-link.is-active,
+:root.dark .thread-row[data-active='true'],
+:root.dark .composer-dropdown-option.is-selected,
+:root.dark .search-dropdown-option.is-highlighted,
+:root.dark .organize-menu-item[data-active='true'],
+:root.dark .header-git-branch-button.is-selected,
+:root.dark .header-git-commit.is-selected,
+:root.dark .automation-row.is-selected,
+:root.dark .skill-picker-item.is-highlighted {
+  background-color: var(--mac-selected);
+  border-color: var(--mac-border-strong);
+}
+
+:root:not(.dark) .thread-composer-submit,
+:root:not(.dark) .new-thread-folder-action-primary,
+:root:not(.dark) .new-thread-launch-card-button-primary,
+:root:not(.dark) .codex-login-modal-submit,
+:root:not(.dark) .project-zip-modal-action-primary,
+:root:not(.dark) .directory-action.primary,
+:root:not(.dark) .sdm-btn-primary,
+:root.dark .thread-composer-submit,
+:root.dark .new-thread-folder-action-primary,
+:root.dark .new-thread-launch-card-button-primary,
+:root.dark .codex-login-modal-submit,
+:root.dark .project-zip-modal-action-primary,
+:root.dark .directory-action.primary,
+:root.dark .sdm-btn-primary {
+  background-color: var(--mac-accent);
+  border-color: var(--mac-accent);
+  color: #ffffff;
+  box-shadow: 0 6px 18px rgb(8 127 245 / 22%), inset 0 1px 0 rgb(255 255 255 / 25%);
+}
+
+:root:not(.dark) .thread-composer-submit:hover,
+:root:not(.dark) .new-thread-folder-action-primary:hover,
+:root:not(.dark) .new-thread-launch-card-button-primary:hover,
+:root:not(.dark) .codex-login-modal-submit:hover,
+:root:not(.dark) .project-zip-modal-action-primary:hover,
+:root:not(.dark) .directory-action.primary:hover,
+:root:not(.dark) .sdm-btn-primary:hover,
+:root.dark .thread-composer-submit:hover,
+:root.dark .new-thread-folder-action-primary:hover,
+:root.dark .new-thread-launch-card-button-primary:hover,
+:root.dark .codex-login-modal-submit:hover,
+:root.dark .project-zip-modal-action-primary:hover,
+:root.dark .directory-action.primary:hover,
+:root.dark .sdm-btn-primary:hover {
+  background-color: var(--mac-accent-hover);
+  border-color: var(--mac-accent-hover);
+}
+
+:root:not(.dark) body .sidebar-settings-language-dropdown .composer-dropdown-trigger,
+:root:not(.dark) body .sidebar-settings-dropdown .composer-dropdown-trigger,
+:root:not(.dark) body .automation-thread-dropdown .composer-dropdown-trigger,
+:root:not(.dark) body .automation-schedule-unit-dropdown .composer-dropdown-trigger,
+:root.dark body .sidebar-settings-language-dropdown .composer-dropdown-trigger,
+:root.dark body .sidebar-settings-dropdown .composer-dropdown-trigger,
+:root.dark body .automation-thread-dropdown .composer-dropdown-trigger,
+:root.dark body .automation-schedule-unit-dropdown .composer-dropdown-trigger {
+  background-color: var(--mac-input);
+  border-color: var(--mac-border);
+  color: var(--mac-text);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 28%);
+}
+
+:root:not(.dark) body .automation-thread-panel .rename-thread-actions,
+:root:not(.dark) .directory-modal-header,
+:root:not(.dark) .directory-modal-footer,
+:root:not(.dark) .sdm-footer,
+:root.dark body .automation-thread-panel .rename-thread-actions,
+:root.dark .directory-modal-header,
+:root.dark .directory-modal-footer,
+:root.dark .sdm-footer {
+  background-color: var(--mac-solid);
+  border-color: var(--mac-border);
+}
+
+:root:not(.dark) .message-code-block,
+:root:not(.dark) .plan-card-markdown .message-code-block,
+:root:not(.dark) .thread-terminal-panel,
+:root:not(.dark) .thread-terminal-host,
+:root:not(.dark) .thread-terminal-host .xterm-viewport,
+:root.dark .message-code-block,
+:root.dark .plan-card-markdown .message-code-block,
+:root.dark .thread-terminal-panel,
+:root.dark .thread-terminal-host,
+:root.dark .thread-terminal-host .xterm-viewport {
+  background-color: var(--mac-code);
+  border-color: var(--mac-code-border);
+}
+
+:root:not(.dark) .diff-viewer-sidebar,
+:root:not(.dark) .diff-viewer-main,
+:root:not(.dark) .diff-viewer-toolbar,
+:root:not(.dark) .diff-viewer-panel,
+:root:not(.dark) .review-pane-header,
+:root:not(.dark) .review-pane-toolbar,
+:root:not(.dark) .review-pane-content,
+:root:not(.dark) .review-pane-main,
+:root:not(.dark) .review-pane-diff,
+:root:not(.dark) .review-pane-hunk,
+:root.dark .diff-viewer-sidebar,
+:root.dark .diff-viewer-main,
+:root.dark .diff-viewer-toolbar,
+:root.dark .diff-viewer-panel,
+:root.dark .review-pane-header,
+:root.dark .review-pane-toolbar,
+:root.dark .review-pane-content,
+:root.dark .review-pane-main,
+:root.dark .review-pane-diff,
+:root.dark .review-pane-hunk {
+  background-color: var(--mac-diff);
+  border-color: var(--mac-border);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root:not(.dark) {
+    --mac-sidebar: #f3f6fa;
+    --mac-main: #ffffff;
+    --mac-surface: #f9fbfd;
+    --mac-surface-strong: #fcfdff;
+    --mac-solid: #ffffff;
+    --mac-input: #ffffff;
+  }
+
+  :root.dark {
+    --mac-sidebar: #19212c;
+    --mac-main: #111720;
+    --mac-surface: #232c39;
+    --mac-surface-strong: #1f2834;
+    --mac-solid: #1d2531;
+    --mac-input: #181f2a;
   }
 }
