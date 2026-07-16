@@ -1665,6 +1665,17 @@ export function useDesktopState() {
   let eventSyncTimer: number | null = null
   const terminalRuntimeRefreshThreadIds = new Set<string>()
   const latestRuntimeStateByThreadId = new Map<string, ThreadRuntimeState>()
+  const terminalTurnAtMsByThreadId = new Map<string, Map<string, number>>()
+  const runtimeStateLifecycleEpochByThreadId = new Map<string, number>()
+  const lastAppliedRuntimeRequestByThreadId = new Map<string, number>()
+  const runtimeRequestContextByState = new WeakMap<ThreadRuntimeState, {
+    generation: number
+    requestSequence: number
+    lifecycleEpoch: number
+  }>()
+  const appliedRuntimeStateSnapshots = new WeakSet<ThreadRuntimeState>()
+  let runtimeRequestGeneration = 0
+  let runtimeRequestSequence = 0
   const optimisticTurnStartedAtByThreadId = new Map<string, number>()
   let rateLimitRefreshTimer: number | null = null
   const delayedTurnSyncTimerByThreadId = new Map<string, number>()
@@ -2683,6 +2694,15 @@ export function useDesktopState() {
     for (const threadId of latestRuntimeStateByThreadId.keys()) {
       if (!activeThreadIds.has(threadId)) latestRuntimeStateByThreadId.delete(threadId)
     }
+    for (const threadId of terminalTurnAtMsByThreadId.keys()) {
+      if (!activeThreadIds.has(threadId)) terminalTurnAtMsByThreadId.delete(threadId)
+    }
+    for (const threadId of runtimeStateLifecycleEpochByThreadId.keys()) {
+      if (!activeThreadIds.has(threadId)) runtimeStateLifecycleEpochByThreadId.delete(threadId)
+    }
+    for (const threadId of lastAppliedRuntimeRequestByThreadId.keys()) {
+      if (!activeThreadIds.has(threadId)) lastAppliedRuntimeRequestByThreadId.delete(threadId)
+    }
     for (const threadId of optimisticTurnStartedAtByThreadId.keys()) {
       if (!activeThreadIds.has(threadId)) optimisticTurnStartedAtByThreadId.delete(threadId)
     }
@@ -2779,7 +2799,11 @@ export function useDesktopState() {
     }
   }
 
-  function setThreadInProgress(threadId: string, nextInProgress: boolean): void {
+  function setThreadInProgress(
+    threadId: string,
+    nextInProgress: boolean,
+    options: { requestRuntimeReconcile?: boolean } = {},
+  ): void {
     if (!threadId) return
     const currentValue = inProgressById.value[threadId] === true
     if (currentValue === nextInProgress) return
@@ -2795,7 +2819,7 @@ export function useDesktopState() {
       clearInterruptPersistenceGate(threadId)
     }
     applyThreadFlags()
-    if (nextInProgress && stopNotificationStream) {
+    if (nextInProgress && stopNotificationStream && options.requestRuntimeReconcile !== false) {
       threadRuntimePolling.requestImmediate()
     }
     if (!nextInProgress && !hasActiveInProgressThreads() && threadListLoader.hasRemaining()) {
@@ -2994,8 +3018,95 @@ export function useDesktopState() {
     }
   }
 
-  function setAgentProgressSnapshot(snapshot: UiTurnProgress): void {
+  function setAgentProgressSnapshot(
+    snapshot: UiTurnProgress,
+    options: { authoritativeRuntime?: boolean } = {},
+  ): void {
+    const knownRuntimeState = latestRuntimeStateByThreadId.get(snapshot.rootThreadId)
+    const activeTurnId = activeTurnIdByThreadId.value[snapshot.rootThreadId] ?? ''
+    const expectedRunningTurnId = knownRuntimeState?.isRunning && knownRuntimeState.turnId
+      ? knownRuntimeState.turnId
+      : activeTurnId && !activeTurnId.startsWith('pending:')
+        ? activeTurnId
+        : ''
+    const hasPendingActiveTurn = activeTurnId.startsWith('pending:')
+    const snapshotMatchesExpectedTurn = Boolean(
+      expectedRunningTurnId
+      && snapshot.turnId === expectedRunningTurnId,
+    )
+    const permitsDifferentTurnSnapshot = snapshotMatchesExpectedTurn || hasPendingActiveTurn
+    if (
+      !options.authoritativeRuntime
+      && expectedRunningTurnId
+      && snapshot.turnId
+      && snapshot.turnId !== expectedRunningTurnId
+    ) return
+    if (
+      !options.authoritativeRuntime
+      && expectedRunningTurnId
+      && (!snapshot.turnId || snapshot.turnId === expectedRunningTurnId)
+      && snapshot.status !== 'running'
+    ) {
+      snapshot = {
+        ...snapshot,
+        turnId: expectedRunningTurnId,
+        status: 'running',
+        phase: 'preparing',
+      }
+    }
+    if (
+      !options.authoritativeRuntime
+      && knownRuntimeState
+      && !knownRuntimeState.isRunning
+      && knownRuntimeState.turnId
+      && snapshot.status === 'running'
+      && snapshot.turnId === knownRuntimeState.turnId
+    ) return
+    if (
+      knownRuntimeState?.isRunning
+      && knownRuntimeState.turnId
+      && (!snapshot.turnId || snapshot.turnId === knownRuntimeState.turnId)
+      && snapshot.status !== 'running'
+    ) {
+      snapshot = {
+        ...snapshot,
+        turnId: knownRuntimeState.turnId,
+        status: 'running',
+        phase: 'preparing',
+      }
+    }
+    if (
+      knownRuntimeState
+      && !knownRuntimeState.isRunning
+      && knownRuntimeState.turnId
+      && snapshot.turnId !== knownRuntimeState.turnId
+      && !snapshotMatchesExpectedTurn
+    ) {
+      const runtimeTerminalAtMs = knownRuntimeState.completedAtIso
+        ? Date.parse(knownRuntimeState.completedAtIso)
+        : knownRuntimeState.startedAtIso
+          ? Date.parse(knownRuntimeState.startedAtIso)
+          : NaN
+      if (Number.isFinite(runtimeTerminalAtMs) && runtimeTerminalAtMs >= snapshot.mainLastActivityAtMs) return
+    }
     const previous = agentProgressByThreadId.value[snapshot.rootThreadId]
+    if (previous && !options.authoritativeRuntime) {
+      const sameTurn = !previous.turnId || !snapshot.turnId || previous.turnId === snapshot.turnId
+      const previousTerminal = previous.status === 'completed' || previous.status === 'failed' || previous.status === 'interrupted'
+      if (
+        !sameTurn
+        && previous.status === 'running'
+        && !permitsDifferentTurnSnapshot
+      ) return
+      if (sameTurn && previousTerminal && snapshot.status === 'running') return
+      if (sameTurn && previous.status === 'completed' && snapshot.status === 'interrupted') return
+      if (sameTurn && previous.status === 'failed' && snapshot.status === 'interrupted') return
+      if (
+        snapshot.updatedAtMs < previous.updatedAtMs
+        && !(sameTurn && snapshot.status === 'completed' && previous.status === 'interrupted')
+        && !(!sameTurn && snapshotMatchesExpectedTurn)
+      ) return
+    }
     const previousAgents = previous?.turnId === snapshot.turnId
       ? new Map(previous.agents.map((agent) => [agent.threadId, agent]))
       : new Map<string, UiTurnProgress['agents'][number]>()
@@ -3013,6 +3124,9 @@ export function useDesktopState() {
     agentProgressByThreadId.value = {
       ...agentProgressByThreadId.value,
       [snapshot.rootThreadId]: { ...snapshot, agents },
+    }
+    if (snapshot.status === 'completed' || snapshot.status === 'interrupted' || snapshot.status === 'failed') {
+      recordTerminalTurn(snapshot.rootThreadId, snapshot.turnId, snapshot.updatedAtMs)
     }
     agentProgressRetryStateByThreadId.delete(snapshot.rootThreadId)
     lastAgentProgressLoadAtByThreadId.set(snapshot.rootThreadId, Date.now())
@@ -3044,7 +3158,10 @@ export function useDesktopState() {
     agentProgressRetryStateByThreadId.delete(threadId)
   }
 
-  async function loadAgentProgressSnapshot(threadId: string, options: { force?: boolean } = {}): Promise<void> {
+  async function loadAgentProgressSnapshot(
+    threadId: string,
+    options: { force?: boolean; preserveOnNull?: boolean } = {},
+  ): Promise<void> {
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId) return
     const pending = agentProgressLoadPromiseByThreadId.get(normalizedThreadId)
@@ -3067,7 +3184,7 @@ export function useDesktopState() {
         if (!isCurrentLoad()) return
         if (snapshot) {
           setAgentProgressSnapshot(snapshot)
-        } else if (normalizedThreadId in agentProgressByThreadId.value) {
+        } else if (!options.preserveOnNull && normalizedThreadId in agentProgressByThreadId.value) {
           agentProgressByThreadId.value = omitKey(agentProgressByThreadId.value, normalizedThreadId)
         }
         if (!snapshot && inProgressById.value[normalizedThreadId] === true) {
@@ -3287,6 +3404,33 @@ export function useDesktopState() {
       activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, threadId)
     }
     clearPendingTurnRequest(threadId)
+  }
+
+  function markTurnProgressInterrupted(threadId: string, turnId: string, interruptedAtMs: number): void {
+    const progress = agentProgressByThreadId.value[threadId]
+    if (!progress) return
+    if (progress.turnId && turnId && progress.turnId !== turnId) return
+    if (progress.status !== 'running' && progress.status !== 'idle') return
+    setAgentProgressSnapshot({
+      ...progress,
+      turnId: turnId || progress.turnId,
+      status: 'interrupted',
+      phase: 'interrupted',
+      lastActivityAtMs: Math.max(progress.lastActivityAtMs, interruptedAtMs),
+      mainLastActivityAtMs: Math.max(progress.mainLastActivityAtMs, interruptedAtMs),
+      updatedAtMs: Math.max(progress.updatedAtMs, interruptedAtMs),
+      agents: progress.agents.map((agent) => (
+        agent.status === 'starting' || agent.status === 'running'
+          ? {
+              ...agent,
+              status: 'interrupted',
+              lastActivityAtMs: Math.max(agent.lastActivityAtMs, interruptedAtMs),
+              completedAtMs: interruptedAtMs,
+              currentActivity: '',
+            }
+          : agent
+      )),
+    }, { authoritativeRuntime: true })
   }
 
   function normalizePlanStepStatus(value: unknown): UiPlanStep['status'] {
@@ -4410,6 +4554,9 @@ export function useDesktopState() {
       return
     }
 
+    const startedTurn = readTurnStartedInfo(notification)
+    if (startedTurn && shouldIgnoreStartedTurn(startedTurn)) return
+
     const turnActivity = readTurnActivity(notification)
     if (turnActivity) {
       setTurnActivityForThread(turnActivity.threadId, turnActivity.activity)
@@ -4421,8 +4568,8 @@ export function useDesktopState() {
       clearTransientTurnErrorForThread(notificationThreadId)
     }
 
-    const startedTurn = readTurnStartedInfo(notification)
     if (startedTurn) {
+      bumpRuntimeStateLifecycleEpoch(startedTurn.threadId)
       liveDeltaBuffer.discardThread(startedTurn.threadId)
       if (startedTurn.threadId in agentProgressByThreadId.value) {
         agentProgressByThreadId.value = omitKey(agentProgressByThreadId.value, startedTurn.threadId)
@@ -4457,9 +4604,9 @@ export function useDesktopState() {
       Boolean(turnErrorMessage) &&
       completedThreadModelId !== MODEL_FALLBACK_ID &&
       isUnsupportedChatGptModelError(new Error(turnErrorMessage))
+    let completionEndsActiveRun = false
     if (completedTurn) {
-      optimisticTurnStartedAtByThreadId.delete(completedTurn.threadId)
-      const pendingTurnRequest = pendingTurnRequestByThreadId.value[completedTurn.threadId]
+      recordTerminalTurn(completedTurn.threadId, completedTurn.turnId, completedTurn.completedAtMs)
       const startedTurnState = pendingTurnStartsById.get(completedTurn.turnId)
       if (startedTurnState) {
         pendingTurnStartsById.delete(completedTurn.turnId)
@@ -4474,17 +4621,55 @@ export function useDesktopState() {
         (startedTurnState ? completedTurn.completedAtMs - startedTurnState.startedAtMs : null)
 
       const durationMs = typeof rawDurationMs === 'number' ? Math.max(0, rawDurationMs) : 0
-      setTurnSummaryForThread(completedTurn.threadId, {
-        turnId: completedTurn.turnId,
-        durationMs,
-      })
-      if (activeTurnIdByThreadId.value[completedTurn.threadId]) {
+      const activeTurnId = activeTurnIdByThreadId.value[completedTurn.threadId] ?? ''
+      const currentProgress = agentProgressByThreadId.value[completedTurn.threadId]
+      const hasDifferentRunningProgress = Boolean(
+        currentProgress
+        && currentProgress.status === 'running'
+        && currentProgress.turnId
+        && currentProgress.turnId !== completedTurn.turnId,
+      )
+      const knownRuntimeState = latestRuntimeStateByThreadId.get(completedTurn.threadId)
+      const hasDifferentRunningRuntime = Boolean(
+        knownRuntimeState?.isRunning
+        && knownRuntimeState.turnId
+        && knownRuntimeState.turnId !== completedTurn.turnId,
+      )
+      const correctsInterruptedOverlap = Boolean(
+        currentProgress
+        && currentProgress.status === 'interrupted'
+        && currentProgress.turnId !== completedTurn.turnId
+        && (!activeTurnId || currentProgress.turnId === activeTurnId)
+        && completedTurn.completedAtMs >= currentProgress.mainLastActivityAtMs
+        && !hasDifferentRunningRuntime,
+      )
+      completionEndsActiveRun = (
+        !activeTurnId
+        || activeTurnId === completedTurn.turnId
+        || correctsInterruptedOverlap
+      ) && !hasDifferentRunningProgress && !hasDifferentRunningRuntime
+      if (completionEndsActiveRun || correctsInterruptedOverlap) {
+        invalidateAgentProgressLoadForThread(completedTurn.threadId)
+        optimisticTurnStartedAtByThreadId.delete(completedTurn.threadId)
+        setTurnSummaryForThread(completedTurn.threadId, {
+          turnId: completedTurn.turnId,
+          durationMs,
+        })
+      }
+      if (completionEndsActiveRun && activeTurnId) {
         activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, completedTurn.threadId)
       }
-      setThreadInProgress(completedTurn.threadId, false)
-      setTurnActivityForThread(completedTurn.threadId, null)
-      const currentProgress = agentProgressByThreadId.value[completedTurn.threadId]
-      if (currentProgress && (!currentProgress.turnId || currentProgress.turnId === completedTurn.turnId)) {
+      if (completionEndsActiveRun) {
+        bumpRuntimeStateLifecycleEpoch(completedTurn.threadId)
+        latestRuntimeStateByThreadId.delete(completedTurn.threadId)
+        setThreadInProgress(completedTurn.threadId, false)
+        setTurnActivityForThread(completedTurn.threadId, null)
+      }
+      if (currentProgress && (
+        !currentProgress.turnId
+        || currentProgress.turnId === completedTurn.turnId
+        || correctsInterruptedOverlap
+      )) {
         const rawStatus = readString(asRecord(asRecord(notification.params)?.turn)?.status).toLowerCase()
         const phase: UiTurnProgress['phase'] = turnErrorMessage || rawStatus.includes('fail') || rawStatus.includes('error')
           ? 'failed'
@@ -4495,15 +4680,17 @@ export function useDesktopState() {
           ...agentProgressByThreadId.value,
           [completedTurn.threadId]: {
             ...currentProgress,
+            turnId: completedTurn.turnId,
             status: phase,
             phase,
             lastActivityAtMs: Math.max(currentProgress.lastActivityAtMs, completedTurn.completedAtMs),
+            mainLastActivityAtMs: Math.max(currentProgress.mainLastActivityAtMs, completedTurn.completedAtMs),
             updatedAtMs: Math.max(currentProgress.updatedAtMs, completedTurn.completedAtMs),
           },
         }
       }
       markThreadUnreadByEvent(completedTurn.threadId)
-      if (!shouldRetryWithFallback) {
+      if (completionEndsActiveRun && !shouldRetryWithFallback) {
         clearPendingTurnRequest(completedTurn.threadId)
         scheduleQueueStateRefresh(completedTurn.threadId)
       }
@@ -4642,7 +4829,7 @@ export function useDesktopState() {
       clearLiveReasoningForThread(notificationThreadId)
     }
 
-    if (notification.method === 'turn/completed') {
+    if (notification.method === 'turn/completed' && completionEndsActiveRun) {
       liveDeltaBuffer.flush(notificationThreadId)
       activeReasoningItemIdByThreadId.delete(notificationThreadId)
       shouldAutoScrollOnNextAgentEvent = false
@@ -4835,7 +5022,17 @@ export function useDesktopState() {
     const orderedGroups = orderGroupsByProjectOrder(visibleGroups, projectOrder.value)
     const orderedThreadIds = new Set(flattenThreads(orderedGroups).map((thread) => thread.id))
     markServerListedThreads(orderedThreadIds)
-    inProgressById.value = syncIncomingInProgressState(inProgressById.value, orderedGroups)
+    let nextInProgress = syncIncomingInProgressState(inProgressById.value, orderedGroups)
+    let copiedForActiveTurns = false
+    for (const [threadId, turnId] of Object.entries(activeTurnIdByThreadId.value)) {
+      if (!turnId || nextInProgress[threadId] === true) continue
+      if (!copiedForActiveTurns) {
+        nextInProgress = { ...nextInProgress }
+        copiedForActiveTurns = true
+      }
+      nextInProgress[threadId] = true
+    }
+    inProgressById.value = nextInProgress
     for (const [threadId, runtimeState] of latestRuntimeStateByThreadId) {
       if (!orderedThreadIds.has(threadId) && threadId !== selectedThreadId.value) continue
       if (runtimeState.isRunning) {
@@ -5007,12 +5204,15 @@ export function useDesktopState() {
       const { messages: nextMessages, inProgress, activeTurnId, turnIndexByTurnId } = detail
       const knownRuntimeState = latestRuntimeStateByThreadId.get(threadId)
       const hasOptimisticTurnStart = optimisticTurnStartedAtByThreadId.has(threadId)
-      const resolvedInProgress = hasOptimisticTurnStart
+      const currentActiveTurnId = activeTurnIdByThreadId.value[threadId] ?? ''
+      const resolvedInProgress = hasOptimisticTurnStart || Boolean(currentActiveTurnId)
         ? true
         : (knownRuntimeState ? knownRuntimeState.isRunning : inProgress)
-      const resolvedActiveTurnId = knownRuntimeState?.isRunning && knownRuntimeState.turnId
-        ? knownRuntimeState.turnId
-        : (resolvedInProgress ? activeTurnId : '')
+      const resolvedActiveTurnId = currentActiveTurnId || (
+        knownRuntimeState?.isRunning && knownRuntimeState.turnId
+          ? knownRuntimeState.turnId
+          : (resolvedInProgress ? activeTurnId : '')
+      )
       hasMoreOlderMessagesByThreadId.value = {
         ...hasMoreOlderMessagesByThreadId.value,
         [threadId]: detail.hasMoreOlder === true,
@@ -5713,6 +5913,7 @@ export function useDesktopState() {
       setTurnErrorForThread(threadId, null)
       setThreadInProgress(threadId, true)
       if (startedTurnId) {
+        bumpRuntimeStateLifecycleEpoch(threadId)
         activeTurnIdByThreadId.value = {
           ...activeTurnIdByThreadId.value,
           [threadId]: startedTurnId,
@@ -5842,6 +6043,7 @@ export function useDesktopState() {
       }
 
       if (startedTurnId) {
+        bumpRuntimeStateLifecycleEpoch(threadId)
         activeTurnIdByThreadId.value = {
           ...activeTurnIdByThreadId.value,
           [threadId]: startedTurnId,
@@ -5914,12 +6116,21 @@ export function useDesktopState() {
     error.value = ''
     try {
       await interruptThreadTurn(threadId, turnId)
-      optimisticTurnStartedAtByThreadId.delete(threadId)
-      setThreadInProgress(threadId, false)
-      setTurnActivityForThread(threadId, null)
-      setTurnErrorForThread(threadId, null)
-      if (activeTurnIdByThreadId.value[threadId]) {
-        activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, threadId)
+      const currentActiveTurnId = activeTurnIdByThreadId.value[threadId] ?? ''
+      if (!currentActiveTurnId || currentActiveTurnId === turnId) {
+        const interruptedAtMs = Date.now()
+        bumpRuntimeStateLifecycleEpoch(threadId)
+        invalidateAgentProgressLoadForThread(threadId)
+        latestRuntimeStateByThreadId.delete(threadId)
+        markTurnProgressInterrupted(threadId, turnId, interruptedAtMs)
+        recordTerminalTurn(threadId, turnId, interruptedAtMs)
+        optimisticTurnStartedAtByThreadId.delete(threadId)
+        setThreadInProgress(threadId, false)
+        setTurnActivityForThread(threadId, null)
+        setTurnErrorForThread(threadId, null)
+        if (activeTurnIdByThreadId.value[threadId]) {
+          activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, threadId)
+        }
       }
       pendingThreadMessageRefresh.add(threadId)
       pendingThreadsRefresh = true
@@ -6159,6 +6370,92 @@ export function useDesktopState() {
     })
   }
 
+  function recordTerminalTurn(threadId: string, turnId: string, terminalAtMs: number): void {
+    if (!threadId || !turnId || !Number.isFinite(terminalAtMs)) return
+    const existing = terminalTurnAtMsByThreadId.get(threadId) ?? new Map<string, number>()
+    existing.delete(turnId)
+    existing.set(turnId, terminalAtMs)
+    while (existing.size > 32) {
+      const oldestTurnId = existing.keys().next().value
+      if (typeof oldestTurnId !== 'string') break
+      existing.delete(oldestTurnId)
+    }
+    terminalTurnAtMsByThreadId.set(threadId, existing)
+  }
+
+  function shouldIgnoreStartedTurn(startedTurn: TurnStartedInfo): boolean {
+    if (terminalTurnAtMsByThreadId.get(startedTurn.threadId)?.has(startedTurn.turnId)) return true
+    const activeTurnId = activeTurnIdByThreadId.value[startedTurn.threadId] ?? ''
+    if (activeTurnId === startedTurn.turnId && inProgressById.value[startedTurn.threadId] === true) return true
+    const currentProgress = agentProgressByThreadId.value[startedTurn.threadId]
+    const progressIsTerminal = currentProgress?.status === 'completed'
+      || currentProgress?.status === 'interrupted'
+      || currentProgress?.status === 'failed'
+    if (
+      progressIsTerminal
+      && startedTurn.startedAtMs <= currentProgress.mainLastActivityAtMs
+    ) return true
+    const runtimeState = latestRuntimeStateByThreadId.get(startedTurn.threadId)
+    if (runtimeState && !runtimeState.isRunning) {
+      const runtimeTerminalAtMs = runtimeState.completedAtIso
+        ? Date.parse(runtimeState.completedAtIso)
+        : runtimeState.startedAtIso
+          ? Date.parse(runtimeState.startedAtIso)
+          : NaN
+      if (Number.isFinite(runtimeTerminalAtMs) && startedTurn.startedAtMs <= runtimeTerminalAtMs) return true
+    }
+    return false
+  }
+
+  function bumpRuntimeStateLifecycleEpoch(threadId: string): void {
+    if (!threadId) return
+    runtimeStateLifecycleEpochByThreadId.set(
+      threadId,
+      (runtimeStateLifecycleEpochByThreadId.get(threadId) ?? 0) + 1,
+    )
+  }
+
+  async function fetchThreadRuntimeStates(threadIds: string[]): Promise<ThreadRuntimeState[]> {
+    const requestSequence = ++runtimeRequestSequence
+    const generation = runtimeRequestGeneration
+    const lifecycleEpochByThreadId = new Map(threadIds.map((threadId) => [
+      threadId,
+      runtimeStateLifecycleEpochByThreadId.get(threadId) ?? 0,
+    ]))
+    const states = await getThreadRuntimeStates(threadIds)
+    return states.map((state) => {
+      const taggedState = { ...state }
+      runtimeRequestContextByState.set(taggedState, {
+        generation,
+        requestSequence,
+        lifecycleEpoch: lifecycleEpochByThreadId.get(state.threadId) ?? 0,
+      })
+      return taggedState
+    })
+  }
+
+  function isRuntimeStateRequestCurrent(state: ThreadRuntimeState): boolean {
+    const requestContext = runtimeRequestContextByState.get(state)
+    if (!requestContext) return true
+    if (requestContext.generation !== runtimeRequestGeneration) return false
+    if (
+      requestContext.lifecycleEpoch
+      !== (runtimeStateLifecycleEpochByThreadId.get(state.threadId) ?? 0)
+    ) return false
+    return requestContext.requestSequence >= (lastAppliedRuntimeRequestByThreadId.get(state.threadId) ?? 0)
+  }
+
+  function hasDifferentConcreteActiveTurn(state: ThreadRuntimeState): boolean {
+    const activeTurnId = activeTurnIdByThreadId.value[state.threadId] ?? ''
+    if (!activeTurnId || activeTurnId.startsWith('pending:')) return false
+    return !state.turnId || activeTurnId !== state.turnId
+  }
+
+  function terminalRuntimeRefreshWasSuperseded(state: ThreadRuntimeState): boolean {
+    if (hasDifferentConcreteActiveTurn(state)) return true
+    return latestRuntimeStateByThreadId.get(state.threadId)?.isRunning === true
+  }
+
   function refreshTerminalThreadFromServer(state: ThreadRuntimeState): void {
     const threadId = state.threadId
     if (!threadId || terminalRuntimeRefreshThreadIds.has(threadId)) return
@@ -6166,11 +6463,13 @@ export function useDesktopState() {
     void (async () => {
       try {
         await loadMessages(threadId, { silent: true, force: true })
+        if (terminalRuntimeRefreshWasSuperseded(state)) return
         if (!shouldIgnoreOlderTerminalRuntimeState(state)) {
           setThreadInProgress(threadId, false)
           clearCompletedTurnLiveState(threadId)
         }
         await loadThreads({ force: true })
+        if (terminalRuntimeRefreshWasSuperseded(state)) return
         if (!shouldIgnoreOlderTerminalRuntimeState(state)) {
           setThreadInProgress(threadId, false)
           clearCompletedTurnLiveState(threadId)
@@ -6189,13 +6488,57 @@ export function useDesktopState() {
     for (const state of states) {
       const threadId = state.threadId
       if (!threadId) continue
+      const requestContext = runtimeRequestContextByState.get(state)
+      if (requestContext) {
+        if (!isRuntimeStateRequestCurrent(state)) continue
+        lastAppliedRuntimeRequestByThreadId.set(threadId, requestContext.requestSequence)
+      }
 
       if (state.isRunning && state.state === 'running') {
+        const currentProgress = agentProgressByThreadId.value[threadId]
+        const terminalSummary = turnSummaryByThreadId.value[threadId]
+        const sameTurnHasConfirmedTerminal = Boolean(
+          state.turnId
+          && (
+            terminalSummary?.turnId === state.turnId
+            || (
+              currentProgress?.turnId === state.turnId
+              && (currentProgress.status === 'completed' || currentProgress.status === 'failed')
+            )
+          ),
+        )
+        if (sameTurnHasConfirmedTerminal) continue
         latestRuntimeStateByThreadId.set(threadId, state)
         optimisticTurnStartedAtByThreadId.delete(threadId)
-        setThreadInProgress(threadId, true)
-        if (threadId === selectedThreadId.value && !agentProgressByThreadId.value[threadId]) {
-          void loadAgentProgressSnapshot(threadId)
+        setThreadInProgress(threadId, true, { requestRuntimeReconcile: false })
+        const runtimeTurnChanged = Boolean(
+          state.turnId
+          && currentProgress
+          && state.turnId !== currentProgress.turnId,
+        )
+        const revivesInterruptedTurn = Boolean(
+          currentProgress
+          && currentProgress.status === 'interrupted'
+          && (!state.turnId || !currentProgress.turnId || state.turnId === currentProgress.turnId),
+        )
+        if (runtimeTurnChanged) {
+          invalidateAgentProgressLoadForThread(threadId)
+          agentProgressByThreadId.value = omitKey(agentProgressByThreadId.value, threadId)
+        } else if (currentProgress && revivesInterruptedTurn) {
+          const runtimeStartedAtMs = state.startedAtIso ? Date.parse(state.startedAtIso) : NaN
+          setAgentProgressSnapshot({
+            ...currentProgress,
+            turnId: state.turnId || currentProgress.turnId,
+            status: 'running',
+            phase: 'preparing',
+            lastActivityAtMs: Number.isFinite(runtimeStartedAtMs)
+              ? Math.max(currentProgress.lastActivityAtMs, runtimeStartedAtMs)
+              : currentProgress.lastActivityAtMs,
+          }, { authoritativeRuntime: true })
+          invalidateAgentProgressLoadForThread(threadId)
+        }
+        if (threadId === selectedThreadId.value && (!currentProgress || runtimeTurnChanged || revivesInterruptedTurn)) {
+          void loadAgentProgressSnapshot(threadId, { force: runtimeTurnChanged || revivesInterruptedTurn })
         }
         if (state.turnId && !state.turnId.startsWith('pending:')) {
           activeTurnIdByThreadId.value = {
@@ -6204,12 +6547,127 @@ export function useDesktopState() {
           }
           maybeUnblockInterruptForActiveTurn(threadId, state.turnId)
         }
+        appliedRuntimeStateSnapshots.add(state)
         continue
       }
 
-      if (shouldIgnoreOlderTerminalRuntimeState(state)) continue
+      const currentProgress = agentProgressByThreadId.value[threadId]
+      const runtimeTerminalAtMs = state.completedAtIso
+        ? Date.parse(state.completedAtIso)
+        : state.startedAtIso
+          ? Date.parse(state.startedAtIso)
+          : Date.now()
+      if (state.turnId) recordTerminalTurn(threadId, state.turnId, runtimeTerminalAtMs)
+      const activeTurnId = activeTurnIdByThreadId.value[threadId] ?? ''
+      const knownRuntimeState = latestRuntimeStateByThreadId.get(threadId)
+      const hasDifferentActiveTurn = Boolean(
+        activeTurnId
+        && !activeTurnId.startsWith('pending:')
+        && (!state.turnId || activeTurnId !== state.turnId),
+      )
+      const replacesKnownRunningRuntime = Boolean(
+        hasDifferentActiveTurn
+        && knownRuntimeState?.isRunning
+        && knownRuntimeState.turnId === activeTurnId,
+      )
+      const activeTurnHasTerminalProgress = Boolean(
+        hasDifferentActiveTurn
+        && currentProgress?.turnId === activeTurnId
+        && currentProgress.status !== 'running'
+        && currentProgress.status !== 'idle',
+      )
+      const terminalLifecycleSupersedesActiveTurn = Boolean(
+        hasDifferentActiveTurn
+        && (replacesKnownRunningRuntime || activeTurnHasTerminalProgress)
+        && (
+          !currentProgress
+          || (
+            Number.isFinite(runtimeTerminalAtMs)
+            && runtimeTerminalAtMs >= currentProgress.mainLastActivityAtMs
+          )
+        ),
+      )
+      if (shouldIgnoreOlderTerminalRuntimeState(state) && !terminalLifecycleSupersedesActiveTurn) continue
+      if (hasDifferentActiveTurn && !replacesKnownRunningRuntime && !activeTurnHasTerminalProgress) continue
+      if (
+        hasDifferentActiveTurn
+        && currentProgress
+        && Number.isFinite(runtimeTerminalAtMs)
+        && runtimeTerminalAtMs < currentProgress.mainLastActivityAtMs
+      ) continue
       latestRuntimeStateByThreadId.set(threadId, state)
-      const hadRuntimeState = inProgressById.value[threadId] === true || Boolean(activeTurnIdByThreadId.value[threadId])
+      appliedRuntimeStateSnapshots.add(state)
+      const sameProgressTurn = Boolean(
+        currentProgress
+        && (!currentProgress.turnId || !state.turnId || currentProgress.turnId === state.turnId),
+      )
+      const newerOverlappingTerminal = Boolean(
+        currentProgress
+        && !sameProgressTurn
+        && Number.isFinite(runtimeTerminalAtMs)
+        && runtimeTerminalAtMs >= currentProgress.mainLastActivityAtMs,
+      )
+      const runtimeProgressStatus = state.state === 'completed'
+        ? 'completed'
+        : state.state === 'interrupted'
+          ? 'interrupted'
+          : null
+      const fillsMissingProgressTurnId = Boolean(currentProgress && state.turnId && !currentProgress.turnId)
+      const sameTurnTerminalCorrection = Boolean(
+        currentProgress
+        && sameProgressTurn
+        && runtimeProgressStatus
+        && (
+          runtimeProgressStatus === 'completed'
+            ? currentProgress.status === 'running'
+              || currentProgress.status === 'interrupted'
+              || currentProgress.status === 'idle'
+            : currentProgress.status === 'running'
+              || currentProgress.status === 'idle'
+              || (
+                fillsMissingProgressTurnId
+                && Number.isFinite(runtimeTerminalAtMs)
+                && runtimeTerminalAtMs >= currentProgress.mainLastActivityAtMs
+              )
+        )
+      )
+      const correctsProgress = Boolean(
+        currentProgress
+        && runtimeProgressStatus
+        && (
+          sameTurnTerminalCorrection
+          || (
+            newerOverlappingTerminal
+            && (
+              currentProgress.status !== runtimeProgressStatus
+              || currentProgress.phase !== runtimeProgressStatus
+              || Boolean(state.turnId && currentProgress.turnId !== state.turnId)
+            )
+          )
+        )
+      )
+      const shouldRefreshCorrectedProgress = correctsProgress && threadId === selectedThreadId.value
+      if (currentProgress && runtimeProgressStatus && (correctsProgress || fillsMissingProgressTurnId)) {
+        setAgentProgressSnapshot({
+          ...currentProgress,
+          turnId: state.turnId || currentProgress.turnId,
+          status: correctsProgress ? runtimeProgressStatus : currentProgress.status,
+          phase: correctsProgress ? runtimeProgressStatus : currentProgress.phase,
+          lastActivityAtMs: Number.isFinite(runtimeTerminalAtMs)
+            ? Math.max(currentProgress.lastActivityAtMs, runtimeTerminalAtMs)
+            : currentProgress.lastActivityAtMs,
+          mainLastActivityAtMs: Number.isFinite(runtimeTerminalAtMs)
+            ? Math.max(currentProgress.mainLastActivityAtMs, runtimeTerminalAtMs)
+            : currentProgress.mainLastActivityAtMs,
+          updatedAtMs: Number.isFinite(runtimeTerminalAtMs)
+            ? Math.max(currentProgress.updatedAtMs, runtimeTerminalAtMs)
+            : currentProgress.updatedAtMs,
+        }, { authoritativeRuntime: true })
+        if (correctsProgress) {
+          invalidateAgentProgressLoadForThread(threadId)
+        }
+      }
+      const hadRuntimeState = inProgressById.value[threadId] === true || Boolean(activeTurnId) || correctsProgress
       if (!hadRuntimeState) continue
 
       optimisticTurnStartedAtByThreadId.delete(threadId)
@@ -6219,6 +6677,9 @@ export function useDesktopState() {
       clearCompletedTurnLiveState(threadId)
       setTurnActivityForThread(threadId, null)
       if (state.state === 'completed') markThreadUnreadByEvent(threadId)
+      if (shouldRefreshCorrectedProgress) {
+        void loadAgentProgressSnapshot(threadId, { force: true, preserveOnNull: true })
+      }
       refreshTerminalThreadFromServer(state)
     }
   }
@@ -6230,12 +6691,14 @@ export function useDesktopState() {
       selectedThreadId.value,
     ),
     hasActiveThreads: hasActiveInProgressThreads,
-    fetchStates: getThreadRuntimeStates,
+    fetchStates: fetchThreadRuntimeStates,
     applyStates: applyThreadRuntimeStates,
   })
 
-  function reconcileThreadRuntimeState(threadId: string): Promise<ThreadRuntimeState | null> {
-    return threadRuntimePolling.reconcile(threadId)
+  async function reconcileThreadRuntimeState(threadId: string): Promise<ThreadRuntimeState | null> {
+    const state = await threadRuntimePolling.reconcile(threadId)
+    if (!state || !appliedRuntimeStateSnapshots.has(state) || !isRuntimeStateRequestCurrent(state)) return null
+    return state
   }
 
   async function syncThreadStatus(): Promise<void> {
@@ -6407,6 +6870,7 @@ export function useDesktopState() {
 
   function stopPolling(): void {
     agentProgressLoadGeneration += 1
+    runtimeRequestGeneration += 1
     threadRuntimePolling.stop()
     if (stopNotificationStream) {
       stopNotificationStream()
@@ -6416,6 +6880,9 @@ export function useDesktopState() {
 
     terminalRuntimeRefreshThreadIds.clear()
     latestRuntimeStateByThreadId.clear()
+    terminalTurnAtMsByThreadId.clear()
+    runtimeStateLifecycleEpochByThreadId.clear()
+    lastAppliedRuntimeRequestByThreadId.clear()
     optimisticTurnStartedAtByThreadId.clear()
 
     pendingThreadsRefresh = false

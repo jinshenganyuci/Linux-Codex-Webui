@@ -34,6 +34,12 @@
    - A response from an invalidated previous turn or a stopped polling session cannot overwrite the current turn's retry/progress state.
    - Connection loss is shown separately from a silent/stale agent.
    - A stopped app-server reconciles active work to interrupted instead of leaving an endless spinner.
+   - For overlapping Goal continuation turns, keep a newer continuation without a completion record inactive after the restart, then let an earlier turn finish later. The root card changes to `Completed` / `已完成` without F5 because that later completion is the newest authoritative lifecycle event.
+   - A child that truly has no completion record remains `Interrupted` / `已中断`; the root correction does not fabricate a child completion.
+   - While the newer continuation still has a fresh runtime lease, an older completion must not replace its `Running` / `运行中` state.
+   - After a child starts turn B, delayed completion/runtime evidence from its turn A does not stop B; a fresh runtime owner for B can resume a terminal A row.
+   - After the root turn is terminal, delayed same-turn activity or a replayed `turn/started` event does not restore `Running` / `运行中`.
+   - When runtime switches the root from turn A to B, a delayed turn A progress response is discarded; the card stays empty until real turn B progress arrives and then renders B.
    - Completed, failed, and interrupted rows show a frozen `Duration` / `耗时`; their labels do not keep increasing after completion.
 6. While a turn is running, deliver an app-server `error` notification with `willRetry: true`, followed by a non-retry error.
    - Automatic retry text such as `Reconnecting... 2/5` does not render as a red final-error alert and does not show a feedback action.

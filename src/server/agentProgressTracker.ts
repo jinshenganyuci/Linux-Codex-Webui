@@ -64,6 +64,7 @@ export type AgentProgressSnapshot = {
 
 export type AgentRuntimeStateLike = {
   threadId: string
+  turnId?: string
   state: 'running' | 'completed' | 'interrupted' | 'idle'
   startedAtIso?: string | null
   completedAtIso?: string | null
@@ -71,6 +72,10 @@ export type AgentRuntimeStateLike = {
 
 type MutableProgress = Omit<AgentProgressSnapshot, 'agents' | 'events'> & {
   agentsByThreadId: Map<string, AgentProgressNode>
+  agentRootTurnIdByThreadId: Map<string, string>
+  agentTurnIdByThreadId: Map<string, string>
+  agentTurnStartedAtMsByThreadId: Map<string, number>
+  terminalRootTurnAtMsByTurnId: Map<string, number>
   events: AgentProgressEvent[]
   seenEventKeys: Set<string>
   seenEventOrder: string[]
@@ -111,6 +116,13 @@ function readIsoMs(value: unknown): number | null {
   if (!text) return null
   const parsed = Date.parse(text)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function readUuidV7TimestampMs(value: unknown): number | null {
+  const text = readString(value).toLowerCase()
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(text)) return null
+  const parsed = Number.parseInt(`${text.slice(0, 8)}${text.slice(9, 13)}`, 16)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
 }
 
 function compactText(value: unknown, limit = DISPLAY_TEXT_LIMIT): string {
@@ -162,6 +174,19 @@ function readNotificationAtMs(params: unknown, fallback: number, completed = fal
     ?? fallback
 }
 
+function readNotificationTurnStartedAtMs(params: unknown): number | null {
+  const record = asRecord(params)
+  if (!record) return null
+  const turn = asRecord(record.turn)
+  return readEpochMs(turn?.startedAtMs)
+    ?? readEpochMs(turn?.startedAt)
+    ?? readIsoMs(turn?.startedAt)
+    ?? readEpochMs(record.startedAtMs)
+    ?? readEpochMs(record.startedAt)
+    ?? readIsoMs(record.startedAt)
+    ?? readUuidV7TimestampMs(readTurnId(params))
+}
+
 function readThreadMetadata(value: unknown): {
   threadId: string
   parentThreadId: string
@@ -203,6 +228,67 @@ function turnStatus(value: unknown): string {
   return readString(record?.type).toLowerCase()
 }
 
+function isRunningTurnStatus(status: string): boolean {
+  return status.includes('progress') || status === 'running'
+}
+
+function readTurnStartedAtMs(turn: Record<string, unknown>): number {
+  return readEpochMs(turn.startedAtMs)
+    ?? readEpochMs(turn.startedAt)
+    ?? readIsoMs(turn.startedAt)
+    ?? readUuidV7TimestampMs(turn.id)
+    ?? 0
+}
+
+function readTurnCompletedAtMs(turn: Record<string, unknown>): number | null {
+  return readEpochMs(turn.completedAtMs) ?? readEpochMs(turn.completedAt)
+}
+
+function selectEffectiveThreadReadTurn(turns: unknown[]): Record<string, unknown> | null {
+  let selected: { turn: Record<string, unknown>; lifecycleAtMs: number; index: number } | null = null
+  for (const [index, value] of turns.entries()) {
+    const turn = asRecord(value)
+    if (!turn) continue
+    const startedAtMs = readTurnStartedAtMs(turn)
+    const completedAtMs = readTurnCompletedAtMs(turn) ?? 0
+    const lifecycleAtMs = completedAtMs || startedAtMs
+    if (
+      !selected
+      || lifecycleAtMs > selected.lifecycleAtMs
+      || (lifecycleAtMs === selected.lifecycleAtMs && index > selected.index)
+    ) {
+      selected = { turn, lifecycleAtMs, index }
+    }
+  }
+  return selected?.turn ?? null
+}
+
+function selectOverlappingThreadReadTurns(
+  turns: unknown[],
+  effectiveTurn: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const effectiveStartedAtMs = readTurnStartedAtMs(effectiveTurn)
+  if (effectiveStartedAtMs <= 0) return [effectiveTurn]
+  const effectiveCompletedAtMs = readTurnCompletedAtMs(effectiveTurn)
+  const effectiveEndAtMs = effectiveCompletedAtMs ?? Number.POSITIVE_INFINITY
+  const selected: Record<string, unknown>[] = []
+  for (const value of turns) {
+    const turn = asRecord(value)
+    if (!turn) continue
+    if (turn === effectiveTurn) {
+      selected.push(turn)
+      continue
+    }
+    const startedAtMs = readTurnStartedAtMs(turn)
+    if (startedAtMs <= 0) continue
+    const completedAtMs = readTurnCompletedAtMs(turn)
+    const status = turnStatus(turn.status)
+    const endAtMs = completedAtMs ?? (isRunningTurnStatus(status) ? Number.POSITIVE_INFINITY : startedAtMs)
+    if (startedAtMs <= effectiveEndAtMs && effectiveStartedAtMs <= endAtMs) selected.push(turn)
+  }
+  return selected
+}
+
 export class AgentProgressTracker {
   private readonly now: () => number
   private readonly eventLimit: number
@@ -230,6 +316,7 @@ export class AgentProgressTracker {
         const rootThreadId = this.registerThreadMetadata(metadata, atMs)
         if (rootThreadId) changedRoots.add(rootThreadId)
       }
+      return Array.from(changedRoots)
     }
 
     const threadId = readThreadId(params)
@@ -238,15 +325,48 @@ export class AgentProgressTracker {
 
     if (method === 'turn/started') {
       const turnId = readTurnId(params)
-      const startedAtMs = readNotificationAtMs(params, atMs)
+      const startedAtMs = readNotificationTurnStartedAtMs(params) ?? readNotificationAtMs(params, atMs)
       if (threadId === rootThreadId) {
+        const existing = this.progressByRootThreadId.get(rootThreadId)
+        if (turnId && existing?.terminalRootTurnAtMsByTurnId.has(turnId)) {
+          return Array.from(changedRoots)
+        }
+        if (
+          turnId
+          && existing?.turnId
+          && turnId !== existing.turnId
+          && (
+            startedAtMs < existing.startedAtMs
+            || (
+              startedAtMs === existing.startedAtMs
+              && readUuidV7TimestampMs(turnId) !== null
+              && readUuidV7TimestampMs(existing.turnId) !== null
+              && turnId < existing.turnId
+            )
+          )
+        ) return Array.from(changedRoots)
         this.startRootTurn(rootThreadId, turnId, startedAtMs, generation)
         this.setRootPhase(rootThreadId, 'preparing', startedAtMs, 'turn-started')
       } else {
+        const childProgress = this.ensureProgress(rootThreadId, startedAtMs, generation)
+        const previousTurnId = childProgress.agentTurnIdByThreadId.get(threadId) ?? ''
+        const startsNewTurn = Boolean(turnId && (!previousTurnId || turnId !== previousTurnId))
+        if (this.compareChildTurn(childProgress, threadId, turnId, startedAtMs) === 'older') {
+          return Array.from(changedRoots)
+        }
         this.updateAgent(rootThreadId, threadId, startedAtMs, (agent) => {
-          agent.status = 'running'
-          agent.currentActivity = 'working'
+          const isTerminal = agent.status === 'completed' || agent.status === 'interrupted' || agent.status === 'errored'
+          if (!isTerminal || (childProgress.status === 'running' && startsNewTurn)) {
+            agent.status = 'running'
+            agent.completedAtMs = null
+            agent.currentActivity = 'working'
+            agent.resultAvailable = false
+          }
         })
+        if (turnId && childProgress.agentsByThreadId.has(threadId)) {
+          childProgress.agentTurnIdByThreadId.set(threadId, turnId)
+          childProgress.agentTurnStartedAtMsByThreadId.set(threadId, startedAtMs)
+        }
       }
       changedRoots.add(rootThreadId)
       return Array.from(changedRoots)
@@ -258,6 +378,20 @@ export class AgentProgressTracker {
       const completedAtMs = readNotificationAtMs(params, atMs, true)
       const status = turnStatus(asRecord(record?.turn)?.status)
       if (threadId === rootThreadId) {
+        const completedTurnId = readTurnId(params)
+        const isOverlappingTurn = Boolean(completedTurnId && progress.turnId && completedTurnId !== progress.turnId)
+        if (isOverlappingTurn && (progress.status === 'running' || completedAtMs < progress.mainLastActivityAtMs)) {
+          this.recordRootTurnTerminal(progress, completedTurnId, completedAtMs)
+          return Array.from(changedRoots)
+        }
+        if (completedTurnId && (isOverlappingTurn || !progress.turnId)) {
+          const turn = asRecord(record?.turn)
+          const startedAtMs = readEpochMs(turn?.startedAtMs)
+            ?? readEpochMs(turn?.startedAt)
+            ?? readIsoMs(turn?.startedAt)
+          progress.turnId = completedTurnId
+          if (startedAtMs !== null) progress.startedAtMs = startedAtMs
+        }
         if (status.includes('fail') || status.includes('error')) {
           progress.status = 'failed'
           this.setRootPhase(rootThreadId, 'failed', completedAtMs, 'turn-failed')
@@ -268,6 +402,7 @@ export class AgentProgressTracker {
           progress.status = 'completed'
           this.setRootPhase(rootThreadId, 'completed', completedAtMs, 'turn-completed')
         }
+        this.recordRootTurnTerminal(progress, completedTurnId || progress.turnId, completedAtMs)
         this.addEvent(progress, {
           id: `turn:${readTurnId(params) || progress.turnId}:completed`,
           atMs: completedAtMs,
@@ -278,6 +413,29 @@ export class AgentProgressTracker {
           detail: progress.status,
         })
       } else {
+        const completedTurnId = readTurnId(params)
+        const activeChildTurnId = progress.agentTurnIdByThreadId.get(threadId) ?? ''
+        const completedTurnStartedAtMs = readNotificationTurnStartedAtMs(params)
+        const childTurnOrder = this.compareChildTurn(
+          progress,
+          threadId,
+          completedTurnId,
+          completedTurnStartedAtMs,
+        )
+        if (
+          completedTurnId
+          && activeChildTurnId
+          && completedTurnId !== activeChildTurnId
+          && childTurnOrder !== 'newer'
+        ) {
+          return Array.from(changedRoots)
+        }
+        if (completedTurnId && progress.agentsByThreadId.has(threadId)) {
+          progress.agentTurnIdByThreadId.set(threadId, completedTurnId)
+          if (completedTurnStartedAtMs !== null) {
+            progress.agentTurnStartedAtMsByThreadId.set(threadId, completedTurnStartedAtMs)
+          }
+        }
         this.updateAgent(rootThreadId, threadId, completedAtMs, (agent) => {
           agent.completedAtMs = completedAtMs
           agent.currentActivity = ''
@@ -298,7 +456,9 @@ export class AgentProgressTracker {
       const status = turnStatus(record?.status)
       if (threadId !== rootThreadId) {
         this.updateAgent(rootThreadId, threadId, atMs, (agent) => {
-          if (status === 'active') agent.status = 'running'
+          if (status === 'active' && (agent.status === 'starting' || agent.status === 'running')) {
+            agent.status = 'running'
+          }
           if (status === 'idle' && (agent.status === 'starting' || agent.status === 'running')) {
             agent.status = 'completed'
             agent.completedAtMs = atMs
@@ -317,18 +477,59 @@ export class AgentProgressTracker {
       const itemType = normalizeItemType(item?.type)
       const itemId = readString(item?.id)
       const eventAtMs = readNotificationAtMs(params, atMs, method === 'item/completed')
-      this.touchProgress(progress, threadId, eventAtMs)
 
       if (itemType === 'subagentactivity') {
         const childThreadId = readString(item?.agentThreadId) || readString(item?.agent_thread_id)
         const path = readString(item?.agentPath) || readString(item?.agent_path)
         const kind = readString(item?.kind).toLowerCase()
+        const sourceRootTurnId = threadId === rootThreadId
+          ? readTurnId(params) || progress.turnId
+          : progress.agentRootTurnIdByThreadId.get(threadId) || progress.turnId
+        const sourceChildTurnId = threadId === rootThreadId ? '' : readTurnId(params)
+        const activeSourceChildTurnId = threadId === rootThreadId
+          ? ''
+          : progress.agentTurnIdByThreadId.get(threadId) ?? ''
+        const sourceChildNode = threadId === rootThreadId ? null : progress.agentsByThreadId.get(threadId)
+        const sourceChildIsTerminal = sourceChildNode?.status === 'completed'
+          || sourceChildNode?.status === 'interrupted'
+          || sourceChildNode?.status === 'errored'
+        const sourceChildTurnIsCurrent = !sourceChildTurnId
+          || !activeSourceChildTurnId
+          || sourceChildTurnId === activeSourceChildTurnId
+        if (kind === 'started' && sourceChildIsTerminal && sourceChildTurnIsCurrent) {
+          return Array.from(changedRoots)
+        }
+        if (
+          sourceChildTurnId
+          && activeSourceChildTurnId
+          && sourceChildTurnId !== activeSourceChildTurnId
+        ) return Array.from(changedRoots)
+        const activeChildRootTurnId = childThreadId
+          ? progress.agentRootTurnIdByThreadId.get(childThreadId) ?? ''
+          : ''
+        if (
+          kind === 'started'
+          && sourceRootTurnId
+          && progress.terminalRootTurnAtMsByTurnId.has(sourceRootTurnId)
+          && !(sourceRootTurnId === progress.turnId && progress.status === 'running')
+        ) return Array.from(changedRoots)
+        const targetsStaleRootTurn = Boolean(
+          sourceRootTurnId
+          && activeChildRootTurnId
+          && sourceRootTurnId !== activeChildRootTurnId
+          && sourceRootTurnId !== progress.turnId,
+        )
+        if (targetsStaleRootTurn) return Array.from(changedRoots)
+        this.touchProgress(progress, threadId, eventAtMs)
         if (childThreadId && kind === 'started') {
           const childRoot = this.registerAgent(rootThreadId, threadId, childThreadId, path, eventAtMs)
           if (childRoot) {
             const childProgress = this.progressByRootThreadId.get(childRoot)
             const agent = childProgress?.agentsByThreadId.get(childThreadId)
             if (childProgress && agent) {
+              if (sourceRootTurnId) {
+                childProgress.agentRootTurnIdByThreadId.set(childThreadId, sourceRootTurnId)
+              }
               this.addEvent(childProgress, {
                 id: `agent:${childThreadId}:started:${itemId}`,
                 atMs: eventAtMs,
@@ -372,6 +573,45 @@ export class AgentProgressTracker {
         return Array.from(changedRoots)
       }
 
+      const sourceRootTurnIdForItem = threadId === rootThreadId
+        ? readTurnId(params) || progress.turnId
+        : progress.agentRootTurnIdByThreadId.get(threadId) || progress.turnId
+      const sourceChildTurnIdForItem = threadId === rootThreadId ? '' : readTurnId(params)
+      const activeSourceChildTurnIdForItem = threadId === rootThreadId
+        ? ''
+        : progress.agentTurnIdByThreadId.get(threadId) ?? ''
+      const sourceChildNodeForItem = threadId === rootThreadId ? null : progress.agentsByThreadId.get(threadId)
+      const sourceChildIsTerminalForItem = sourceChildNodeForItem?.status === 'completed'
+        || sourceChildNodeForItem?.status === 'interrupted'
+        || sourceChildNodeForItem?.status === 'errored'
+      const sourceChildTurnIsCurrentForItem = !sourceChildTurnIdForItem
+        || !activeSourceChildTurnIdForItem
+        || sourceChildTurnIdForItem === activeSourceChildTurnIdForItem
+      if (
+        sourceChildTurnIdForItem
+        && activeSourceChildTurnIdForItem
+        && sourceChildTurnIdForItem !== activeSourceChildTurnIdForItem
+      ) return Array.from(changedRoots)
+      if (
+        sourceRootTurnIdForItem
+        && progress.turnId
+        && sourceRootTurnIdForItem !== progress.turnId
+      ) return Array.from(changedRoots)
+      if (
+        itemType === 'collabagenttoolcall'
+        && readString(item?.tool).toLowerCase() === 'spawnagent'
+        && sourceRootTurnIdForItem
+        && progress.terminalRootTurnAtMsByTurnId.has(sourceRootTurnIdForItem)
+        && !(sourceRootTurnIdForItem === progress.turnId && progress.status === 'running')
+      ) return Array.from(changedRoots)
+      if (
+        itemType === 'collabagenttoolcall'
+        && readString(item?.tool).toLowerCase() === 'spawnagent'
+        && sourceChildIsTerminalForItem
+        && sourceChildTurnIsCurrentForItem
+      ) return Array.from(changedRoots)
+      this.touchProgress(progress, threadId, eventAtMs)
+
       if (itemType === 'collabagenttoolcall') {
         const tool = readString(item?.tool).toLowerCase()
         const status = readString(item?.status).toLowerCase()
@@ -383,11 +623,16 @@ export class AgentProgressTracker {
           for (const receiverId of receiverIds) {
             const childThreadId = readString(receiverId)
             if (!childThreadId) continue
-            this.registerAgent(rootThreadId, threadId, childThreadId, '', eventAtMs, {
+            const childRoot = this.registerAgent(rootThreadId, threadId, childThreadId, '', eventAtMs, {
               taskSummary: compactText(item?.prompt),
               model: readString(item?.model),
               reasoningEffort: readString(item?.reasoningEffort),
             })
+            const childProgress = this.progressByRootThreadId.get(childRoot)
+            const sourceRootTurnId = sourceRootTurnIdForItem
+            if (childProgress?.agentsByThreadId.has(childThreadId) && sourceRootTurnId) {
+              childProgress.agentRootTurnIdByThreadId.set(childThreadId, sourceRootTurnId)
+            }
           }
           if (threadId === rootThreadId) this.setRootPhase(rootThreadId, 'dispatching', eventAtMs, `spawn:${itemId}`)
         }
@@ -400,8 +645,10 @@ export class AgentProgressTracker {
         this.setRootPhase(rootThreadId, phase, eventAtMs, `${itemType}:${itemId}:${method}`)
       } else if (threadId !== rootThreadId) {
         this.updateAgent(rootThreadId, threadId, eventAtMs, (agent) => {
-          agent.status = 'running'
-          agent.currentActivity = phase ?? itemType
+          if (agent.status === 'starting' || agent.status === 'running') {
+            agent.status = 'running'
+            agent.currentActivity = phase ?? itemType
+          }
           if (itemType === 'agentmessage' && method === 'item/completed') agent.resultAvailable = true
         })
       }
@@ -415,8 +662,10 @@ export class AgentProgressTracker {
       changedRoots.add(rootThreadId)
     } else if (threadId !== rootThreadId && directPhase) {
       this.updateAgent(rootThreadId, threadId, atMs, (agent) => {
-        agent.status = 'running'
-        agent.currentActivity = directPhase
+        if (agent.status === 'starting' || agent.status === 'running') {
+          agent.status = 'running'
+          agent.currentActivity = directPhase
+        }
       })
       changedRoots.add(rootThreadId)
     }
@@ -431,76 +680,174 @@ export class AgentProgressTracker {
     const metadata = readThreadMetadata(thread)
     if (!metadata) return []
     const turns = Array.isArray(thread.turns) ? thread.turns : []
-    const latestTurn = asRecord(turns.at(-1))
+    const latestTurn = selectEffectiveThreadReadTurn(turns)
     if (!latestTurn) {
       const rootThreadId = this.registerThreadMetadata(metadata, atMs) || metadata.threadId
       return [rootThreadId]
     }
     const latestTurnId = readString(latestTurn.id)
     const status = turnStatus(latestTurn.status)
-    const startedAtMs = readEpochMs(latestTurn.startedAtMs)
-      ?? readEpochMs(latestTurn.startedAt)
-      ?? atMs
-    const completedAtMs = readEpochMs(latestTurn.completedAtMs)
-      ?? readEpochMs(latestTurn.completedAt)
-    const eventAtMs = completedAtMs ?? (status.includes('progress') || status === 'running' ? atMs : startedAtMs)
+    const startedAtMs = readTurnStartedAtMs(latestTurn) || atMs
+    const completedAtMs = readTurnCompletedAtMs(latestTurn)
+    const eventAtMs = completedAtMs ?? startedAtMs
     const rootThreadId = this.registerThreadMetadata(metadata, startedAtMs) || metadata.threadId
+    const incomingTurnIsRunning = isRunningTurnStatus(status)
+    let ignoreReadState = false
 
     if (metadata.threadId === rootThreadId) {
       const progress = this.progressByRootThreadId.get(rootThreadId)
-      if (!progress || (latestTurnId && progress.turnId !== latestTurnId)) {
+      const isDifferentTurn = Boolean(progress && latestTurnId && latestTurnId !== progress.turnId)
+      if (progress && latestTurnId && !incomingTurnIsRunning) {
+        this.recordRootTurnTerminal(progress, latestTurnId, eventAtMs)
+      }
+      if (progress && incomingTurnIsRunning) {
+        const sameTurnIsTerminal = latestTurnId === progress.turnId
+          && (progress.status === 'completed' || progress.status === 'interrupted' || progress.status === 'failed')
+        const isKnownTerminalTurn = Boolean(
+          latestTurnId
+          && progress.terminalRootTurnAtMsByTurnId.has(latestTurnId)
+          && !(latestTurnId === progress.turnId && progress.status === 'running')
+        )
+        const isOlderDifferentTurn = isDifferentTurn && (
+          startedAtMs < progress.startedAtMs
+          || (
+            startedAtMs === progress.startedAtMs
+            && readUuidV7TimestampMs(latestTurnId) !== null
+            && readUuidV7TimestampMs(progress.turnId) !== null
+            && latestTurnId < progress.turnId
+          )
+        )
+        ignoreReadState = sameTurnIsTerminal || isKnownTerminalTurn || isOlderDifferentTurn
+      } else if (progress && isDifferentTurn) {
+        ignoreReadState = progress.status === 'running' || eventAtMs < progress.mainLastActivityAtMs
+      }
+      if (!ignoreReadState && (!progress || isDifferentTurn)) {
         this.startRootTurn(rootThreadId, latestTurnId, startedAtMs, 0)
+      }
+    } else {
+      const progress = this.progressByRootThreadId.get(rootThreadId)
+      const node = progress?.agentsByThreadId.get(metadata.threadId)
+      if (progress && node) {
+        const activeChildTurnId = progress.agentTurnIdByThreadId.get(metadata.threadId) ?? ''
+        const isDifferentChildTurn = Boolean(
+          latestTurnId
+          && activeChildTurnId
+          && latestTurnId !== activeChildTurnId,
+        )
+        const childTurnOrder = this.compareChildTurn(
+          progress,
+          metadata.threadId,
+          latestTurnId,
+          startedAtMs,
+        )
+        const nodeIsTerminal = node.status === 'completed' || node.status === 'interrupted' || node.status === 'errored'
+        ignoreReadState = childTurnOrder === 'older'
+          || (incomingTurnIsRunning && !isDifferentChildTurn && nodeIsTerminal)
       }
     }
 
-    const items = Array.isArray(latestTurn.items) ? latestTurn.items : []
-    for (const item of items) {
-      const itemRecord = asRecord(item)
-      if (!itemRecord) continue
-      this.handleNotification('item/completed', {
-        threadId: metadata.threadId,
-        turnId: latestTurnId,
-        item: itemRecord,
-        completedAtMs: eventAtMs,
-      }, 0, eventAtMs)
+    const hydratedTurns = selectOverlappingThreadReadTurns(turns, latestTurn)
+    for (const hydratedTurn of ignoreReadState ? [] : hydratedTurns) {
+      const hydratedTurnId = readString(hydratedTurn.id) || latestTurnId
+      const hydratedStartedAtMs = readTurnStartedAtMs(hydratedTurn) || startedAtMs
+      const hydratedCompletedAtMs = readTurnCompletedAtMs(hydratedTurn)
+      const hydratedEventAtMs = hydratedCompletedAtMs ?? hydratedStartedAtMs
+      for (const item of Array.isArray(hydratedTurn.items) ? hydratedTurn.items : []) {
+        const itemRecord = asRecord(item)
+        if (!itemRecord) continue
+        this.handleNotification('item/completed', {
+          threadId: metadata.threadId,
+          turnId: hydratedTurnId,
+          item: itemRecord,
+          completedAtMs: hydratedEventAtMs,
+        }, 0, hydratedEventAtMs)
+      }
     }
 
     const progress = this.progressByRootThreadId.get(rootThreadId)
     if (!progress) return [rootThreadId]
     if (metadata.threadId === rootThreadId) {
       this.touchProgress(progress, rootThreadId, eventAtMs)
-      if (status.includes('progress') || status === 'running') {
+      if (incomingTurnIsRunning && !ignoreReadState) {
         progress.status = 'running'
+        if (progress.phase === 'completed' || progress.phase === 'interrupted' || progress.phase === 'failed') {
+          progress.phase = 'preparing'
+        }
       } else if (status.includes('interrupt') || status.includes('cancel')) {
-        progress.status = 'interrupted'
-        progress.phase = 'interrupted'
+        if (!ignoreReadState && progress.status !== 'completed' && progress.status !== 'failed') {
+          progress.status = 'interrupted'
+          progress.phase = 'interrupted'
+        }
       } else if (status.includes('fail') || status.includes('error')) {
-        progress.status = 'failed'
-        progress.phase = 'failed'
+        if (!ignoreReadState) {
+          progress.status = 'failed'
+          progress.phase = 'failed'
+        }
       } else if (status.includes('complete')) {
-        progress.status = 'completed'
-        progress.phase = 'completed'
+        if (!ignoreReadState && progress.status !== 'failed') {
+          progress.status = 'completed'
+          progress.phase = 'completed'
+        }
+      }
+      if (progress.status === 'completed' || progress.status === 'interrupted' || progress.status === 'failed') {
+        this.recordRootTurnTerminal(progress, latestTurnId || progress.turnId, eventAtMs)
       }
     } else {
       const node = progress.agentsByThreadId.get(metadata.threadId)
       if (node) {
+        const activeChildTurnId = progress.agentTurnIdByThreadId.get(metadata.threadId) ?? ''
+        const isDifferentChildTurn = Boolean(
+          latestTurnId
+          && activeChildTurnId
+          && latestTurnId !== activeChildTurnId,
+        )
+        const childTurnOrder = this.compareChildTurn(
+          progress,
+          metadata.threadId,
+          latestTurnId,
+          startedAtMs,
+        )
+        const switchesToNewerChildTurn = isDifferentChildTurn && childTurnOrder === 'newer'
+        const nodeIsTerminal = node.status === 'completed' || node.status === 'interrupted' || node.status === 'errored'
+        const ignoreChildReadState = childTurnOrder === 'older'
+          || (incomingTurnIsRunning && !isDifferentChildTurn && nodeIsTerminal)
+        if (latestTurnId && !ignoreChildReadState) {
+          progress.agentTurnIdByThreadId.set(metadata.threadId, latestTurnId)
+          progress.agentTurnStartedAtMsByThreadId.set(metadata.threadId, startedAtMs)
+        }
         node.startedAtMs = Math.min(node.startedAtMs, startedAtMs)
         node.lastActivityAtMs = Math.max(node.lastActivityAtMs, eventAtMs)
-        if (items.some((item) => normalizeItemType(asRecord(item)?.type) === 'agentmessage')) node.resultAvailable = true
-        if (status.includes('interrupt') || status.includes('cancel')) {
+        if (hydratedTurns.some((turn) => (
+          Array.isArray(turn.items)
+          && turn.items.some((item) => normalizeItemType(asRecord(item)?.type) === 'agentmessage')
+        ))) node.resultAvailable = true
+        if (!ignoreChildReadState && (status.includes('interrupt') || status.includes('cancel'))) {
+          if (!switchesToNewerChildTurn && (node.status === 'completed' || node.status === 'errored')) {
+            progress.updatedAtMs = Math.max(progress.updatedAtMs, eventAtMs)
+            return [rootThreadId]
+          }
           node.status = 'interrupted'
           node.completedAtMs = completedAtMs ?? eventAtMs
           node.currentActivity = ''
-        } else if (status.includes('fail') || status.includes('error')) {
+        } else if (!ignoreChildReadState && (status.includes('fail') || status.includes('error'))) {
           node.status = 'errored'
           node.completedAtMs = completedAtMs ?? eventAtMs
           node.currentActivity = ''
-        } else if (status.includes('complete')) {
+        } else if (!ignoreChildReadState && status.includes('complete')) {
+          if (!switchesToNewerChildTurn && node.status === 'errored') {
+            progress.updatedAtMs = Math.max(progress.updatedAtMs, eventAtMs)
+            return [rootThreadId]
+          }
           node.status = 'completed'
           node.completedAtMs = completedAtMs ?? eventAtMs
           node.currentActivity = ''
         }
-        else if (status.includes('progress') || status === 'running') node.status = 'running'
+        else if (incomingTurnIsRunning && !ignoreChildReadState) {
+          node.status = 'running'
+          node.completedAtMs = null
+          node.currentActivity = 'working'
+          if (isDifferentChildTurn) node.resultAvailable = false
+        }
       }
     }
     progress.updatedAtMs = Math.max(progress.updatedAtMs, eventAtMs)
@@ -508,21 +855,61 @@ export class AgentProgressTracker {
   }
 
   applyRuntimeStates(rootThreadId: string, states: AgentRuntimeStateLike[], atMs = this.now()): void {
-    const progress = this.progressByRootThreadId.get(rootThreadId)
+    let progress = this.progressByRootThreadId.get(rootThreadId)
     if (!progress) return
     let latestStateAtMs = progress.updatedAtMs
     for (const state of states) {
       const stateAtMs = readIsoMs(state.completedAtIso) ?? readIsoMs(state.startedAtIso) ?? atMs
       latestStateAtMs = Math.max(latestStateAtMs, stateAtMs)
       if (state.threadId === rootThreadId) {
-        if (state.state === 'running') progress.status = 'running'
-        if (state.state === 'completed') {
+        const runtimeTurnId = readString(state.turnId)
+        if (runtimeTurnId && (state.state === 'completed' || state.state === 'interrupted')) {
+          this.recordRootTurnTerminal(progress, runtimeTurnId, stateAtMs)
+        }
+        const fillsMissingTurnId = Boolean(runtimeTurnId && !progress.turnId)
+        const isDifferentTurn = Boolean(runtimeTurnId && progress.turnId && runtimeTurnId !== progress.turnId)
+        if (isDifferentTurn && state.state === 'running') {
+          progress = this.startRootTurnPreservingAgents(
+            rootThreadId,
+            runtimeTurnId,
+            readIsoMs(state.startedAtIso) ?? readUuidV7TimestampMs(runtimeTurnId) ?? stateAtMs,
+          )
+          latestStateAtMs = Math.max(latestStateAtMs, progress.updatedAtMs)
+          continue
+        }
+        if (isDifferentTurn && state.state !== 'running' && stateAtMs < progress.mainLastActivityAtMs) continue
+        if ((isDifferentTurn || fillsMissingTurnId) && runtimeTurnId) {
+          progress.turnId = runtimeTurnId
+          const runtimeStartedAtMs = readIsoMs(state.startedAtIso) ?? readUuidV7TimestampMs(runtimeTurnId)
+          if (runtimeStartedAtMs !== null) progress.startedAtMs = runtimeStartedAtMs
+        }
+        if (
+          state.state === 'running'
+          && (
+            fillsMissingTurnId
+            || (progress.status !== 'completed' && progress.status !== 'failed')
+          )
+        ) {
+          progress.status = 'running'
+          if (progress.phase === 'interrupted' || progress.phase === 'completed' || progress.phase === 'failed') {
+            progress.phase = 'preparing'
+          }
+        }
+        if (state.state === 'completed' && (isDifferentTurn || progress.status !== 'failed')) {
           progress.status = 'completed'
           progress.phase = 'completed'
           progress.lastActivityAtMs = Math.max(progress.lastActivityAtMs, stateAtMs)
           progress.mainLastActivityAtMs = Math.max(progress.mainLastActivityAtMs, stateAtMs)
         }
-        if (state.state === 'interrupted') {
+        if (
+          state.state === 'interrupted'
+          && (
+            isDifferentTurn
+            || progress.status === 'running'
+            || progress.status === 'idle'
+            || (fillsMissingTurnId && stateAtMs >= progress.updatedAtMs)
+          )
+        ) {
           progress.status = 'interrupted'
           progress.phase = 'interrupted'
           progress.lastActivityAtMs = Math.max(progress.lastActivityAtMs, stateAtMs)
@@ -532,15 +919,52 @@ export class AgentProgressTracker {
       }
       const node = progress.agentsByThreadId.get(state.threadId)
       if (!node) continue
+      const runtimeChildTurnId = readString(state.turnId)
+      const activeChildTurnId = progress.agentTurnIdByThreadId.get(state.threadId) ?? ''
+      const runtimeChildStartedAtMs = readIsoMs(state.startedAtIso) ?? readUuidV7TimestampMs(runtimeChildTurnId)
+      const isDifferentChildTurn = Boolean(
+        runtimeChildTurnId
+        && activeChildTurnId
+        && runtimeChildTurnId !== activeChildTurnId,
+      )
+      const childTurnOrder = this.compareChildTurn(
+        progress,
+        state.threadId,
+        runtimeChildTurnId,
+        runtimeChildStartedAtMs,
+      )
+      const switchesToNewerChildTurn = isDifferentChildTurn && childTurnOrder === 'newer'
+      if (isDifferentChildTurn && childTurnOrder === 'older') continue
+      if (isDifferentChildTurn && childTurnOrder === 'unknown' && state.state !== 'running') continue
+      if (runtimeChildTurnId) {
+        progress.agentTurnIdByThreadId.set(state.threadId, runtimeChildTurnId)
+        if (runtimeChildStartedAtMs !== null) {
+          progress.agentTurnStartedAtMsByThreadId.set(state.threadId, runtimeChildStartedAtMs)
+        }
+      }
       node.lastActivityAtMs = Math.max(node.lastActivityAtMs, stateAtMs)
-      if (state.state === 'running') node.status = 'running'
-      if (state.state === 'completed') {
+      if (
+        state.state === 'running'
+        && (
+          isDifferentChildTurn
+          || (node.status !== 'completed' && node.status !== 'errored')
+        )
+      ) {
+        node.status = 'running'
+        node.completedAtMs = null
+        node.currentActivity = 'working'
+        if (isDifferentChildTurn) node.resultAvailable = false
+      }
+      if (state.state === 'completed' && (switchesToNewerChildTurn || node.status !== 'errored')) {
         node.status = 'completed'
         node.completedAtMs = stateAtMs
         node.currentActivity = ''
         node.resultAvailable = true
       }
-      if (state.state === 'interrupted') {
+      if (
+        state.state === 'interrupted'
+        && (switchesToNewerChildTurn || node.status === 'starting' || node.status === 'running')
+      ) {
         node.status = 'interrupted'
         node.completedAtMs = stateAtMs
         node.currentActivity = ''
@@ -558,6 +982,7 @@ export class AgentProgressTracker {
       progress.lastActivityAtMs = Math.max(progress.lastActivityAtMs, atMs)
       progress.mainLastActivityAtMs = Math.max(progress.mainLastActivityAtMs, atMs)
       progress.updatedAtMs = Math.max(progress.updatedAtMs, atMs)
+      this.recordRootTurnTerminal(progress, progress.turnId, atMs)
       for (const agent of progress.agentsByThreadId.values()) {
         if (agent.status !== 'starting' && agent.status !== 'running') continue
         agent.status = 'interrupted'
@@ -627,6 +1052,32 @@ export class AgentProgressTracker {
     return changed
   }
 
+  private compareChildTurn(
+    progress: MutableProgress,
+    threadId: string,
+    incomingTurnId: string,
+    incomingStartedAtMs: number | null,
+  ): 'same' | 'older' | 'newer' | 'unknown' {
+    const activeTurnId = progress.agentTurnIdByThreadId.get(threadId) ?? ''
+    if (!incomingTurnId || !activeTurnId) return 'unknown'
+    if (incomingTurnId === activeTurnId) return 'same'
+    const activeStartedAtMs = progress.agentTurnStartedAtMsByThreadId.get(threadId)
+    if (incomingStartedAtMs === null || activeStartedAtMs === undefined) return 'unknown'
+    return incomingStartedAtMs > activeStartedAtMs ? 'newer' : 'older'
+  }
+
+  private recordRootTurnTerminal(progress: MutableProgress, turnId: string, atMs: number): void {
+    if (!turnId) return
+    progress.terminalRootTurnAtMsByTurnId.delete(turnId)
+    progress.terminalRootTurnAtMsByTurnId.set(turnId, atMs)
+    const limit = Math.max(8, Math.min(this.eventLimit, 64))
+    while (progress.terminalRootTurnAtMsByTurnId.size > limit) {
+      const oldestTurnId = progress.terminalRootTurnAtMsByTurnId.keys().next().value
+      if (typeof oldestTurnId !== 'string') break
+      progress.terminalRootTurnAtMsByTurnId.delete(oldestTurnId)
+    }
+  }
+
   private ensureProgress(rootThreadId: string, atMs: number, generation: number): MutableProgress {
     const existing = this.progressByRootThreadId.get(rootThreadId)
     if (existing) return existing
@@ -640,6 +1091,10 @@ export class AgentProgressTracker {
       mainLastActivityAtMs: atMs,
       updatedAtMs: atMs,
       agentsByThreadId: new Map(),
+      agentRootTurnIdByThreadId: new Map(),
+      agentTurnIdByThreadId: new Map(),
+      agentTurnStartedAtMsByThreadId: new Map(),
+      terminalRootTurnAtMsByTurnId: new Map(),
       events: [],
       seenEventKeys: new Set(),
       seenEventOrder: [],
@@ -652,10 +1107,12 @@ export class AgentProgressTracker {
 
   private startRootTurn(rootThreadId: string, turnId: string, atMs: number, generation: number): MutableProgress {
     const existing = this.progressByRootThreadId.get(rootThreadId)
-    if (existing && existing.turnId === turnId && existing.status === 'running') {
-      existing.lastActivityAtMs = Math.max(existing.lastActivityAtMs, atMs)
-      existing.mainLastActivityAtMs = Math.max(existing.mainLastActivityAtMs, atMs)
-      existing.updatedAtMs = Math.max(existing.updatedAtMs, atMs)
+    if (existing && existing.turnId === turnId) {
+      if (existing.status === 'running') {
+        existing.lastActivityAtMs = Math.max(existing.lastActivityAtMs, atMs)
+        existing.mainLastActivityAtMs = Math.max(existing.mainLastActivityAtMs, atMs)
+        existing.updatedAtMs = Math.max(existing.updatedAtMs, atMs)
+      }
       return existing
     }
     if (existing) {
@@ -671,6 +1128,10 @@ export class AgentProgressTracker {
       mainLastActivityAtMs: atMs,
       updatedAtMs: atMs,
       agentsByThreadId: new Map(),
+      agentRootTurnIdByThreadId: new Map(),
+      agentTurnIdByThreadId: new Map(),
+      agentTurnStartedAtMsByThreadId: new Map(),
+      terminalRootTurnAtMsByTurnId: existing?.terminalRootTurnAtMsByTurnId ?? new Map(),
       events: [],
       seenEventKeys: new Set(),
       seenEventOrder: [],
@@ -681,6 +1142,30 @@ export class AgentProgressTracker {
     return progress
   }
 
+  private startRootTurnPreservingAgents(rootThreadId: string, turnId: string, atMs: number): MutableProgress {
+    const existing = this.progressByRootThreadId.get(rootThreadId)
+    const preservedAgents = existing
+      ? Array.from(existing.agentsByThreadId.values()).filter((agent) => (
+          existing.agentRootTurnIdByThreadId.get(agent.threadId) === turnId
+        ))
+      : []
+    const progress = this.startRootTurn(rootThreadId, turnId, atMs, 0)
+    for (const agent of preservedAgents) {
+      progress.agentsByThreadId.set(agent.threadId, agent)
+      progress.agentRootTurnIdByThreadId.set(agent.threadId, turnId)
+      const childTurnId = existing?.agentTurnIdByThreadId.get(agent.threadId)
+      if (childTurnId) progress.agentTurnIdByThreadId.set(agent.threadId, childTurnId)
+      const childTurnStartedAtMs = existing?.agentTurnStartedAtMsByThreadId.get(agent.threadId)
+      if (childTurnStartedAtMs !== undefined) {
+        progress.agentTurnStartedAtMsByThreadId.set(agent.threadId, childTurnStartedAtMs)
+      }
+      progress.lastActivityAtMs = Math.max(progress.lastActivityAtMs, agent.lastActivityAtMs)
+      progress.updatedAtMs = Math.max(progress.updatedAtMs, agent.lastActivityAtMs)
+      this.rootByThreadId.set(agent.threadId, rootThreadId)
+    }
+    return progress
+  }
+
   private registerThreadMetadata(metadata: NonNullable<ReturnType<typeof readThreadMetadata>>, atMs: number): string {
     if (!metadata.parentThreadId) {
       this.rootByThreadId.set(metadata.threadId, metadata.threadId)
@@ -688,12 +1173,41 @@ export class AgentProgressTracker {
       return metadata.threadId
     }
     const rootThreadId = this.rootByThreadId.get(metadata.parentThreadId) ?? metadata.parentThreadId
+    const progressBeforeRegistration = this.progressByRootThreadId.get(rootThreadId)
+    const hadAgent = progressBeforeRegistration?.agentsByThreadId.has(metadata.threadId) === true
+    const rootWasTerminal = progressBeforeRegistration?.status === 'completed'
+      || progressBeforeRegistration?.status === 'interrupted'
+      || progressBeforeRegistration?.status === 'failed'
     this.registerAgent(rootThreadId, metadata.parentThreadId, metadata.threadId, metadata.path, atMs, {
       nickname: metadata.nickname,
       ...(metadata.depth === null ? {} : { depth: metadata.depth }),
     })
+    const progress = this.progressByRootThreadId.get(rootThreadId)
+    const registeredAgent = progress?.agentsByThreadId.get(metadata.threadId)
+    if (registeredAgent && !hadAgent && rootWasTerminal) {
+      registeredAgent.status = 'interrupted'
+      registeredAgent.completedAtMs = atMs
+      registeredAgent.currentActivity = ''
+    }
+    if (
+      progress?.agentsByThreadId.has(metadata.threadId)
+      && !progress.agentRootTurnIdByThreadId.has(metadata.threadId)
+    ) {
+      const sourceRootTurnId = progress.agentRootTurnIdByThreadId.get(metadata.parentThreadId) || progress.turnId
+      if (sourceRootTurnId) progress.agentRootTurnIdByThreadId.set(metadata.threadId, sourceRootTurnId)
+    }
     this.migrateOrphanProgress(metadata.threadId, rootThreadId, atMs)
     return rootThreadId
+  }
+
+  private discardOrphanProgress(threadId: string, orphan: MutableProgress): void {
+    for (const orphanAgent of orphan.agentsByThreadId.values()) {
+      if (this.rootByThreadId.get(orphanAgent.threadId) === threadId) {
+        this.rootByThreadId.delete(orphanAgent.threadId)
+      }
+    }
+    this.progressByRootThreadId.delete(threadId)
+    if (this.rootByThreadId.get(threadId) === threadId) this.rootByThreadId.delete(threadId)
   }
 
   private migrateOrphanProgress(threadId: string, rootThreadId: string, atMs: number): void {
@@ -702,12 +1216,32 @@ export class AgentProgressTracker {
     if (!orphan) return
     const target = this.ensureProgress(rootThreadId, atMs, 0)
     const node = target.agentsByThreadId.get(threadId)
-    if (node) {
-      node.startedAtMs = Math.min(node.startedAtMs, orphan.startedAtMs)
-      node.lastActivityAtMs = Math.max(node.lastActivityAtMs, orphan.lastActivityAtMs)
-      node.completedAtMs = orphan.status === 'running' || orphan.status === 'idle'
-        ? node.completedAtMs
-        : orphan.lastActivityAtMs
+    if (!node) {
+      this.discardOrphanProgress(threadId, orphan)
+      return
+    }
+    const activeChildTurnId = target.agentTurnIdByThreadId.get(threadId) ?? ''
+    if (
+      orphan.turnId
+      && activeChildTurnId
+      && orphan.turnId !== activeChildTurnId
+      && this.compareChildTurn(target, threadId, orphan.turnId, orphan.startedAtMs) !== 'newer'
+    ) {
+      this.discardOrphanProgress(threadId, orphan)
+      return
+    }
+    node.startedAtMs = Math.min(node.startedAtMs, orphan.startedAtMs)
+    node.lastActivityAtMs = Math.max(node.lastActivityAtMs, orphan.lastActivityAtMs)
+    const targetNodeIsTerminal = node.status === 'completed' || node.status === 'interrupted' || node.status === 'errored'
+    const orphanIsRunning = orphan.status === 'running' || orphan.status === 'idle'
+    const orphanMatchesActiveTurn = !orphan.turnId
+      || !activeChildTurnId
+      || orphan.turnId === activeChildTurnId
+    const preservesTargetTerminal = targetNodeIsTerminal && orphanIsRunning && orphanMatchesActiveTurn
+    node.completedAtMs = orphan.status === 'running' || orphan.status === 'idle'
+      ? node.completedAtMs
+      : orphan.lastActivityAtMs
+    if (!preservesTargetTerminal) {
       node.status = orphan.status === 'completed'
         ? 'completed'
         : orphan.status === 'interrupted'
@@ -716,7 +1250,11 @@ export class AgentProgressTracker {
             ? 'errored'
             : 'running'
       node.currentActivity = node.status === 'running' ? orphan.phase : ''
-      node.resultAvailable = node.resultAvailable || orphan.status === 'completed'
+    }
+    node.resultAvailable = node.resultAvailable || orphan.status === 'completed'
+    if (orphan.turnId) {
+      target.agentTurnIdByThreadId.set(threadId, orphan.turnId)
+      target.agentTurnStartedAtMsByThreadId.set(threadId, orphan.startedAtMs)
     }
     const orphanAgents = Array.from(orphan.agentsByThreadId.values())
       .sort((first, second) => first.depth - second.depth || first.startedAtMs - second.startedAtMs)
@@ -727,7 +1265,22 @@ export class AgentProgressTracker {
         ...orphanAgent,
         depth: parent ? parent.depth + 1 : Math.max(2, orphanAgent.depth + (node?.depth ?? 1)),
       })
+      const sourceRootTurnId = orphan.agentRootTurnIdByThreadId.get(orphanAgent.threadId)
+        || target.agentRootTurnIdByThreadId.get(threadId)
+        || target.turnId
+      if (sourceRootTurnId) target.agentRootTurnIdByThreadId.set(orphanAgent.threadId, sourceRootTurnId)
+      const childTurnId = orphan.agentTurnIdByThreadId.get(orphanAgent.threadId)
+      if (childTurnId) target.agentTurnIdByThreadId.set(orphanAgent.threadId, childTurnId)
+      const childTurnStartedAtMs = orphan.agentTurnStartedAtMsByThreadId.get(orphanAgent.threadId)
+      if (childTurnStartedAtMs !== undefined) {
+        target.agentTurnStartedAtMsByThreadId.set(orphanAgent.threadId, childTurnStartedAtMs)
+      }
       this.rootByThreadId.set(orphanAgent.threadId, rootThreadId)
+    }
+    for (const orphanAgent of orphanAgents) {
+      if (this.rootByThreadId.get(orphanAgent.threadId) === threadId) {
+        this.rootByThreadId.delete(orphanAgent.threadId)
+      }
     }
     for (const event of orphan.events) this.addEvent(target, { ...event })
     target.lastActivityAtMs = Math.max(target.lastActivityAtMs, orphan.lastActivityAtMs)
@@ -773,12 +1326,10 @@ export class AgentProgressTracker {
     agent.model = details.model || agent.model
     agent.reasoningEffort = details.reasoningEffort || agent.reasoningEffort
     agent.lastActivityAtMs = Math.max(agent.lastActivityAtMs, atMs)
-    if (agent.status === 'completed' || agent.status === 'interrupted' || agent.status === 'errored') {
-      agent.completedAtMs = null
-      agent.resultAvailable = false
+    if (!existing || agent.status === 'starting' || agent.status === 'running') {
+      agent.status = 'running'
+      agent.currentActivity = 'working'
     }
-    agent.status = 'running'
-    agent.currentActivity = 'working'
     progress.agentsByThreadId.set(threadId, agent)
     this.rootByThreadId.set(threadId, rootThreadId)
     this.touchProgress(progress, threadId, atMs)
@@ -806,6 +1357,11 @@ export class AgentProgressTracker {
 
   private setRootPhase(rootThreadId: string, phase: AgentProgressPhase, atMs: number, eventId: string): void {
     const progress = this.ensureProgress(rootThreadId, atMs, 0)
+    const progressIsTerminal = progress.status === 'completed'
+      || progress.status === 'interrupted'
+      || progress.status === 'failed'
+    const phaseIsTerminal = phase === 'completed' || phase === 'interrupted' || phase === 'failed'
+    if (progressIsTerminal && !phaseIsTerminal) return
     this.touchProgress(progress, rootThreadId, atMs)
     if (progress.phase === phase && phase !== 'waitingForAgents') return
     progress.phase = phase

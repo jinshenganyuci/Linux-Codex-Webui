@@ -9,7 +9,7 @@ import {
   isThreadUnreadByLastRead,
   useDesktopState,
 } from './useDesktopState'
-import type { ReasoningEffort, UiModelCapability, UiProjectGroup } from '../types/codex'
+import type { ReasoningEffort, UiModelCapability, UiProjectGroup, UiTurnProgress } from '../types/codex'
 import type { WorkspaceRootsState } from '../api/codexGateway'
 
 const gatewayMocks = vi.hoisted(() => ({
@@ -89,6 +89,44 @@ function modelCapabilities(
       supportsFastMode: normalized.supportsFastMode ?? false,
     }
   })
+}
+
+function progressSnapshot(input: {
+  threadId?: string
+  turnId: string
+  status: 'running' | 'completed' | 'interrupted'
+  updatedAtMs: number
+  childStatus?: 'running' | 'completed' | 'interrupted'
+}): UiTurnProgress {
+  const threadId = input.threadId ?? 'thread-a'
+  const childStatus = input.childStatus ?? 'completed'
+  return {
+    rootThreadId: threadId,
+    turnId: input.turnId,
+    status: input.status,
+    phase: input.status === 'running' ? 'reasoning' : input.status,
+    startedAtMs: input.updatedAtMs - 2_000,
+    lastActivityAtMs: input.updatedAtMs,
+    mainLastActivityAtMs: input.updatedAtMs,
+    updatedAtMs: input.updatedAtMs,
+    agents: [{
+      threadId: 'child-a',
+      parentThreadId: threadId,
+      path: '/root/child-a',
+      nickname: '',
+      depth: 1,
+      taskSummary: '',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'ultra',
+      status: childStatus,
+      startedAtMs: input.updatedAtMs - 1_500,
+      lastActivityAtMs: input.updatedAtMs,
+      completedAtMs: childStatus === 'running' ? null : input.updatedAtMs,
+      currentActivity: childStatus === 'running' ? 'working' : '',
+      resultAvailable: childStatus === 'completed',
+    }],
+    events: [],
+  }
 }
 
 function installTestWindow(initialStorage: Record<string, string> = {}) {
@@ -2079,6 +2117,127 @@ describe('notification recovery', () => {
     expect(state.selectedLiveOverlay.value?.turnProgress).toBeNull()
   })
 
+  it('lets a later overlapping completion correct an interrupted root without rewriting its child', () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: {
+        threadId: 'thread-a',
+        progress: {
+          ...progressSnapshot({ turnId: 'turn-b', status: 'interrupted', updatedAtMs: 5_000, childStatus: 'interrupted' }),
+          mainLastActivityAtMs: 2_000,
+        },
+      },
+    })
+    notificationHandler!({
+      method: 'turn/completed',
+      atIso: new Date(4_000).toISOString(),
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'completed', completedAt: new Date(4_000).toISOString() } },
+    })
+
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({
+      turnId: 'turn-a',
+      status: 'completed',
+      phase: 'completed',
+      agents: [{ threadId: 'child-a', status: 'interrupted' }],
+    })
+
+    notificationHandler!({
+      method: 'turn/started',
+      atIso: new Date(6_000).toISOString(),
+      params: { threadId: 'thread-a', turn: { id: 'turn-b', status: 'inProgress' } },
+    })
+    notificationHandler!({
+      method: 'turn/started',
+      atIso: new Date(7_000).toISOString(),
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'inProgress' } },
+    })
+
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({
+      turnId: 'turn-a',
+      status: 'completed',
+      phase: 'completed',
+    })
+  })
+
+  it('does not let an older overlapping completion stop the active turn', () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+
+    notificationHandler!({ method: 'turn/started', params: { threadId: 'thread-a', turn: { id: 'turn-a' } }, atIso: new Date(1_000).toISOString() })
+    notificationHandler!({ method: 'turn/started', params: { threadId: 'thread-a', turn: { id: 'turn-b' } }, atIso: new Date(2_000).toISOString() })
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-b', status: 'running', updatedAtMs: 2_500, childStatus: 'running' }) },
+    })
+    notificationHandler!({
+      method: 'turn/completed',
+      atIso: new Date(3_000).toISOString(),
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'completed', completedAt: new Date(3_000).toISOString() } },
+    })
+
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'running', phase: 'reasoning' })
+    expect(state.selectedLiveOverlay.value?.activityLabel).toBe('Thinking activity')
+
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: '', status: 'interrupted', updatedAtMs: 3_500, childStatus: 'interrupted' }) },
+    })
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'running', phase: 'preparing' })
+  })
+
+  it('does not let a delayed interrupted snapshot downgrade a completed turn', () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-b', status: 'running', updatedAtMs: 3_000 }) },
+    })
+    notificationHandler!({
+      method: 'turn/completed',
+      atIso: new Date(4_000).toISOString(),
+      params: { threadId: 'thread-a', turn: { id: 'turn-b', status: 'completed', completedAt: new Date(4_000).toISOString() } },
+    })
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-b', status: 'interrupted', updatedAtMs: 5_000, childStatus: 'interrupted' }) },
+    })
+
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({
+      turnId: 'turn-b',
+      status: 'completed',
+      phase: 'completed',
+      agents: [{ threadId: 'child-a', status: 'completed' }],
+    })
+  })
+
   it('forces the selected thread to reload when replay is unavailable', async () => {
     installTestWindow()
     let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
@@ -2125,6 +2284,1244 @@ describe('notification recovery', () => {
 })
 
 describe('authoritative thread runtime reconciliation', () => {
+  it('repairs interrupted progress once and does not rehydrate on repeated completed polls', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.resumeThread.mockResolvedValue(null)
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      messages: [{ id: 'final', role: 'assistant', text: 'done', messageType: 'agentMessage' }],
+      inProgress: false,
+      activeTurnId: '',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project')] }],
+      nextCursor: null,
+    })
+    const completedRuntime = {
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'completed' as const,
+      isRunning: false,
+      source: 'session' as const,
+      startedAtIso: new Date(1_700_000_001_000).toISOString(),
+      completedAtIso: new Date(1_700_000_004_000).toISOString(),
+      owner: null,
+    }
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([completedRuntime])
+    gatewayMocks.getAgentProgress.mockResolvedValue(progressSnapshot({
+      turnId: 'turn-a',
+      status: 'completed',
+      updatedAtMs: 1_700_000_004_000,
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-a', status: 'interrupted', updatedAtMs: 1_700_000_003_000, childStatus: 'interrupted' }) },
+    })
+
+    const firstPoll = timers.find((timer) => timer.delay === 0)
+    expect(firstPoll).toBeDefined()
+    firstPoll?.callback()
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(1)
+      expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({
+        status: 'completed',
+        agents: [{ status: 'completed' }],
+      })
+    })
+    await vi.waitFor(() => expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalled())
+    const requestCountsAfterRepair = {
+      progress: gatewayMocks.getAgentProgress.mock.calls.length,
+      detail: gatewayMocks.getThreadDetail.mock.calls.length,
+      groups: gatewayMocks.getThreadGroupsPage.mock.calls.length,
+      pending: gatewayMocks.getPendingServerRequests.mock.calls.length,
+    }
+
+    const secondPoll = timers.find((timer) => timer.delay === 15_000)
+    expect(secondPoll).toBeDefined()
+    secondPoll?.callback()
+    await vi.waitFor(() => expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(2))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(requestCountsAfterRepair.progress)
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(requestCountsAfterRepair.detail)
+    expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(requestCountsAfterRepair.groups)
+    expect(gatewayMocks.getPendingServerRequests).toHaveBeenCalledTimes(requestCountsAfterRepair.pending)
+    state.stopPolling()
+  })
+
+  it('replaces an old terminal card when runtime reports a different fresh turn', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-b',
+      state: 'running',
+      isRunning: true,
+      source: 'external',
+      startedAtIso: new Date(1_700_000_005_000).toISOString(),
+      completedAtIso: null,
+      owner: null,
+    }])
+    gatewayMocks.getAgentProgress.mockResolvedValue(progressSnapshot({
+      turnId: 'turn-b',
+      status: 'running',
+      updatedAtMs: 1_700_000_006_000,
+      childStatus: 'running',
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-a', status: 'completed', updatedAtMs: 1_700_000_007_000 }) },
+    })
+    timers.find((timer) => timer.delay === 0)?.callback()
+
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledWith('thread-a')
+      expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'running' })
+    })
+    state.stopPolling()
+  })
+
+  it('rejects a stale progress snapshot after runtime switches to a newer turn', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-b',
+      state: 'running',
+      isRunning: true,
+      source: 'external',
+      startedAtIso: new Date(1_700_000_005_000).toISOString(),
+      completedAtIso: null,
+      owner: null,
+    }])
+    gatewayMocks.getAgentProgress.mockResolvedValue(progressSnapshot({
+      turnId: 'turn-a',
+      status: 'running',
+      updatedAtMs: 1_700_000_006_000,
+      childStatus: 'running',
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-a', status: 'completed', updatedAtMs: 1_700_000_004_000 }) },
+    })
+    timers.find((timer) => timer.delay === 0)?.callback()
+
+    try {
+      await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledWith('thread-a'))
+      for (let index = 0; index < 8; index += 1) await Promise.resolve()
+      expect(state.selectedLiveOverlay.value?.turnProgress?.turnId).not.toBe('turn-a')
+
+      notificationHandler!({
+        method: 'codex-ui/agent-progress',
+        params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-b', status: 'running', updatedAtMs: 1_700_000_007_000, childStatus: 'running' }) },
+      })
+      expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'running' })
+    } finally {
+      state.stopPolling()
+    }
+  })
+
+  it('rejects a stale running snapshot for a runtime-confirmed terminal turn', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'completed',
+      isRunning: false,
+      source: 'session',
+      startedAtIso: new Date(1_700_000_001_000).toISOString(),
+      completedAtIso: new Date(1_700_000_004_000).toISOString(),
+      owner: null,
+    }])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    timers.find((timer) => timer.delay === 0)?.callback()
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1)
+      expect(timers.some((timer) => timer.delay === 15_000)).toBe(true)
+    })
+
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-a', status: 'running', updatedAtMs: 1_700_000_005_000, childStatus: 'running' }) },
+    })
+
+    expect(state.selectedLiveOverlay.value?.turnProgress ?? null).toBeNull()
+
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: '', status: 'running', updatedAtMs: 1_700_000_003_000, childStatus: 'running' }) },
+    })
+    expect(state.selectedLiveOverlay.value?.turnProgress ?? null).toBeNull()
+
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: '', status: 'running', updatedAtMs: 1_700_000_005_000, childStatus: 'running' }) },
+    })
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: '', status: 'running' })
+    state.stopPolling()
+  })
+
+  it('keeps timestamp ordering while a local active turn still has a pending id', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.resumeThread.mockResolvedValue({
+      messages: [],
+      inProgress: true,
+      activeTurnId: 'pending:local-turn',
+      model: 'gpt-5.6-sol',
+      modelProvider: 'openai',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    await state.loadMessages('thread-a')
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-b', status: 'running', updatedAtMs: 7_000, childStatus: 'running' }) },
+    })
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-a', status: 'running', updatedAtMs: 6_000, childStatus: 'running' }) },
+    })
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'running' })
+
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-c', status: 'running', updatedAtMs: 8_000, childStatus: 'running' }) },
+    })
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-c', status: 'running' })
+    state.stopPolling()
+  })
+
+  it('replaces a terminal card with no turn identity when runtime reports a fresh turn', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-b',
+      state: 'running',
+      isRunning: true,
+      source: 'external',
+      startedAtIso: new Date(1_700_000_005_000).toISOString(),
+      completedAtIso: null,
+      owner: null,
+    }])
+    gatewayMocks.getAgentProgress.mockResolvedValue(progressSnapshot({
+      turnId: 'turn-b',
+      status: 'running',
+      updatedAtMs: 1_700_000_006_000,
+      childStatus: 'running',
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: '', status: 'completed', updatedAtMs: 1_700_000_004_000 }) },
+    })
+    timers.find((timer) => timer.delay === 0)?.callback()
+
+    await vi.waitFor(() => {
+      expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'running' })
+    })
+    state.stopPolling()
+  })
+
+  it('ignores an old terminal runtime response after a different active turn starts', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    let resolveRuntime!: (states: Array<{
+      threadId: string
+      turnId: string
+      state: 'completed'
+      isRunning: false
+      source: 'session'
+      startedAtIso: string
+      completedAtIso: string
+      owner: null
+    }>) => void
+    gatewayMocks.getThreadRuntimeStates.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRuntime = resolve
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    timers.find((timer) => timer.delay === 0)?.callback()
+    await vi.waitFor(() => expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1))
+    notificationHandler!({
+      method: 'turn/started',
+      params: { threadId: 'thread-a', turn: { id: 'turn-b', status: 'inProgress' } },
+    })
+    resolveRuntime([{
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'completed',
+      isRunning: false,
+      source: 'session',
+      startedAtIso: new Date(1_700_000_001_000).toISOString(),
+      completedAtIso: new Date(1_700_000_004_000).toISOString(),
+      owner: null,
+    }])
+
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+    expect(state.selectedLiveOverlay.value?.activityLabel).toBe('Thinking activity')
+    state.stopPolling()
+  })
+
+  it('keeps a fresh runtime owner when another overlapping turn completes', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-b',
+      state: 'running',
+      isRunning: true,
+      source: 'external',
+      startedAtIso: new Date(1_700_000_002_000).toISOString(),
+      completedAtIso: null,
+      owner: null,
+    }])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    timers.find((timer) => timer.delay === 0)?.callback()
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1)
+      expect(timers.some((timer) => timer.delay === 2_000)).toBe(true)
+    })
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-b', status: 'interrupted', updatedAtMs: 1_700_000_003_000, childStatus: 'interrupted' }) },
+    })
+    notificationHandler!({
+      method: 'turn/completed',
+      atIso: new Date(1_700_000_004_000).toISOString(),
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'completed', completedAt: new Date(1_700_000_004_000).toISOString() } },
+    })
+
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'running' })
+    expect(state.selectedLiveOverlay.value?.activityLabel).toBe('Thinking activity')
+    state.stopPolling()
+  })
+
+  it('does not revive a completed turn from its own stale running runtime cache', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.resumeThread.mockResolvedValue(null)
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      messages: [{ id: 'final', role: 'assistant', text: 'done', messageType: 'agentMessage' }],
+      inProgress: false,
+      activeTurnId: '',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-b',
+      state: 'running',
+      isRunning: true,
+      source: 'external',
+      startedAtIso: new Date(1_700_000_001_000).toISOString(),
+      completedAtIso: null,
+      owner: null,
+    }])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    timers.find((timer) => timer.delay === 0)?.callback()
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1)
+      expect(timers.some((timer) => timer.delay === 2_000)).toBe(true)
+    })
+    notificationHandler!({
+      method: 'turn/completed',
+      atIso: new Date(1_700_000_004_000).toISOString(),
+      params: { threadId: 'thread-a', turn: { id: 'turn-b', status: 'completed', completedAt: new Date(1_700_000_004_000).toISOString() } },
+    })
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-b', status: 'completed', updatedAtMs: 1_700_000_004_000 }) },
+    })
+
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'completed' })
+    await state.loadMessages('thread-a', { force: true, silent: true })
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'completed' })
+    state.stopPolling()
+  })
+
+  it('ignores a running response that started before the same turn completed', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    let resolveRuntime!: (states: Array<{
+      threadId: string
+      turnId: string
+      state: 'running'
+      isRunning: true
+      source: 'external'
+      startedAtIso: string
+      completedAtIso: null
+      owner: null
+    }>) => void
+    gatewayMocks.getThreadRuntimeStates.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRuntime = resolve
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    const initialPollIndex = timers.findIndex((timer) => timer.delay === 0)
+    timers.splice(initialPollIndex, 1)[0]?.callback()
+    await vi.waitFor(() => expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1))
+    notificationHandler!({
+      method: 'turn/started',
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'inProgress' } },
+    })
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-a', status: 'running', updatedAtMs: 1_700_000_002_000, childStatus: 'running' }) },
+    })
+    notificationHandler!({
+      method: 'turn/completed',
+      atIso: new Date(1_700_000_004_000).toISOString(),
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'completed', completedAt: new Date(1_700_000_004_000).toISOString() } },
+    })
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-a', status: 'completed', updatedAtMs: 1_700_000_004_000 }) },
+    })
+
+    resolveRuntime([{
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'running',
+      isRunning: true,
+      source: 'external',
+      startedAtIso: new Date(1_700_000_001_000).toISOString(),
+      completedAtIso: null,
+      owner: null,
+    }])
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-a', status: 'completed' })
+    state.stopPolling()
+  })
+
+  it('does not let a running response started before a successful interrupt revive the turn', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+    gatewayMocks.resumeThread.mockResolvedValue(null)
+    gatewayMocks.interruptThreadTurn.mockResolvedValue(undefined)
+    let resolveRuntime!: (states: Array<{
+      threadId: string
+      turnId: string
+      state: 'running'
+      isRunning: true
+      source: 'external'
+      startedAtIso: string
+      completedAtIso: null
+      owner: null
+    }>) => void
+    gatewayMocks.getThreadRuntimeStates.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRuntime = resolve
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    notificationHandler!({
+      method: 'turn/started',
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'inProgress' } },
+    })
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-a', status: 'running', updatedAtMs: 1_700_000_002_000, childStatus: 'running' }) },
+    })
+    const initialPollIndex = timers.findIndex((timer) => timer.delay === 0)
+    timers.splice(initialPollIndex, 1)[0]?.callback()
+    await vi.waitFor(() => expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1))
+
+    await state.interruptSelectedThreadTurn()
+    expect(gatewayMocks.interruptThreadTurn).toHaveBeenCalledWith('thread-a', 'turn-a')
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({
+      turnId: 'turn-a',
+      status: 'interrupted',
+      phase: 'interrupted',
+      agents: [{ status: 'interrupted' }],
+    })
+
+    resolveRuntime([{
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'running',
+      isRunning: true,
+      source: 'external',
+      startedAtIso: new Date(1_700_000_001_000).toISOString(),
+      completedAtIso: null,
+      owner: null,
+    }])
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({
+      turnId: 'turn-a',
+      status: 'interrupted',
+      phase: 'interrupted',
+      agents: [{ status: 'interrupted' }],
+    })
+    state.stopPolling()
+  })
+
+  it('does not let a late successful interrupt clear a newer active turn', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      messages: [],
+      inProgress: true,
+      activeTurnId: 'turn-b',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+    gatewayMocks.resumeThread.mockResolvedValue(null)
+    let resolveInterrupt!: () => void
+    gatewayMocks.interruptThreadTurn.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      resolveInterrupt = resolve
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    notificationHandler!({
+      method: 'turn/started',
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'inProgress' } },
+    })
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-a', status: 'running', updatedAtMs: 1_700_000_002_000, childStatus: 'running' }) },
+    })
+    const interruptPromise = state.interruptSelectedThreadTurn()
+    await vi.waitFor(() => expect(gatewayMocks.interruptThreadTurn).toHaveBeenCalledWith('thread-a', 'turn-a'))
+
+    notificationHandler!({
+      method: 'turn/started',
+      params: { threadId: 'thread-a', turn: { id: 'turn-b', status: 'inProgress' } },
+    })
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: 'turn-b', status: 'running', updatedAtMs: 1_700_000_004_000, childStatus: 'running' }) },
+    })
+    resolveInterrupt()
+    await interruptPromise
+
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({
+      turnId: 'turn-b',
+      status: 'running',
+      agents: [{ status: 'running' }],
+    })
+    state.stopPolling()
+  })
+
+  it('ignores an older terminal reconcile response after a newer running request applies', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    gatewayMocks.subscribeCodexNotifications.mockReturnValue(vi.fn())
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      messages: [],
+      inProgress: true,
+      activeTurnId: '',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+    let resolveOlderRuntime!: (states: Array<{
+      threadId: string
+      turnId: string
+      state: 'completed'
+      isRunning: false
+      source: 'session'
+      startedAtIso: string
+      completedAtIso: string
+      owner: null
+    }>) => void
+    gatewayMocks.getThreadRuntimeStates
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOlderRuntime = resolve
+      }))
+      .mockResolvedValueOnce([{
+        threadId: 'thread-a',
+        turnId: 'turn-b',
+        state: 'running',
+        isRunning: true,
+        source: 'external',
+        startedAtIso: new Date(1_700_000_003_000).toISOString(),
+        completedAtIso: null,
+        owner: null,
+      }])
+    gatewayMocks.getAgentProgress.mockResolvedValue(progressSnapshot({
+      turnId: 'turn-b',
+      status: 'running',
+      updatedAtMs: 1_700_000_003_000,
+      childStatus: 'running',
+    }))
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    const initialPollIndex = timers.findIndex((timer) => timer.delay === 0)
+    timers.splice(initialPollIndex, 1)[0]?.callback()
+    await vi.waitFor(() => expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1))
+
+    const interruptPromise = state.interruptSelectedThreadTurn()
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(2)
+      expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'running' })
+    })
+    resolveOlderRuntime([{
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'completed',
+      isRunning: false,
+      source: 'session',
+      startedAtIso: new Date(1_700_000_001_000).toISOString(),
+      completedAtIso: new Date(1_700_000_002_000).toISOString(),
+      owner: null,
+    }])
+    await interruptPromise
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'running' })
+    state.stopPolling()
+  })
+
+  it('does not let an older terminal reconcile result clear a newer running poll', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    gatewayMocks.subscribeCodexNotifications.mockReturnValue(vi.fn())
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      messages: [],
+      inProgress: true,
+      activeTurnId: 'turn-a',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+    gatewayMocks.interruptThreadTurn.mockRejectedValue(new Error('no active turn to interrupt'))
+    let resolveOlderRuntime!: (states: Array<{
+      threadId: string
+      turnId: string
+      state: 'completed'
+      isRunning: false
+      source: 'session'
+      startedAtIso: string
+      completedAtIso: string
+      owner: null
+    }>) => void
+    gatewayMocks.getThreadRuntimeStates
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOlderRuntime = resolve
+      }))
+      .mockResolvedValueOnce([{
+        threadId: 'thread-a',
+        turnId: 'turn-b',
+        state: 'running',
+        isRunning: true,
+        source: 'external',
+        startedAtIso: new Date(1_700_000_003_000).toISOString(),
+        completedAtIso: null,
+        owner: null,
+      }])
+    gatewayMocks.getAgentProgress.mockResolvedValue(progressSnapshot({
+      turnId: 'turn-b',
+      status: 'running',
+      updatedAtMs: 1_700_000_003_000,
+      childStatus: 'running',
+    }))
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('thread-a')
+    const interruptPromise = state.interruptSelectedThreadTurn()
+    await vi.waitFor(() => {
+      expect(gatewayMocks.interruptThreadTurn).toHaveBeenCalledWith('thread-a', 'turn-a')
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1)
+    })
+
+    state.startPolling()
+    const initialPollIndex = timers.findIndex((timer) => timer.delay === 0)
+    timers.splice(initialPollIndex, 1)[0]?.callback()
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(2)
+      expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'running' })
+    })
+    resolveOlderRuntime([{
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'completed',
+      isRunning: false,
+      source: 'session',
+      startedAtIso: new Date(1_700_000_001_000).toISOString(),
+      completedAtIso: new Date(1_700_000_002_000).toISOString(),
+      owner: null,
+    }])
+    await interruptPromise
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'running' })
+    state.stopPolling()
+  })
+
+  it('does not let an older terminal refresh clear a newer same-turn running state', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    gatewayMocks.subscribeCodexNotifications.mockReturnValue(vi.fn())
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.resumeThread.mockResolvedValue(null)
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    let resolveDetail!: (detail: {
+      messages: never[]
+      inProgress: false
+      activeTurnId: string
+      turnIndexByTurnId: Record<string, number>
+      hasMoreOlder: false
+    }) => void
+    gatewayMocks.getThreadDetail.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveDetail = resolve
+    }))
+    gatewayMocks.getThreadRuntimeStates
+      .mockResolvedValueOnce([{
+        threadId: 'thread-a',
+        turnId: 'turn-a',
+        state: 'interrupted',
+        isRunning: false,
+        source: 'local',
+        startedAtIso: new Date(1_700_000_001_000).toISOString(),
+        completedAtIso: new Date(1_700_000_002_000).toISOString(),
+        owner: null,
+      }])
+      .mockResolvedValueOnce([{
+        threadId: 'thread-a',
+        turnId: 'turn-a',
+        state: 'running',
+        isRunning: true,
+        source: 'external',
+        startedAtIso: new Date(1_700_000_001_000).toISOString(),
+        completedAtIso: null,
+        owner: null,
+      }])
+    gatewayMocks.getAgentProgress.mockResolvedValue(progressSnapshot({
+      turnId: 'turn-a',
+      status: 'running',
+      updatedAtMs: 1_700_000_003_000,
+      childStatus: 'running',
+    }))
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    const initialPollIndex = timers.findIndex((timer) => timer.delay === 0)
+    timers.splice(initialPollIndex, 1)[0]?.callback()
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1)
+      expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(1)
+      expect(timers.some((timer) => timer.delay === 15_000)).toBe(true)
+    })
+
+    const nextPollIndex = timers.findIndex((timer) => timer.delay === 15_000)
+    timers.splice(nextPollIndex, 1)[0]?.callback()
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(2)
+      expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-a', status: 'running' })
+    })
+    resolveDetail({
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-a', status: 'running' })
+    state.stopPolling()
+  })
+
+  it('lets a later terminal poll replace the previous running runtime snapshot', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getAgentProgress
+      .mockResolvedValueOnce(progressSnapshot({
+        turnId: '019f6200-0001-7000-8000-000000000002',
+        status: 'running',
+        updatedAtMs: 1_700_000_002_000,
+        childStatus: 'running',
+      }))
+      .mockResolvedValueOnce({
+        ...progressSnapshot({
+          turnId: '019f6200-0001-7000-8000-000000000002',
+          status: 'interrupted',
+          updatedAtMs: 1_700_000_005_000,
+          childStatus: 'interrupted',
+        }),
+        mainLastActivityAtMs: 1_700_000_003_000,
+      })
+    gatewayMocks.getThreadRuntimeStates
+      .mockResolvedValueOnce([{
+        threadId: 'thread-a',
+        turnId: '019f6200-0001-7000-8000-000000000002',
+        state: 'running',
+        isRunning: true,
+        source: 'external',
+        startedAtIso: new Date(1_700_000_002_000).toISOString(),
+        completedAtIso: null,
+        owner: null,
+      }])
+      .mockResolvedValueOnce([{
+        threadId: 'thread-a',
+        turnId: '019f6200-0000-7000-8000-000000000001',
+        state: 'completed',
+        isRunning: false,
+        source: 'session',
+        startedAtIso: new Date(1_700_000_001_000).toISOString(),
+        completedAtIso: new Date(1_700_000_004_000).toISOString(),
+        owner: null,
+      }])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    timers.find((timer) => timer.delay === 0)?.callback()
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1)
+      expect(timers.some((timer) => timer.delay === 2_000)).toBe(true)
+      expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({
+        turnId: '019f6200-0001-7000-8000-000000000002',
+        status: 'running',
+      })
+    })
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: {
+        threadId: 'thread-a',
+        progress: {
+          ...progressSnapshot({
+            turnId: '019f6200-0001-7000-8000-000000000002',
+            status: 'interrupted',
+            updatedAtMs: 1_700_000_005_000,
+            childStatus: 'interrupted',
+          }),
+          mainLastActivityAtMs: 1_700_000_003_000,
+        },
+      },
+    })
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({
+      turnId: '019f6200-0001-7000-8000-000000000002',
+      status: 'running',
+    })
+
+    const activePollIndex = timers.findIndex((timer) => timer.delay === 2_000)
+    expect(activePollIndex).toBeGreaterThanOrEqual(0)
+    timers.splice(activePollIndex, 1)[0]?.callback()
+
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(2)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(2)
+      expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({
+        turnId: '019f6200-0000-7000-8000-000000000001',
+        status: 'completed',
+      })
+    })
+    state.stopPolling()
+  })
+
+  it('keeps an in-flight progress load for the active turn when an older turn completes', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-b',
+      state: 'running',
+      isRunning: true,
+      source: 'external',
+      startedAtIso: new Date(1_700_000_002_000).toISOString(),
+      completedAtIso: null,
+      owner: null,
+    }])
+    let resolveProgress!: (progress: UiTurnProgress) => void
+    gatewayMocks.getAgentProgress.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveProgress = resolve
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    timers.find((timer) => timer.delay === 0)?.callback()
+    await vi.waitFor(() => expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(1))
+    notificationHandler!({
+      method: 'turn/completed',
+      atIso: new Date(1_700_000_004_000).toISOString(),
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'completed', completedAt: new Date(1_700_000_004_000).toISOString() } },
+    })
+    resolveProgress(progressSnapshot({
+      turnId: 'turn-b',
+      status: 'running',
+      updatedAtMs: 1_700_000_005_000,
+      childStatus: 'running',
+    }))
+
+    await vi.waitFor(() => {
+      expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'running' })
+    })
+    state.stopPolling()
+  })
+
+  it('does not let a terminal refresh clear a turn that starts while detail is loading', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.resumeThread.mockResolvedValue(null)
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'completed',
+      isRunning: false,
+      source: 'session',
+      startedAtIso: new Date(1_700_000_001_000).toISOString(),
+      completedAtIso: new Date(1_700_000_004_000).toISOString(),
+      owner: null,
+    }])
+    let resolveDetail!: (detail: {
+      messages: never[]
+      inProgress: false
+      activeTurnId: string
+      turnIndexByTurnId: Record<string, number>
+      hasMoreOlder: false
+    }) => void
+    gatewayMocks.getThreadDetail.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveDetail = resolve
+    }))
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project')] }],
+      nextCursor: null,
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    notificationHandler!({
+      method: 'turn/started',
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'inProgress' } },
+    })
+    timers.find((timer) => timer.delay === 0)?.callback()
+    await vi.waitFor(() => expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(1))
+    notificationHandler!({
+      method: 'turn/started',
+      params: { threadId: 'thread-a', turn: { id: 'turn-b', status: 'inProgress' } },
+    })
+    resolveDetail({
+      messages: [],
+      inProgress: false,
+      activeTurnId: 'turn-a',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    expect(state.selectedLiveOverlay.value?.activityLabel).toBe('Thinking activity')
+    state.stopPolling()
+  })
+
+  it('does not replace a confirmed failed turn with a generic completed runtime', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'completed',
+      isRunning: false,
+      source: 'session',
+      startedAtIso: new Date(1_700_000_001_000).toISOString(),
+      completedAtIso: new Date(1_700_000_004_000).toISOString(),
+      owner: null,
+    }])
+    const failedProgress: UiTurnProgress = {
+      ...progressSnapshot({ turnId: 'turn-a', status: 'interrupted', updatedAtMs: 1_700_000_004_000 }),
+      status: 'failed',
+      phase: 'failed',
+    }
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: failedProgress },
+    })
+    timers.find((timer) => timer.delay === 0)?.callback()
+
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1)
+      expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-a', status: 'failed', phase: 'failed' })
+    })
+    state.stopPolling()
+  })
+
+  it('replaces an unidentified terminal card with a later authoritative interruption', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-b',
+      state: 'interrupted',
+      isRunning: false,
+      source: 'local',
+      startedAtIso: new Date(1_700_000_001_000).toISOString(),
+      completedAtIso: new Date(1_700_000_005_000).toISOString(),
+      owner: null,
+    }])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    notificationHandler!({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-a', progress: progressSnapshot({ turnId: '', status: 'completed', updatedAtMs: 1_700_000_004_000 }) },
+    })
+    timers.find((timer) => timer.delay === 0)?.callback()
+
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1)
+      expect(gatewayMocks.getAgentProgress).toHaveBeenCalledTimes(1)
+      expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({
+        turnId: 'turn-b',
+        status: 'interrupted',
+        phase: 'interrupted',
+      })
+    })
+    for (let index = 0; index < 4; index += 1) await Promise.resolve()
+    expect(state.selectedLiveOverlay.value?.turnProgress).toMatchObject({ turnId: 'turn-b', status: 'interrupted' })
+    state.stopPolling()
+  })
+
   it('backs off missing agent progress instead of retrying on every active runtime poll', async () => {
     installTestWindow()
     const timers: Array<{ callback: () => void; delay: number }> = []
@@ -2365,7 +3762,10 @@ describe('authoritative thread runtime reconciliation', () => {
     const initialPoll = timers.find((timer) => timer.delay === 0)
     expect(initialPoll).toBeDefined()
     initialPoll?.callback()
-    await vi.waitFor(() => expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledTimes(1)
+      expect(timers.some((timer) => timer.delay === 2_000)).toBe(true)
+    })
 
     const activePoll = timers.find((timer) => timer.delay === 2_000)
     expect(activePoll).toBeDefined()

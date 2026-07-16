@@ -29,6 +29,7 @@ export type SessionRuntimeTurn = {
   turnId: string
   startedAtMs: number
   completedAtMs: number | null
+  status: 'running' | 'completed' | 'interrupted'
   startOrder: number
 }
 
@@ -139,6 +140,15 @@ function createMutableSessionState(): MutableSessionState {
   }
 }
 
+function updateLatestLifecycleTurn(state: MutableSessionState, turnId: string): void {
+  const candidate = state.turnsById.get(turnId)
+  if (!candidate) return
+  const latest = state.latestTurnId ? state.turnsById.get(state.latestTurnId) : undefined
+  const candidateAtMs = candidate.completedAtMs ?? candidate.startedAtMs
+  const latestAtMs = latest ? (latest.completedAtMs ?? latest.startedAtMs) : 0
+  if (!latest || candidateAtMs >= latestAtMs) state.latestTurnId = turnId
+}
+
 function applySessionLine(state: MutableSessionState, line: string): void {
   const trimmed = line.trim()
   if (!trimmed) return
@@ -153,7 +163,7 @@ function applySessionLine(state: MutableSessionState, line: string): void {
 
   const payload = asRecord(row.payload)
   const eventType = readString(payload?.type)
-  if (eventType !== 'task_started' && eventType !== 'task_complete') return
+  if (eventType !== 'task_started' && eventType !== 'task_complete' && eventType !== 'turn_aborted') return
 
   const turnId = readString(payload?.turn_id) || readString(payload?.turnId)
   if (!turnId) return
@@ -171,10 +181,13 @@ function applySessionLine(state: MutableSessionState, line: string): void {
       turnId,
       startedAtMs,
       completedAtMs: existing?.completedAtMs ?? null,
+      status: existing?.status === 'completed' || existing?.status === 'interrupted'
+        ? existing.status
+        : 'running',
       startOrder: ++state.nextOrder,
     }
     state.turnsById.set(turnId, next)
-    state.latestTurnId = turnId
+    updateLatestLifecycleTurn(state, turnId)
     return
   }
 
@@ -186,9 +199,10 @@ function applySessionLine(state: MutableSessionState, line: string): void {
     turnId,
     startedAtMs: existing?.startedAtMs ?? uuidV7TimestampMs(turnId) ?? completedAtMs,
     completedAtMs,
+    status: eventType === 'turn_aborted' ? 'interrupted' : 'completed',
     startOrder: existing?.startOrder ?? ++state.nextOrder,
   })
-  if (!state.latestTurnId) state.latestTurnId = turnId
+  updateLatestLifecycleTurn(state, turnId)
 }
 
 function snapshotSessionState(state: MutableSessionState): SessionRuntimeSnapshot {
@@ -252,6 +266,18 @@ type Candidate = {
   startedAtMs: number
 }
 
+type RunningCandidate = Candidate & {
+  source: 'local' | 'external'
+  lease: RuntimeInstanceLease | null
+}
+
+type TerminalCandidate = Candidate & {
+  state: 'completed' | 'interrupted'
+  atMs: number
+  completedAtMs: number | null
+  source: 'session' | 'local'
+}
+
 function pickNewestCandidate(candidates: Candidate[]): Candidate | null {
   let newest: Candidate | null = null
   for (const candidate of candidates) {
@@ -283,26 +309,118 @@ export function resolveThreadRuntimeSnapshot(input: {
   const leaseTtlMs = input.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS
   const localTurns = (input.localTurns ?? []).filter((turn) => turn.threadId === threadId)
   const freshLeases = (input.leases ?? []).filter((lease) => isLeaseFresh(lease, nowMs, leaseTtlMs))
-  const sessionTurnsById = new Map((input.session?.turns ?? []).map((turn) => [turn.turnId, turn]))
-  const latestSessionTurn = input.session?.latestTurnId
-    ? sessionTurnsById.get(input.session.latestTurnId) ?? null
-    : null
-
-  const candidates: Candidate[] = []
-  if (latestSessionTurn) {
-    candidates.push({ turnId: latestSessionTurn.turnId, startedAtMs: latestSessionTurn.startedAtMs })
+  const runningTurnIds = new Set(localTurns.filter((turn) => turn.status === 'running').map((turn) => turn.turnId))
+  for (const lease of freshLeases) {
+    for (const turn of lease.turns) {
+      if (turn.threadId === threadId) runningTurnIds.add(turn.turnId)
+    }
   }
+  const completedRunningTurnIds = new Set(
+    localTurns.filter((turn) => turn.status === 'completed').map((turn) => turn.turnId),
+  )
+  let latestSessionTurn: SessionRuntimeTurn | null = null
+  for (const turn of input.session?.turns ?? []) {
+    if (turn.turnId === input.session?.latestTurnId) latestSessionTurn = turn
+    if (turn.completedAtMs && runningTurnIds.has(turn.turnId)) completedRunningTurnIds.add(turn.turnId)
+  }
+  const locallyInterruptedTurnIds = new Set(
+    localTurns.filter((turn) => turn.status === 'interrupted').map((turn) => turn.turnId),
+  )
+  const runningCandidates: RunningCandidate[] = []
   for (const turn of localTurns) {
-    candidates.push({ turnId: turn.turnId, startedAtMs: turn.startedAtMs })
+    if (turn.status === 'running' && !completedRunningTurnIds.has(turn.turnId)) {
+      const localLease = freshLeases.find((lease) => (
+        lease.instanceId === input.localInstanceId
+        && lease.turns.some((candidate) => candidate.threadId === threadId && candidate.turnId === turn.turnId)
+      )) ?? null
+      runningCandidates.push({
+        turnId: turn.turnId,
+        startedAtMs: turn.startedAtMs,
+        source: 'local',
+        lease: localLease,
+      })
+    }
   }
   for (const lease of freshLeases) {
     for (const turn of lease.turns) {
-      if (turn.threadId === threadId) candidates.push({ turnId: turn.turnId, startedAtMs: turn.startedAtMs })
+      if (turn.threadId !== threadId) continue
+      if (completedRunningTurnIds.has(turn.turnId)) continue
+      if (
+        lease.instanceId === input.localInstanceId
+        && locallyInterruptedTurnIds.has(turn.turnId)
+      ) continue
+      runningCandidates.push({
+        turnId: turn.turnId,
+        startedAtMs: turn.startedAtMs,
+        source: lease.instanceId === input.localInstanceId ? 'local' : 'external',
+        lease,
+      })
     }
   }
 
-  const newest = pickNewestCandidate(candidates)
-  if (!newest) {
+  const newestRunning = pickNewestCandidate(runningCandidates) as RunningCandidate | null
+  if (newestRunning) {
+    const ownerLease = newestRunning.lease
+    return {
+      threadId,
+      turnId: newestRunning.turnId,
+      state: 'running',
+      isRunning: true,
+      source: newestRunning.source,
+      startedAtIso: toIso(newestRunning.startedAtMs),
+      completedAtIso: null,
+      owner: ownerLease
+        ? {
+            instanceId: ownerLease.instanceId,
+            processId: ownerLease.processId,
+            processIdentity: ownerLease.processIdentity,
+            port: ownerLease.port,
+            local: newestRunning.source === 'local',
+            heartbeatAtIso: new Date(ownerLease.heartbeatAtMs).toISOString(),
+          }
+        : null,
+    }
+  }
+
+  const terminalCandidates: TerminalCandidate[] = []
+  if (latestSessionTurn) {
+    terminalCandidates.push({
+      turnId: latestSessionTurn.turnId,
+      startedAtMs: latestSessionTurn.startedAtMs,
+      state: latestSessionTurn.status === 'completed' ? 'completed' : 'interrupted',
+      atMs: latestSessionTurn.completedAtMs ?? latestSessionTurn.startedAtMs,
+      completedAtMs: latestSessionTurn.completedAtMs,
+      source: 'session',
+    })
+  }
+  for (const turn of localTurns) {
+    if (turn.status === 'running') continue
+    terminalCandidates.push({
+      turnId: turn.turnId,
+      startedAtMs: turn.startedAtMs,
+      state: turn.status === 'completed' ? 'completed' : 'interrupted',
+      atMs: turn.completedAtMs ?? turn.startedAtMs,
+      completedAtMs: turn.completedAtMs,
+      source: 'local',
+    })
+  }
+
+  let latestTerminal: TerminalCandidate | null = null
+  for (const candidate of terminalCandidates) {
+    if (
+      !latestTerminal
+      || candidate.atMs > latestTerminal.atMs
+      || (
+        candidate.atMs === latestTerminal.atMs
+        && turnSortTimestamp(candidate.turnId, candidate.startedAtMs)
+          > turnSortTimestamp(latestTerminal.turnId, latestTerminal.startedAtMs)
+      )
+    ) {
+      latestTerminal = candidate
+    }
+  }
+
+  if (!latestTerminal) {
     return {
       threadId,
       turnId: '',
@@ -315,79 +433,14 @@ export function resolveThreadRuntimeSnapshot(input: {
     }
   }
 
-  const sessionTurn = sessionTurnsById.get(newest.turnId) ?? null
-  const matchingLocalTurns = localTurns.filter((turn) => turn.turnId === newest.turnId)
-  const completedLocalTurn = matchingLocalTurns.find((turn) => turn.status === 'completed') ?? null
-  const completedAtMs = sessionTurn?.completedAtMs ?? completedLocalTurn?.completedAtMs ?? null
-  if (completedAtMs) {
-    return {
-      threadId,
-      turnId: newest.turnId,
-      state: 'completed',
-      isRunning: false,
-      source: sessionTurn?.completedAtMs ? 'session' : 'local',
-      startedAtIso: toIso(newest.startedAtMs),
-      completedAtIso: toIso(completedAtMs),
-      owner: null,
-    }
-  }
-
-  const runningLocalTurn = matchingLocalTurns.find((turn) => turn.status === 'running') ?? null
-  if (runningLocalTurn) {
-    const localLease = freshLeases.find((lease) => lease.instanceId === input.localInstanceId)
-    return {
-      threadId,
-      turnId: newest.turnId,
-      state: 'running',
-      isRunning: true,
-      source: 'local',
-      startedAtIso: toIso(newest.startedAtMs),
-      completedAtIso: null,
-      owner: localLease
-        ? {
-            instanceId: localLease.instanceId,
-            processId: localLease.processId,
-            processIdentity: localLease.processIdentity,
-            port: localLease.port,
-            local: true,
-            heartbeatAtIso: new Date(localLease.heartbeatAtMs).toISOString(),
-          }
-        : null,
-    }
-  }
-
-  const externalLease = freshLeases.find((lease) => (
-    lease.instanceId !== input.localInstanceId &&
-    lease.turns.some((turn) => turn.threadId === threadId && turn.turnId === newest.turnId)
-  ))
-  if (externalLease) {
-    return {
-      threadId,
-      turnId: newest.turnId,
-      state: 'running',
-      isRunning: true,
-      source: 'external',
-      startedAtIso: toIso(newest.startedAtMs),
-      completedAtIso: null,
-      owner: {
-        instanceId: externalLease.instanceId,
-        processId: externalLease.processId,
-        processIdentity: externalLease.processIdentity,
-        port: externalLease.port,
-        local: false,
-        heartbeatAtIso: new Date(externalLease.heartbeatAtMs).toISOString(),
-      },
-    }
-  }
-
   return {
     threadId,
-    turnId: newest.turnId,
-    state: 'interrupted',
+    turnId: latestTerminal.turnId,
+    state: latestTerminal.state,
     isRunning: false,
-    source: sessionTurn ? 'session' : 'local',
-    startedAtIso: toIso(newest.startedAtMs),
-    completedAtIso: null,
+    source: latestTerminal.source,
+    startedAtIso: toIso(latestTerminal.startedAtMs),
+    completedAtIso: toIso(latestTerminal.completedAtMs),
     owner: null,
   }
 }
@@ -527,13 +580,17 @@ export class ThreadRuntimeState {
     const completedAtMs = readIsoMs(turnRecord?.completedAt)
       ?? readIsoMs(paramsRecord?.completedAt)
       ?? this.now()
+    const rawStatus = readString(turnRecord?.status).toLowerCase()
+    const status: RuntimeTurnEvidence['status'] = rawStatus.includes('interrupt') || rawStatus.includes('cancel')
+      ? 'interrupted'
+      : 'completed'
     const existing = this.localTurnsByThreadId.get(threadId)?.get(turnId)
     this.upsertLocalTurn({
       threadId,
       turnId,
       startedAtMs: existing?.startedAtMs ?? uuidV7TimestampMs(turnId) ?? completedAtMs,
       completedAtMs,
-      status: 'completed',
+      status,
     })
   }
 
@@ -543,7 +600,7 @@ export class ThreadRuntimeState {
     for (const [threadId, turns] of this.localTurnsByThreadId) {
       for (const [turnId, turn] of turns) {
         if (turn.status !== 'running') continue
-        turns.set(turnId, { ...turn, status: 'interrupted', completedAtMs: null })
+        turns.set(turnId, { ...turn, status: 'interrupted', completedAtMs: interruptedAtMs })
         changed = true
       }
       this.pruneLocalTurns(threadId, interruptedAtMs)
@@ -628,7 +685,9 @@ export class ThreadRuntimeState {
       turnId: normalizedTurnId,
       startedAtMs: existing?.startedAtMs ?? startedAtMs ?? pending?.startedAtMs ?? uuidV7TimestampMs(normalizedTurnId) ?? this.now(),
       completedAtMs: existing?.completedAtMs ?? null,
-      status: existing?.status === 'completed' ? 'completed' : 'running',
+      status: existing?.status === 'completed' || existing?.status === 'interrupted'
+        ? existing.status
+        : 'running',
     })
   }
 
@@ -664,7 +723,8 @@ export class ThreadRuntimeState {
       if (oldest) turns.delete(oldest.turnId)
     }
     for (const [turnId, turn] of turns) {
-      if (turn.status === 'interrupted' && nowMs - turn.startedAtMs > 60_000) turns.delete(turnId)
+      const terminalAtMs = turn.completedAtMs ?? turn.startedAtMs
+      if (turn.status === 'interrupted' && nowMs - terminalAtMs > 60_000) turns.delete(turnId)
     }
     if (turns.size === 0) this.localTurnsByThreadId.delete(threadId)
   }
