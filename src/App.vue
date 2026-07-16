@@ -1283,7 +1283,10 @@ const {
   toggleDictationAutoSend,
   onDictationLanguageChange,
   applyDarkMode,
-} = useAppPreferences({ translate: t })
+} = useAppPreferences({
+  translate: t,
+  defaultSendWithEnter: !isMobile.value,
+})
 const showFirstLaunchPluginsCard = ref(false)
 const isTelegramConfigOpen = ref(false)
 const telegramBotTokenDraft = ref('')

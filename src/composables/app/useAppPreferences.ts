@@ -23,6 +23,7 @@ type ThemeClassList = {
 
 type UseAppPreferencesOptions = {
   storage?: PreferenceStorage | null
+  defaultSendWithEnter?: boolean
   translate?: (message: string) => string
   getPreferredLanguages?: () => readonly string[]
   getThemeClassList?: () => ThemeClassList | null
@@ -220,7 +221,7 @@ export function useAppPreferences(options: UseAppPreferencesOptions = {}) {
   const getThemeClassList = options.getThemeClassList ?? defaultThemeClassList
   const prefersDark = options.prefersDark ?? defaultPrefersDark
 
-  const sendWithEnter = ref(loadBoolPref(storage, SEND_WITH_ENTER_KEY, false))
+  const sendWithEnter = ref(loadBoolPref(storage, SEND_WITH_ENTER_KEY, options.defaultSendWithEnter ?? true))
   const inProgressSendMode = ref<InProgressSendMode>(loadInProgressSendModePref(storage))
   const darkMode = ref<DarkMode>(loadDarkModePref(storage))
   const chatWidth = ref<ChatWidthMode>(loadChatWidthPref(storage))

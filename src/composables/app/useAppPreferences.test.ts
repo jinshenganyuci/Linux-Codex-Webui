@@ -12,16 +12,24 @@ function createStorage(initial: Record<string, string> = {}) {
 }
 
 describe('useAppPreferences', () => {
-  it('loads browser defaults while preserving the no-storage in-progress fallback', () => {
-    const preferences = useAppPreferences({ storage: createStorage() })
+  it('uses device-specific send defaults while preserving the no-storage in-progress fallback', () => {
+    const desktopPreferences = useAppPreferences({
+      storage: createStorage(),
+      defaultSendWithEnter: true,
+    })
+    const mobilePreferences = useAppPreferences({
+      storage: createStorage(),
+      defaultSendWithEnter: false,
+    })
 
-    expect(preferences.sendWithEnter.value).toBe(false)
-    expect(preferences.inProgressSendMode.value).toBe('queue')
-    expect(preferences.darkMode.value).toBe('system')
-    expect(preferences.chatWidth.value).toBe('wide')
-    expect(preferences.dictationClickToToggle.value).toBe(false)
-    expect(preferences.dictationAutoSend.value).toBe(true)
-    expect(preferences.dictationLanguage.value).toBe('auto')
+    expect(desktopPreferences.sendWithEnter.value).toBe(true)
+    expect(mobilePreferences.sendWithEnter.value).toBe(false)
+    expect(desktopPreferences.inProgressSendMode.value).toBe('queue')
+    expect(desktopPreferences.darkMode.value).toBe('system')
+    expect(desktopPreferences.chatWidth.value).toBe('wide')
+    expect(desktopPreferences.dictationClickToToggle.value).toBe(false)
+    expect(desktopPreferences.dictationAutoSend.value).toBe(true)
+    expect(desktopPreferences.dictationLanguage.value).toBe('auto')
 
     expect(useAppPreferences({ storage: null }).inProgressSendMode.value).toBe('steer')
   })
@@ -32,6 +40,7 @@ describe('useAppPreferences', () => {
         'codex-web-local.send-with-enter.v1': '1',
         'codex-web-local.chat-width.v1': 'standard',
       }),
+      defaultSendWithEnter: false,
     })
 
     expect(preferences.sendWithEnter.value).toBe(true)
@@ -110,7 +119,7 @@ describe('useAppPreferences', () => {
     preferences.toggleDictationAutoSend()
 
     expect(storage.setItem.mock.calls).toEqual([
-      ['codex-web-local.send-with-enter.v1', '1'],
+      ['codex-web-local.send-with-enter.v1', '0'],
       ['codex-web-local.in-progress-send-mode.v1', 'steer'],
       ['codex-web-local.dark-mode.v1', 'light'],
       ['codex-web-local.chat-width.v1', 'extra-wide'],
