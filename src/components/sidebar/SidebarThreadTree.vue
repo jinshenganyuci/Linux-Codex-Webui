@@ -1445,8 +1445,7 @@ const projectedDropProjectIndex = computed<number | null>(() => {
 })
 
 const layoutProjectOrder = computed<string[]>(() => {
-  const sourceGroups = isSearchActive.value ? filteredGroups.value : props.groups
-  const names = sourceGroups.map((group) => group.projectName)
+  const names = filteredGroups.value.map((group) => group.projectName)
   const drag = activeProjectDrag.value
   const projectedIndex = projectedDropProjectIndex.value
 
@@ -1454,13 +1453,15 @@ const layoutProjectOrder = computed<string[]>(() => {
     return names
   }
 
-  const next = [...names]
-  const [movedProject] = next.splice(drag.fromIndex, 1)
+  const fullOrder = props.groups.map((group) => group.projectName)
+  const [movedProject] = fullOrder.splice(drag.fromIndex, 1)
   if (!movedProject) {
     return names
   }
-  next.splice(projectedIndex, 0, movedProject)
-  return next
+  fullOrder.splice(projectedIndex, 0, movedProject)
+
+  const visibleProjectNames = new Set(names)
+  return fullOrder.filter((projectName) => visibleProjectNames.has(projectName))
 })
 
 const projectLayoutSignature = computed(() =>

@@ -8,7 +8,7 @@
 #### Steps
 1. Open the app in light theme.
 2. Find the empty project row in the sidebar that shows `No threads`.
-3. Confirm the next project or the `Chats` section follows directly after the empty row, without a leftover blank area from prior threads.
+3. Keep at least one projectless chat in the `Chats` section, then confirm the next project or the `Chats` section follows directly after the empty row, without a leftover blank area from prior threads or a hidden chat group.
 4. Click that project's new thread icon.
 5. Confirm the home composer opens and the folder dropdown is set to the empty project's workspace root.
 6. Switch to dark theme and repeat steps 2-5.
@@ -16,7 +16,7 @@
 #### Expected Results
 - The new thread icon works for projects with zero threads.
 - The new thread screen uses the clicked project's registered workspace root instead of leaving the folder blank or reusing another project.
-- An empty project's row has the same compact vertical spacing as a project with visible thread rows; no stale blank space remains below `No threads`.
+- An empty project's row has the same compact vertical spacing as a project with visible thread rows; no stale blank space remains below `No threads`, including when projectless chats are present but are rendered in the separate `Chats` section.
 - Light and dark theme sidebar and composer surfaces remain readable.
 
 #### Rollback/Cleanup
