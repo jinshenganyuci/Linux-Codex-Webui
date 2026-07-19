@@ -94,7 +94,7 @@ export function findComposerAutocompleteMatch(
   const safeCursor = clampCursor(text, cursor)
   const beforeCursor = text.slice(0, safeCursor)
 
-  const slashMatch = beforeCursor.match(/(?:^|\n)[\t ]*(\/([a-zA-Z0-9-]*))$/u)
+  const slashMatch = beforeCursor.match(/^[\t ]*(\/([a-zA-Z0-9-]*))$/u)
   if (slashMatch) {
     const token = slashMatch[1] ?? '/'
     return {

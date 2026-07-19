@@ -1903,8 +1903,9 @@ function applyComposerAutocompleteOption(option: ComposerAutocompleteOption): vo
   if (option.kind === 'command' && option.command) {
     replacement = buildSlashCommandInsertion(option.command)
   } else if (option.kind === 'skill' && option.skill) {
-    if (!selectedSkills.value.some((skill) => skill.path === option.skill!.path)) {
-      selectedSkills.value = [...selectedSkills.value, option.skill]
+    const selectedSkill = option.skill
+    if (!selectedSkills.value.some((skill) => skill.path === selectedSkill.path)) {
+      selectedSkills.value = [...selectedSkills.value, selectedSkill]
     }
   } else {
     return

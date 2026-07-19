@@ -23,19 +23,14 @@ describe('composerAutocomplete', () => {
     expect(COMPOSER_SLASH_COMMANDS.some((command) => command.name === 'goal')).toBe(true)
   })
 
-  it('opens slash completion only for a leading command on the current line', () => {
+  it('opens slash completion only for a command leading the whole message', () => {
     expect(findComposerAutocompleteMatch('/per', 4)).toEqual({
       trigger: '/',
       query: 'per',
       start: 0,
       end: 4,
     })
-    expect(findComposerAutocompleteMatch('first line\n  /mod', 17)).toEqual({
-      trigger: '/',
-      query: 'mod',
-      start: 13,
-      end: 17,
-    })
+    expect(findComposerAutocompleteMatch('first line\n  /mod', 17)).toBeNull()
     expect(findComposerAutocompleteMatch('explain /model', 14)).toBeNull()
   })
 
