@@ -450,6 +450,32 @@
   @apply border-zinc-600 bg-zinc-800;
 }
 
+:root.dark .thread-composer-autocomplete {
+  @apply border-zinc-600 bg-zinc-800;
+}
+
+:root.dark .thread-composer-autocomplete-row {
+  @apply text-zinc-300 hover:bg-zinc-700;
+}
+
+:root.dark .thread-composer-autocomplete-row.is-active {
+  @apply bg-zinc-700;
+}
+
+:root.dark .thread-composer-autocomplete-name {
+  @apply text-sky-300;
+}
+
+:root.dark .thread-composer-autocomplete-type,
+:root.dark .thread-composer-autocomplete-description,
+:root.dark .thread-composer-autocomplete-empty {
+  @apply text-zinc-400;
+}
+
+:root.dark .thread-composer-autocomplete-footer {
+  @apply border-zinc-700 text-zinc-500;
+}
+
 :root.dark .thread-composer-file-mention-row {
   @apply text-zinc-300 hover:bg-zinc-700;
 }
@@ -2630,6 +2656,7 @@
 :root:not(.dark) .model-reasoning-model-menu,
 :root:not(.dark) .thread-composer-attach-menu,
 :root:not(.dark) .thread-composer-file-mentions,
+:root:not(.dark) .thread-composer-autocomplete,
 :root:not(.dark) .thread-composer-context-popover,
 :root:not(.dark) .organize-menu-panel,
 :root:not(.dark) .project-menu-panel,
@@ -2652,6 +2679,7 @@
 :root.dark .model-reasoning-model-menu,
 :root.dark .thread-composer-attach-menu,
 :root.dark .thread-composer-file-mentions,
+:root.dark .thread-composer-autocomplete,
 :root.dark .thread-composer-context-popover,
 :root.dark .organize-menu-panel,
 :root.dark .project-menu-panel,

@@ -103,7 +103,40 @@
         <div v-if="isDragActive" class="thread-composer-drop-overlay" aria-hidden="true">
           <span class="thread-composer-drop-overlay-copy">{{ t('Drop images or files') }}</span>
         </div>
-        <div v-if="isFileMentionOpen" class="thread-composer-file-mentions">
+        <div
+          v-if="isComposerAutocompleteOpen"
+          ref="composerAutocompleteRootRef"
+          class="thread-composer-autocomplete"
+          role="listbox"
+          :aria-label="composerAutocompleteAriaLabel"
+        >
+          <div v-if="composerAutocompleteOptions.length > 0" class="thread-composer-autocomplete-list">
+            <button
+              v-for="(option, index) in composerAutocompleteOptions"
+              :key="option.key"
+              class="thread-composer-autocomplete-row"
+              :class="{ 'is-active': index === composerAutocompleteHighlightedIndex }"
+              type="button"
+              role="option"
+              :aria-selected="index === composerAutocompleteHighlightedIndex"
+              @pointerenter="composerAutocompleteHighlightedIndex = index"
+              @mousedown.prevent="applyComposerAutocompleteOption(option)"
+            >
+              <span class="thread-composer-autocomplete-lead">
+                <span class="thread-composer-autocomplete-name">
+                  {{ option.kind === 'command' ? `/${option.label}` : option.label }}
+                </span>
+                <span v-if="option.kind === 'skill'" class="thread-composer-autocomplete-type">[Skill]</span>
+              </span>
+              <span class="thread-composer-autocomplete-description">{{ t(option.description) }}</span>
+            </button>
+          </div>
+          <div v-else class="thread-composer-autocomplete-empty">
+            {{ activeComposerAutocomplete?.trigger === '/' ? t('No matching commands') : t('No matching skills') }}
+          </div>
+          <div class="thread-composer-autocomplete-footer">{{ t('Press Enter to insert or Esc to close') }}</div>
+        </div>
+        <div v-else-if="isFileMentionOpen" class="thread-composer-file-mentions">
           <template v-if="fileMentionSuggestions.length > 0">
             <button
               v-for="(item, index) in fileMentionSuggestions"
@@ -490,6 +523,15 @@ import IconTablerX from '../icons/IconTablerX.vue'
 import ComposerDropdown from './ComposerDropdown.vue'
 import ComposerModelReasoningDropdown from './ComposerModelReasoningDropdown.vue'
 import ComposerSearchDropdown from './ComposerSearchDropdown.vue'
+import {
+  buildSlashCommandInsertion,
+  filterComposerSkills,
+  filterComposerSlashCommands,
+  findComposerAutocompleteMatch,
+  replaceComposerAutocompleteMatch,
+  type ComposerAutocompleteMatch,
+  type ComposerSlashCommand,
+} from './composerAutocomplete'
 
 type SkillSourceBadge = {
   badge: string
@@ -501,6 +543,15 @@ type SkillItem = { name: string; displayName?: string; description: string; path
 type PermissionModeOption = {
   value: CodexPermissionMode
   label: string
+}
+
+type ComposerAutocompleteOption = {
+  key: string
+  kind: 'command' | 'skill'
+  label: string
+  description: string
+  command?: ComposerSlashCommand
+  skill?: SkillItem
 }
 
 const props = defineProps<{
@@ -638,6 +689,7 @@ const {
 })
 const attachMenuRootRef = ref<HTMLElement | null>(null)
 const contextUsageRootRef = ref<HTMLElement | null>(null)
+const composerAutocompleteRootRef = ref<HTMLElement | null>(null)
 const photoLibraryInputRef = ref<HTMLInputElement | null>(null)
 const cameraCaptureInputRef = ref<HTMLInputElement | null>(null)
 const folderPickerInputRef = ref<HTMLInputElement | null>(null)
@@ -650,6 +702,8 @@ const mentionQuery = ref('')
 const fileMentionSuggestions = ref<ComposerFileSuggestion[]>([])
 const isFileMentionOpen = ref(false)
 const fileMentionHighlightedIndex = ref(0)
+const activeComposerAutocomplete = ref<ComposerAutocompleteMatch | null>(null)
+const composerAutocompleteHighlightedIndex = ref(0)
 const isComposerExpanded = ref(false)
 const isDraftOverflowing = ref(false)
 let composerOverflowMeasurementQueued = false
@@ -721,6 +775,30 @@ const skillDropdownOptions = computed(() =>
     })),
   ],
 )
+const composerAutocompleteOptions = computed<ComposerAutocompleteOption[]>(() => {
+  const active = activeComposerAutocomplete.value
+  if (!active) return []
+  if (active.trigger === '/') {
+    return filterComposerSlashCommands(active.query).map((command) => ({
+      key: `command:${command.name}`,
+      kind: 'command',
+      label: command.name,
+      description: command.description,
+      command,
+    }))
+  }
+  return filterComposerSkills(props.skills ?? [], active.query).map((skill) => ({
+    key: `skill:${skill.path}`,
+    kind: 'skill',
+    label: skill.displayName || skill.name,
+    description: skill.description,
+    skill,
+  }))
+})
+const isComposerAutocompleteOpen = computed(() => activeComposerAutocomplete.value !== null)
+const composerAutocompleteAriaLabel = computed(() => (
+  activeComposerAutocomplete.value?.trigger === '/' ? t('Slash commands') : t('Skill suggestions')
+))
 
 const canSubmit = computed(() => {
   if (props.disabled) return false
@@ -828,7 +906,7 @@ const placeholderText = computed(() =>
     ? t('Select a thread to send a message')
     : isPlanModeWaitingForModel.value
       ? t('Loading models for plan mode...')
-      : t('Type a message... (@ for files)'),
+      : t('Type a message... (/ for commands, $ for skills, @ for files)'),
 )
 const hasSubmitContent = computed(() =>
   draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0,
@@ -1077,6 +1155,7 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
   isComposerExpanded.value = false
   folderUploadGroups.value = []
   isAttachMenuOpen.value = false
+  closeComposerAutocomplete()
   closeFileMention()
   if (isAndroid || isMobile.value) {
     inputRef.value?.blur()
@@ -1107,6 +1186,7 @@ function replaceDraftState(payload: ComposerDraftPayload): void {
   attachmentBatchStats.value = null
   pendingAttachmentCount.value = 0
   isAttachMenuOpen.value = false
+  closeComposerAutocomplete()
   closeFileMention()
   attachmentSessionToken += 1
 }
@@ -1699,10 +1779,40 @@ function onInputChange(): void {
     dictationFeedback.value = ''
   }
   queueComposerOverflowMeasurement()
+  updateComposerAutocompleteState()
+  if (isComposerAutocompleteOpen.value) {
+    closeFileMention()
+    return
+  }
   updateFileMentionState()
 }
 
 function onInputKeydown(event: KeyboardEvent): void {
+  if (isComposerAutocompleteOpen.value) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeComposerAutocomplete()
+      return
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveComposerAutocompleteHighlight(1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveComposerAutocompleteHighlight(-1)
+      return
+    }
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault()
+      const selected = composerAutocompleteOptions.value[composerAutocompleteHighlightedIndex.value]
+      if (selected) applyComposerAutocompleteOption(selected)
+      else closeComposerAutocomplete()
+      return
+    }
+  }
+
   if (isFileMentionOpen.value) {
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -1745,6 +1855,71 @@ function onInputKeydown(event: KeyboardEvent): void {
     onSubmit(props.isTurnInProgress ? activeInProgressMode.value : 'steer')
     return
   }
+}
+
+function closeComposerAutocomplete(): void {
+  activeComposerAutocomplete.value = null
+  composerAutocompleteHighlightedIndex.value = 0
+}
+
+function updateComposerAutocompleteState(): void {
+  const input = inputRef.value
+  if (!input) {
+    closeComposerAutocomplete()
+    return
+  }
+  const cursor = input.selectionStart ?? draft.value.length
+  const nextMatch = findComposerAutocompleteMatch(draft.value, cursor)
+  const previous = activeComposerAutocomplete.value
+  if (
+    !previous
+    || !nextMatch
+    || previous.trigger !== nextMatch.trigger
+    || previous.query !== nextMatch.query
+    || previous.start !== nextMatch.start
+  ) {
+    composerAutocompleteHighlightedIndex.value = 0
+  }
+  activeComposerAutocomplete.value = nextMatch
+}
+
+function moveComposerAutocompleteHighlight(delta: number): void {
+  const size = composerAutocompleteOptions.value.length
+  if (size === 0) return
+  composerAutocompleteHighlightedIndex.value =
+    (composerAutocompleteHighlightedIndex.value + delta + size) % size
+  void nextTick(() => {
+    composerAutocompleteRootRef.value
+      ?.querySelector<HTMLElement>('.thread-composer-autocomplete-row.is-active')
+      ?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+function applyComposerAutocompleteOption(option: ComposerAutocompleteOption): void {
+  const active = activeComposerAutocomplete.value
+  if (!active) return
+
+  let replacement = ''
+  if (option.kind === 'command' && option.command) {
+    replacement = buildSlashCommandInsertion(option.command)
+  } else if (option.kind === 'skill' && option.skill) {
+    if (!selectedSkills.value.some((skill) => skill.path === option.skill!.path)) {
+      selectedSkills.value = [...selectedSkills.value, option.skill]
+    }
+  } else {
+    return
+  }
+
+  const nextDraft = replaceComposerAutocompleteMatch(draft.value, active, replacement)
+  draft.value = nextDraft.text
+  closeComposerAutocomplete()
+  queueComposerOverflowMeasurement()
+  void nextTick(() => {
+    const input = inputRef.value
+    if (!input) return
+    input.focus()
+    input.setSelectionRange(nextDraft.cursor, nextDraft.cursor)
+  })
 }
 
 function closeFileMention(): void {
@@ -1959,6 +2134,16 @@ function onDocumentClick(event: MouseEvent): void {
   const contextRoot = contextUsageRootRef.value
   if (isContextDetailsOpen.value && contextRoot && !contextRoot.contains(target)) {
     isContextDetailsOpen.value = false
+  }
+
+  const autocompleteRoot = composerAutocompleteRootRef.value
+  const input = inputRef.value
+  if (
+    isComposerAutocompleteOpen.value
+    && target !== input
+    && (!autocompleteRoot || !autocompleteRoot.contains(target))
+  ) {
+    closeComposerAutocomplete()
   }
 }
 
@@ -2225,6 +2410,46 @@ watch(
 
 .thread-composer-file-mentions {
   @apply absolute left-0 right-0 bottom-[calc(100%+8px)] z-40 max-h-52 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1 shadow-lg;
+}
+
+.thread-composer-autocomplete {
+  @apply absolute left-0 right-0 bottom-[calc(100%+8px)] z-40 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-lg;
+}
+
+.thread-composer-autocomplete-list {
+  @apply max-h-72 overflow-y-auto p-1;
+}
+
+.thread-composer-autocomplete-row {
+  @apply flex w-full min-w-0 items-baseline gap-3 rounded-lg border-0 bg-transparent px-2.5 py-1.5 text-left text-xs text-zinc-700 transition hover:bg-zinc-100;
+}
+
+.thread-composer-autocomplete-row.is-active {
+  @apply bg-zinc-100;
+}
+
+.thread-composer-autocomplete-lead {
+  @apply flex min-w-0 basis-[42%] items-baseline gap-2;
+}
+
+.thread-composer-autocomplete-name {
+  @apply min-w-0 truncate font-medium text-sky-700;
+}
+
+.thread-composer-autocomplete-type {
+  @apply shrink-0 text-[10px] text-zinc-500;
+}
+
+.thread-composer-autocomplete-description {
+  @apply min-w-0 flex-1 truncate text-zinc-500;
+}
+
+.thread-composer-autocomplete-empty {
+  @apply px-3 py-3 text-center text-xs text-zinc-500;
+}
+
+.thread-composer-autocomplete-footer {
+  @apply border-t border-zinc-100 px-3 py-2 text-[11px] text-zinc-400;
 }
 
 .thread-composer-file-mention-row {
