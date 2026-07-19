@@ -1463,6 +1463,26 @@ const layoutProjectOrder = computed<string[]>(() => {
   return next
 })
 
+const projectLayoutSignature = computed(() =>
+  filteredGroups.value
+    .map((group) => [
+      group.projectName,
+      isCollapsed(group.projectName) ? 'collapsed' : 'expanded',
+      hasThreads(group) ? 'threads' : 'empty',
+      String(visibleThreads(group).length),
+      hasHiddenThreads(group) ? 'more' : 'all',
+    ].join('\u0000'))
+    .join('\u0001'),
+)
+
+watch(projectLayoutSignature, () => {
+  nextTick(() => {
+    for (const [projectName, element] of projectGroupElementByName) {
+      updateMeasuredProjectHeight(projectName, element)
+    }
+  })
+})
+
 const layoutTopByProject = computed<Record<string, number>>(() => {
   const topByProject: Record<string, number> = {}
   let currentTop = 0
