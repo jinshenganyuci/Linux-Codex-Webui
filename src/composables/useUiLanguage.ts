@@ -153,6 +153,7 @@ const zhCN: Record<string, string> = {
   'Skills': '技能',
   'Search skills...': '搜索技能...',
   'Search skills and prompts...': '搜索技能和提示词...',
+  'Type a message...': '输入消息…',
   'Type a message... (/ for commands, $ for skills, @ for files)': '输入消息……（/ 选择命令，$ 选择技能，@ 选择文件）',
   'Thinking': '思考强度',
   'Thinking activity': '正在思考',

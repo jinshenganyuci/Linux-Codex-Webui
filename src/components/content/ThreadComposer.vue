@@ -300,6 +300,7 @@
 
           <template v-if="!isDictationRecording">
             <ComposerDropdown
+              v-if="!isMobile"
               class="thread-composer-control thread-composer-permission-control"
               :model-value="selectedCodexPermissionMode"
               :options="permissionModeOptions"
@@ -318,6 +319,7 @@
               :create-label="t('Add new prompt')"
               :allow-remove="true"
               :remove-label="t('Remove prompt')"
+              :display-label-override="isMobile ? mobileSkillSummary : undefined"
               open-direction="up"
               :disabled="isComposerConfigDisabled"
               @toggle="onSkillDropdownToggle"
@@ -327,8 +329,23 @@
           </template>
         </div>
 
+        <button
+          v-if="isMobile && !isDictationRecording"
+          class="thread-composer-mobile-settings-trigger"
+          type="button"
+          :aria-label="mobileComposerSettingsAccessibleLabel"
+          :aria-expanded="isMobileSettingsOpen"
+          aria-haspopup="dialog"
+          :disabled="isComposerConfigDisabled"
+          @click="openMobileSettings"
+        >
+          <IconTablerSettings class="thread-composer-mobile-settings-icon" />
+          <span class="thread-composer-mobile-settings-summary">{{ mobileComposerSettingsSummary }}</span>
+          <IconTablerChevronDown class="thread-composer-mobile-settings-chevron" />
+        </button>
+
         <ComposerModelReasoningDropdown
-          v-if="!isDictationRecording"
+          v-if="!isDictationRecording && !isMobile"
           class="thread-composer-control thread-composer-model-reasoning-control"
           :selected-model="selectedModel"
           :selected-reasoning-effort="selectedReasoningEffort"
@@ -455,6 +472,68 @@
         </div>
       </div>
     </Teleport>
+    <Teleport to="body">
+      <div
+        v-if="isMobileSettingsOpen"
+        class="thread-composer-mobile-settings-backdrop"
+        @click.self="closeMobileSettings"
+      >
+        <section
+          class="thread-composer-mobile-settings-sheet"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="t('Settings')"
+        >
+          <div class="thread-composer-mobile-settings-grabber" aria-hidden="true" />
+          <div class="thread-composer-mobile-settings-header">
+            <div>
+              <p class="thread-composer-mobile-settings-eyebrow">{{ t('Settings') }}</p>
+              <h2 class="thread-composer-mobile-settings-title">{{ mobileComposerSettingsSummary }}</h2>
+            </div>
+            <button
+              class="thread-composer-mobile-settings-close"
+              type="button"
+              :aria-label="t('Close')"
+              :title="t('Close')"
+              @click="closeMobileSettings"
+            >
+              <IconTablerX class="thread-composer-mobile-settings-close-icon" />
+            </button>
+          </div>
+
+          <div class="thread-composer-mobile-settings-section">
+            <span class="thread-composer-mobile-settings-label">{{ t('Codex permissions') }}</span>
+            <ComposerDropdown
+              class="thread-composer-mobile-settings-permission"
+              :model-value="selectedCodexPermissionMode"
+              :options="permissionModeOptions"
+              :placeholder="t('Codex permissions')"
+              open-direction="up"
+              :disabled="isPermissionModeDisabled"
+              @update:model-value="onPermissionModeSelect"
+            />
+          </div>
+
+          <div class="thread-composer-mobile-settings-section">
+            <span class="thread-composer-mobile-settings-label">{{ t('Model') }} · {{ t('Reasoning') }}</span>
+            <ComposerModelReasoningDropdown
+              class="thread-composer-mobile-settings-model"
+              :selected-model="selectedModel"
+              :selected-reasoning-effort="selectedReasoningEffort"
+              :selected-speed-mode="selectedSpeedMode"
+              :is-fast-mode-supported="isFastModeSupported"
+              :model-options="modelOptions"
+              :reasoning-options="reasoningOptions"
+              open-direction="up"
+              :disabled="isComposerConfigDisabled"
+              :layer-z-index="310"
+              @update:selected-model="onModelSelect"
+              @update:selected-reasoning-effort="onReasoningEffortSelect"
+            />
+          </div>
+        </section>
+      </div>
+    </Teleport>
     <input
       ref="photoLibraryInputRef"
       class="thread-composer-hidden-input"
@@ -513,12 +592,14 @@ import {
   type ComposerPromptInfo,
 } from '../../api/codexGateway'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
+import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerFolder from '../icons/IconTablerFolder.vue'
 import IconTablerMaximize from '../icons/IconTablerMaximize.vue'
 import IconTablerMicrophone from '../icons/IconTablerMicrophone.vue'
 import IconTablerMinimize from '../icons/IconTablerMinimize.vue'
 import IconTablerPlayerStopFilled from '../icons/IconTablerPlayerStopFilled.vue'
+import IconTablerSettings from '../icons/IconTablerSettings.vue'
 import IconTablerX from '../icons/IconTablerX.vue'
 import ComposerDropdown from './ComposerDropdown.vue'
 import ComposerModelReasoningDropdown from './ComposerModelReasoningDropdown.vue'
@@ -697,6 +778,7 @@ const inputRef = ref<HTMLTextAreaElement | null>(null)
 const { isMobile } = useMobile()
 const isAttachMenuOpen = ref(false)
 const isContextDetailsOpen = ref(false)
+const isMobileSettingsOpen = ref(false)
 const mentionStartIndex = ref<number | null>(null)
 const mentionQuery = ref('')
 const fileMentionSuggestions = ref<ComposerFileSuggestion[]>([])
@@ -737,6 +819,14 @@ function formatModelLabel(modelId: string): string {
   return modelId.trim().replace(/^gpt/i, 'GPT')
 }
 
+function compactReasoningEffortLabel(value: ReasoningEffort | ''): string {
+  if (value === 'minimal') return 'Min'
+  if (value === 'medium') return 'Med'
+  if (value === 'xhigh') return 'XH'
+  if (value) return reasoningEffortLabels[value]
+  return t('Thinking')
+}
+
 const modelOptions = computed(() =>
   sortModelIdsByStrength(props.models).map((modelId) => ({
     value: modelId,
@@ -750,6 +840,9 @@ const isPlanModeWaitingForModel = computed(() =>
 )
 
 const selectedSkillPaths = computed(() => selectedSkills.value.map((s) => s.path))
+const mobileSkillSummary = computed(() => (
+  selectedSkills.value.length > 0 ? `${t('Skills')} ${selectedSkills.value.length}` : t('Skills')
+))
 const skillDropdownOptions = computed(() =>
   [
     ...(props.skills ?? []).map((s) => {
@@ -848,6 +941,26 @@ const permissionModeOptions = computed<PermissionModeOption[]>(() => [
     label: t('Full access'),
   },
 ])
+const selectedPermissionLabel = computed(() => (
+  permissionModeOptions.value.find((option) => option.value === props.selectedCodexPermissionMode)?.label
+  ?? t('Codex permissions')
+))
+const selectedModelLabel = computed(() => (
+  modelOptions.value.find((option) => option.value === props.selectedModel)?.label
+  ?? formatModelLabel(props.selectedModel)
+))
+const selectedReasoningLabel = computed(() => (
+  reasoningOptions.value.find((option) => option.value === props.selectedReasoningEffort)?.label
+  ?? t('Thinking')
+))
+const mobileComposerSettingsSummary = computed(() => {
+  const compactModel = selectedModelLabel.value.trim().replace(/^GPT[-\s]?/i, '') || t('Model')
+  const compactReasoning = compactReasoningEffortLabel(props.selectedReasoningEffort)
+  return `${compactModel} · ${compactReasoning}`
+})
+const mobileComposerSettingsAccessibleLabel = computed(() => (
+  `${t('Settings')}: ${t('Model')} ${selectedModelLabel.value || t('Model')}, ${t('Reasoning')} ${selectedReasoningLabel.value}, ${t('Codex permissions')} ${selectedPermissionLabel.value}`
+))
 const speedModeDescription = computed(() => {
   if (props.isUpdatingSpeedMode) {
     return t('Saving speed setting...')
@@ -906,7 +1019,9 @@ const placeholderText = computed(() =>
     ? t('Select a thread to send a message')
     : isPlanModeWaitingForModel.value
       ? t('Loading models for plan mode...')
-      : t('Type a message... (/ for commands, $ for skills, @ for files)'),
+      : isMobile.value
+        ? t('Type a message...')
+        : t('Type a message... (/ for commands, $ for skills, @ for files)'),
 )
 const hasSubmitContent = computed(() =>
   draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0,
@@ -1404,6 +1519,20 @@ function onDictationPressEnd(): void {
 function toggleAttachMenu(): void {
   if (isInteractionDisabled.value) return
   isAttachMenuOpen.value = !isAttachMenuOpen.value
+}
+
+function openMobileSettings(): void {
+  if (!isMobile.value || isComposerConfigDisabled.value) return
+  isAttachMenuOpen.value = false
+  closeContextUsageDetails()
+  closeComposerAutocomplete()
+  closeFileMention()
+  inputRef.value?.blur()
+  isMobileSettingsOpen.value = true
+}
+
+function closeMobileSettings(): void {
+  isMobileSettingsOpen.value = false
 }
 
 function triggerPhotoLibrary(): void {
@@ -2231,8 +2360,13 @@ watch(
   () => props.activeThreadId,
   () => {
     isContextDetailsOpen.value = false
+    closeMobileSettings()
   },
 )
+
+watch(isMobile, (mobile) => {
+  if (!mobile) closeMobileSettings()
+})
 
 watch(
   contextUsageView,
@@ -2642,6 +2776,69 @@ watch(
   @apply truncate;
 }
 
+.thread-composer-mobile-settings-trigger {
+  @apply hidden;
+}
+
+.thread-composer-mobile-settings-backdrop {
+  @apply fixed inset-0 z-[280] hidden items-end bg-zinc-950/25 p-2;
+}
+
+.thread-composer-mobile-settings-sheet {
+  @apply w-full max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-[1.5rem] border border-zinc-200 bg-white/95 px-4 pt-2 shadow-2xl;
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+}
+
+.thread-composer-mobile-settings-grabber {
+  @apply mx-auto h-1 w-10 rounded-full bg-zinc-300;
+}
+
+.thread-composer-mobile-settings-header {
+  @apply mt-3 flex min-w-0 items-center justify-between gap-3;
+}
+
+.thread-composer-mobile-settings-eyebrow {
+  @apply m-0 text-xs font-medium uppercase tracking-[0.08em] text-zinc-500;
+}
+
+.thread-composer-mobile-settings-title {
+  @apply mt-0.5 truncate text-base font-semibold tracking-tight text-zinc-900;
+}
+
+.thread-composer-mobile-settings-close {
+  @apply inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-zinc-200 bg-zinc-100 text-zinc-600 transition hover:bg-zinc-200 hover:text-zinc-900;
+}
+
+.thread-composer-mobile-settings-close-icon {
+  @apply h-5 w-5;
+}
+
+.thread-composer-mobile-settings-section {
+  @apply mt-4;
+}
+
+.thread-composer-mobile-settings-label {
+  @apply mb-1.5 block text-xs font-medium text-zinc-500;
+}
+
+.thread-composer-mobile-settings-permission,
+.thread-composer-mobile-settings-model {
+  @apply block w-full;
+}
+
+.thread-composer-mobile-settings-permission :deep(.composer-dropdown) {
+  @apply block w-full;
+}
+
+.thread-composer-mobile-settings-permission :deep(.composer-dropdown-trigger),
+.thread-composer-mobile-settings-model :deep(.model-reasoning-trigger) {
+  @apply min-h-11 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-800 shadow-sm transition hover:border-zinc-300 hover:bg-white;
+}
+
+.thread-composer-mobile-settings-permission :deep(.composer-dropdown-menu-wrap) {
+  z-index: 320;
+}
+
 
 .thread-composer-actions {
   @apply flex shrink-0 items-center gap-1.5;
@@ -2779,5 +2976,105 @@ watch(
 
 .thread-composer-hidden-input {
   @apply hidden;
+}
+
+@media (max-width: 767px) {
+  .thread-composer-shell {
+    @apply p-2;
+  }
+
+  .thread-composer-input {
+    @apply min-h-11 py-2;
+  }
+
+  .thread-composer-controls {
+    @apply mt-1 gap-1;
+  }
+
+  .thread-composer-leading-controls {
+    @apply shrink-0 gap-1;
+  }
+
+  .thread-composer-attach-trigger {
+    @apply h-11 w-11 rounded-xl border border-zinc-200 bg-zinc-50 text-2xl shadow-sm hover:bg-zinc-100;
+  }
+
+  .thread-composer-skill-control {
+    @apply w-14 max-w-none shrink-0;
+  }
+
+  .thread-composer-skill-control :deep(.search-dropdown),
+  .thread-composer-skill-control :deep(.search-dropdown-trigger) {
+    @apply w-full;
+  }
+
+  .thread-composer-skill-control :deep(.search-dropdown-trigger) {
+    @apply min-h-11 justify-center gap-0.5 rounded-xl border border-zinc-200 bg-zinc-50 px-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-100;
+  }
+
+  .thread-composer-skill-control :deep(.search-dropdown-value) {
+    @apply max-w-8 truncate;
+  }
+
+  .thread-composer-mobile-settings-trigger {
+    @apply inline-flex h-11 min-w-0 flex-1 items-center gap-1 rounded-xl border border-zinc-200 bg-zinc-50 px-1.5 text-left text-xs font-medium text-zinc-800 shadow-sm transition hover:border-zinc-300 hover:bg-white disabled:cursor-not-allowed disabled:text-zinc-400;
+  }
+
+  .thread-composer-mobile-settings-icon {
+    @apply h-4 w-4 shrink-0 text-zinc-500;
+  }
+
+  .thread-composer-mobile-settings-summary {
+    @apply min-w-0 flex-1 truncate whitespace-nowrap;
+  }
+
+  .thread-composer-mobile-settings-chevron {
+    @apply h-4 w-4 shrink-0 text-zinc-500;
+  }
+
+  .thread-composer-model-reasoning-control {
+    @apply hidden;
+  }
+
+  .thread-composer-actions {
+    @apply gap-1;
+  }
+
+  .thread-composer-mic,
+  .thread-composer-submit,
+  .thread-composer-stop {
+    @apply h-11 w-11;
+  }
+
+  .thread-composer-context-button {
+    @apply h-10 w-10;
+  }
+
+  .thread-composer-mobile-settings-backdrop {
+    @apply flex;
+  }
+}
+
+@media (max-width: 359px) {
+  .thread-composer-skill-control {
+    @apply w-12;
+  }
+
+  .thread-composer-skill-control :deep(.search-dropdown-trigger) {
+    @apply px-1 text-[11px];
+  }
+
+  .thread-composer-mobile-settings-trigger {
+    @apply w-11 flex-none justify-center px-0;
+  }
+
+  .thread-composer-mobile-settings-summary,
+  .thread-composer-mobile-settings-chevron {
+    @apply hidden;
+  }
+
+  .thread-composer-context-button {
+    @apply h-9 w-9;
+  }
 }
 </style>

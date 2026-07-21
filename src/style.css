@@ -353,6 +353,49 @@
   @apply text-zinc-400;
 }
 
+:root.dark .thread-composer-mobile-settings-backdrop {
+  @apply bg-zinc-950/60;
+}
+
+:root.dark .thread-composer-mobile-settings-sheet {
+  @apply border-zinc-700 bg-zinc-800/95;
+}
+
+:root.dark .thread-composer-mobile-settings-grabber {
+  @apply bg-zinc-600;
+}
+
+:root.dark .thread-composer-mobile-settings-eyebrow,
+:root.dark .thread-composer-mobile-settings-label {
+  @apply text-zinc-400;
+}
+
+:root.dark .thread-composer-mobile-settings-title {
+  @apply text-zinc-100;
+}
+
+:root.dark .thread-composer-mobile-settings-close {
+  @apply border-zinc-600 bg-zinc-700 text-zinc-300 hover:bg-zinc-600 hover:text-white;
+}
+
+:root.dark .thread-composer-mobile-settings-trigger,
+:root.dark .thread-composer-mobile-settings-permission .composer-dropdown-trigger,
+:root.dark .thread-composer-mobile-settings-model .model-reasoning-trigger {
+  @apply border-zinc-600 bg-zinc-700/80 text-zinc-100 hover:border-zinc-500 hover:bg-zinc-700;
+}
+
+:root.dark .thread-composer-mobile-settings-icon,
+:root.dark .thread-composer-mobile-settings-chevron {
+  @apply text-zinc-400;
+}
+
+@media (max-width: 767px) {
+  :root.dark .thread-composer-attach-trigger,
+  :root.dark .thread-composer-skill-control .search-dropdown-trigger {
+    @apply border-zinc-600 bg-zinc-700/80 text-zinc-100 hover:border-zinc-500 hover:bg-zinc-700;
+  }
+}
+
 :root.dark .content-header {
   @apply border-zinc-800 bg-zinc-950;
 }

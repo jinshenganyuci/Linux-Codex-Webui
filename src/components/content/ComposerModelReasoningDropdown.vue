@@ -101,6 +101,7 @@ const props = defineProps<{
   reasoningOptions: DropdownOption<ReasoningEffort>[]
   disabled?: boolean
   openDirection?: 'up' | 'down'
+  layerZIndex?: number
 }>()
 
 const emit = defineEmits<{
@@ -191,6 +192,7 @@ function updateMenuPosition(): void {
     left: `${left}px`,
     top: `${top}px`,
     width: `${mainWidth}px`,
+    ...(typeof props.layerZIndex === 'number' ? { zIndex: String(props.layerZIndex) } : {}),
   }
 }
 
