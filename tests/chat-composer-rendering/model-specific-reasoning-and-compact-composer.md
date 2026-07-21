@@ -15,7 +15,7 @@ The composer keeps common mobile actions immediately available while moving perm
 3. Change the permission mode in the sheet, close it, and reopen it. Confirm the selected permission persists and the main toolbar does not grow or overlap.
 4. Select the Sol model, open the model/reasoning selector, and inspect all reasoning options. Select `ultra`, close the selector and sheet, and confirm the compact main summary updates.
 5. Reopen the sheet, select Luna, and confirm only Luna-supported reasoning options are offered.
-6. Open the skills picker from the main toolbar, select a skill or prompt, then confirm it remains usable after opening and closing the settings sheet.
+6. On mobile, open the skills picker from the main toolbar and confirm the list opens without focusing the search field or summoning the software keyboard. Tap the search field explicitly and confirm text input still works, then select a skill or prompt and verify the picker remains usable after opening and closing the settings sheet.
 7. With a catalog-supported model, enable Fast mode from the attachment menu and confirm the model/reasoning selector remains usable.
 8. Repeat steps 1-7 in dark theme, then repeat the toolbar inspection at `768x1024`, `1024x768`, and `1440x900`.
 
@@ -23,6 +23,7 @@ The composer keeps common mobile actions immediately available while moving perm
 - At `375x812`, the empty composer keeps its controls on one usable toolbar row: add, skills, the settings/model summary, context when present, and send. No control overlaps, clips, or creates horizontal page overflow.
 - The mobile settings trigger reads as one summary such as `5.6-sol · Ultra`; long summaries truncate as a unit instead of wrapping into a second control row.
 - The settings sheet is above the composer, is dismissible by its close button or backdrop, and its interactive controls have a 44px touch target.
+- Opening the mobile skills picker does not automatically focus its search field; the picker remains fully visible until the user searches, selects an item, or dismisses it.
 - Desktop keeps the existing standalone permissions and model/reasoning controls rather than showing the mobile settings sheet.
 - Sol exposes exactly `Low`, `Medium`, `High`, `XHigh`, `Max`, and `Ultra`, using the official Codex display casing.
 - Luna only exposes efforts returned for Luna and does not inherit Sol-only `Ultra`.

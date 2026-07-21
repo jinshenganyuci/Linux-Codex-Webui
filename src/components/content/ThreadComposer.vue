@@ -320,6 +320,7 @@
               :allow-remove="true"
               :remove-label="t('Remove prompt')"
               :display-label-override="isMobile ? mobileSkillSummary : undefined"
+              :auto-focus-search="!isMobile"
               open-direction="up"
               :disabled="isComposerConfigDisabled"
               @toggle="onSkillDropdownToggle"

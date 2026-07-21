@@ -132,6 +132,7 @@ const props = defineProps<{
   allowRemove?: boolean
   removeLabel?: string
   displayLabelOverride?: string
+  autoFocusSearch?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -215,7 +216,9 @@ function onToggle(): void {
       nextTick(() => {
         updateMenuPosition()
       })
-      searchRef.value?.focus()
+      if (props.autoFocusSearch !== false) {
+        searchRef.value?.focus()
+      }
     })
   }
 }
