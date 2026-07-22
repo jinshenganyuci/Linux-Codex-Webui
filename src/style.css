@@ -3078,6 +3078,48 @@ samp {
   border-color: var(--mac-border);
 }
 
+:root:not(.dark) .thread-composer-mobile-settings-trigger,
+:root.dark .thread-composer-mobile-settings-trigger,
+:root:not(.dark) .thread-composer-attach-trigger,
+:root.dark .thread-composer-attach-trigger,
+:root:not(.dark) .thread-composer-skill-control .search-dropdown-trigger,
+:root.dark .thread-composer-skill-control .search-dropdown-trigger {
+  background-color: var(--mac-surface-strong);
+  border-color: var(--mac-border);
+  color: var(--mac-text);
+  box-shadow: inset 0 1px 0 var(--mac-highlight);
+}
+
+:root:not(.dark) .thread-composer-mobile-settings-title,
+:root:not(.dark) .thread-composer-mobile-settings-row,
+:root:not(.dark) .thread-composer-mobile-settings-option,
+:root.dark .thread-composer-mobile-settings-title,
+:root.dark .thread-composer-mobile-settings-row,
+:root.dark .thread-composer-mobile-settings-option {
+  color: var(--mac-text);
+}
+
+:root.dark .thread-composer-mobile-settings-eyebrow,
+:root.dark .thread-composer-mobile-settings-row-value,
+:root.dark .thread-composer-mobile-settings-icon,
+:root.dark .thread-composer-mobile-settings-chevron,
+:root.dark .thread-composer-mobile-settings-row-chevron {
+  color: var(--mac-muted);
+}
+
+:root.dark .thread-composer-context-button::before {
+  background-color: var(--mac-solid);
+}
+
+:root:not(.dark) .thread-composer-context-popover,
+:root.dark .thread-composer-context-popover,
+:root:not(.dark) .thread-composer-context-popover::after,
+:root.dark .thread-composer-context-popover::after {
+  background-color: var(--mac-solid);
+  border-color: var(--mac-border-strong);
+  color: var(--mac-text);
+}
+
 @media (prefers-reduced-transparency: reduce) {
   :root:not(.dark) {
     --mac-sidebar: #f3f6fa;

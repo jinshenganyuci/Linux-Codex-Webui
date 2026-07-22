@@ -332,10 +332,12 @@
 
         <button
           v-if="isMobile && !isDictationRecording"
+          ref="mobileSettingsTriggerRef"
           class="thread-composer-mobile-settings-trigger"
           type="button"
           :aria-label="mobileComposerSettingsAccessibleLabel"
           :aria-expanded="isMobileSettingsOpen"
+          aria-controls="thread-composer-mobile-settings-sheet"
           aria-haspopup="dialog"
           :disabled="isComposerConfigDisabled"
           @click="openMobileSettings"
@@ -474,66 +476,164 @@
       </div>
     </Teleport>
     <Teleport to="body">
-      <div
-        v-if="isMobileSettingsOpen"
-        class="thread-composer-mobile-settings-backdrop"
-        @click.self="closeMobileSettings"
-      >
-        <section
-          class="thread-composer-mobile-settings-sheet"
-          role="dialog"
-          aria-modal="true"
-          :aria-label="t('Settings')"
+      <Transition name="mobile-settings">
+        <div
+          v-if="isMobileSettingsOpen"
+          class="thread-composer-mobile-settings-backdrop"
+          @click.self="closeMobileSettings"
         >
-          <div class="thread-composer-mobile-settings-grabber" aria-hidden="true" />
-          <div class="thread-composer-mobile-settings-header">
-            <div>
-              <p class="thread-composer-mobile-settings-eyebrow">{{ t('Settings') }}</p>
-              <h2 class="thread-composer-mobile-settings-title">{{ mobileComposerSettingsSummary }}</h2>
+          <section
+            id="thread-composer-mobile-settings-sheet"
+            ref="mobileSettingsSheetRef"
+            class="thread-composer-mobile-settings-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="thread-composer-mobile-settings-title"
+            tabindex="-1"
+            @keydown="onMobileSettingsKeydown"
+          >
+            <div class="thread-composer-mobile-settings-grabber" aria-hidden="true" />
+            <div class="thread-composer-mobile-settings-header">
+              <button
+                v-if="mobileSettingsView !== 'root'"
+                ref="mobileSettingsBackRef"
+                class="thread-composer-mobile-settings-back"
+                type="button"
+                :aria-label="t('Back')"
+                :title="t('Back')"
+                @click="openMobileSettingsView('root')"
+              >
+                <IconTablerChevronLeft class="thread-composer-mobile-settings-back-icon" />
+              </button>
+              <div class="thread-composer-mobile-settings-heading">
+                <p class="thread-composer-mobile-settings-eyebrow">{{ t('Settings') }}</p>
+                <h2 id="thread-composer-mobile-settings-title" class="thread-composer-mobile-settings-title">
+                  {{ mobileSettingsTitle }}
+                </h2>
+              </div>
+              <button
+                ref="mobileSettingsCloseRef"
+                class="thread-composer-mobile-settings-close"
+                type="button"
+                :aria-label="t('Close')"
+                :title="t('Close')"
+                @click="closeMobileSettings"
+              >
+                <IconTablerX class="thread-composer-mobile-settings-close-icon" />
+              </button>
             </div>
-            <button
-              class="thread-composer-mobile-settings-close"
-              type="button"
-              :aria-label="t('Close')"
-              :title="t('Close')"
-              @click="closeMobileSettings"
+
+            <div v-if="mobileSettingsView === 'root'" class="thread-composer-mobile-settings-list">
+              <button
+                ref="mobileSettingsFirstRowRef"
+                class="thread-composer-mobile-settings-row"
+                type="button"
+                :disabled="isPermissionModeDisabled"
+                @click="openMobileSettingsView('permission')"
+              >
+                <span class="thread-composer-mobile-settings-row-copy">
+                  <span class="thread-composer-mobile-settings-row-label">{{ t('Codex permissions') }}</span>
+                  <span class="thread-composer-mobile-settings-row-value">{{ selectedPermissionLabel }}</span>
+                </span>
+                <IconTablerChevronRight class="thread-composer-mobile-settings-row-chevron" />
+              </button>
+              <button
+                class="thread-composer-mobile-settings-row"
+                type="button"
+                :disabled="isComposerConfigDisabled"
+                @click="openMobileSettingsView('model')"
+              >
+                <span class="thread-composer-mobile-settings-row-copy">
+                  <span class="thread-composer-mobile-settings-row-label">{{ t('Model') }}</span>
+                  <span class="thread-composer-mobile-settings-row-value">{{ selectedModelLabel || t('Model') }}</span>
+                </span>
+                <IconTablerChevronRight class="thread-composer-mobile-settings-row-chevron" />
+              </button>
+              <button
+                class="thread-composer-mobile-settings-row"
+                type="button"
+                :disabled="isComposerConfigDisabled"
+                @click="openMobileSettingsView('reasoning')"
+              >
+                <span class="thread-composer-mobile-settings-row-copy">
+                  <span class="thread-composer-mobile-settings-row-label">{{ t('Reasoning') }}</span>
+                  <span class="thread-composer-mobile-settings-row-value">{{ selectedReasoningLabel }}</span>
+                </span>
+                <IconTablerChevronRight class="thread-composer-mobile-settings-row-chevron" />
+              </button>
+            </div>
+
+            <div
+              v-else-if="mobileSettingsView === 'permission'"
+              class="thread-composer-mobile-settings-options"
+              role="listbox"
+              :aria-label="t('Codex permissions')"
             >
-              <IconTablerX class="thread-composer-mobile-settings-close-icon" />
-            </button>
-          </div>
+              <button
+                v-for="option in permissionModeOptions"
+                :key="option.value"
+                class="thread-composer-mobile-settings-option"
+                :class="{ 'is-selected': selectedCodexPermissionMode === option.value }"
+                type="button"
+                role="option"
+                :aria-selected="selectedCodexPermissionMode === option.value"
+                @click="selectMobilePermission(option.value)"
+              >
+                <span>{{ option.label }}</span>
+                <span class="thread-composer-mobile-settings-check" aria-hidden="true">
+                  {{ selectedCodexPermissionMode === option.value ? '✓' : '' }}
+                </span>
+              </button>
+            </div>
 
-          <div class="thread-composer-mobile-settings-section">
-            <span class="thread-composer-mobile-settings-label">{{ t('Codex permissions') }}</span>
-            <ComposerDropdown
-              class="thread-composer-mobile-settings-permission"
-              :model-value="selectedCodexPermissionMode"
-              :options="permissionModeOptions"
-              :placeholder="t('Codex permissions')"
-              open-direction="up"
-              :disabled="isPermissionModeDisabled"
-              @update:model-value="onPermissionModeSelect"
-            />
-          </div>
+            <div
+              v-else-if="mobileSettingsView === 'model'"
+              class="thread-composer-mobile-settings-options"
+              role="listbox"
+              :aria-label="t('Model')"
+            >
+              <button
+                v-for="option in modelOptions"
+                :key="option.value"
+                class="thread-composer-mobile-settings-option"
+                :class="{ 'is-selected': selectedModel === option.value }"
+                type="button"
+                role="option"
+                :aria-selected="selectedModel === option.value"
+                @click="selectMobileModel(option.value)"
+              >
+                <span>{{ option.label }}</span>
+                <span class="thread-composer-mobile-settings-check" aria-hidden="true">
+                  {{ selectedModel === option.value ? '✓' : '' }}
+                </span>
+              </button>
+            </div>
 
-          <div class="thread-composer-mobile-settings-section">
-            <span class="thread-composer-mobile-settings-label">{{ t('Model') }} · {{ t('Reasoning') }}</span>
-            <ComposerModelReasoningDropdown
-              class="thread-composer-mobile-settings-model"
-              :selected-model="selectedModel"
-              :selected-reasoning-effort="selectedReasoningEffort"
-              :selected-speed-mode="selectedSpeedMode"
-              :is-fast-mode-supported="isFastModeSupported"
-              :model-options="modelOptions"
-              :reasoning-options="reasoningOptions"
-              open-direction="up"
-              :disabled="isComposerConfigDisabled"
-              :layer-z-index="310"
-              @update:selected-model="onModelSelect"
-              @update:selected-reasoning-effort="onReasoningEffortSelect"
-            />
-          </div>
-        </section>
-      </div>
+            <div
+              v-else
+              class="thread-composer-mobile-settings-options"
+              role="listbox"
+              :aria-label="t('Reasoning')"
+            >
+              <button
+                v-for="option in reasoningOptions"
+                :key="option.value"
+                class="thread-composer-mobile-settings-option"
+                :class="{ 'is-selected': selectedReasoningEffort === option.value }"
+                type="button"
+                role="option"
+                :aria-selected="selectedReasoningEffort === option.value"
+                @click="selectMobileReasoning(option.value)"
+              >
+                <span>{{ option.label }}</span>
+                <span class="thread-composer-mobile-settings-check" aria-hidden="true">
+                  {{ selectedReasoningEffort === option.value ? '✓' : '' }}
+                </span>
+              </button>
+            </div>
+          </section>
+        </div>
+      </Transition>
     </Teleport>
     <input
       ref="photoLibraryInputRef"
@@ -594,6 +694,8 @@ import {
 } from '../../api/codexGateway'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
+import IconTablerChevronLeft from '../icons/IconTablerChevronLeft.vue'
+import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerFolder from '../icons/IconTablerFolder.vue'
 import IconTablerMaximize from '../icons/IconTablerMaximize.vue'
@@ -776,10 +878,20 @@ const photoLibraryInputRef = ref<HTMLInputElement | null>(null)
 const cameraCaptureInputRef = ref<HTMLInputElement | null>(null)
 const folderPickerInputRef = ref<HTMLInputElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
+const mobileSettingsTriggerRef = ref<HTMLButtonElement | null>(null)
+const mobileSettingsSheetRef = ref<HTMLElement | null>(null)
+const mobileSettingsCloseRef = ref<HTMLButtonElement | null>(null)
+const mobileSettingsBackRef = ref<HTMLButtonElement | null>(null)
+const mobileSettingsFirstRowRef = ref<HTMLButtonElement | null>(null)
 const { isMobile } = useMobile()
 const isAttachMenuOpen = ref(false)
 const isContextDetailsOpen = ref(false)
 const isMobileSettingsOpen = ref(false)
+type MobileSettingsView = 'root' | 'permission' | 'model' | 'reasoning'
+const mobileSettingsView = ref<MobileSettingsView>('root')
+let mobileSettingsBackground: HTMLElement | null = null
+let mobileSettingsBackgroundWasInert = false
+let previousBodyOverflow = ''
 const mentionStartIndex = ref<number | null>(null)
 const mentionQuery = ref('')
 const fileMentionSuggestions = ref<ComposerFileSuggestion[]>([])
@@ -962,6 +1074,12 @@ const mobileComposerSettingsSummary = computed(() => {
 const mobileComposerSettingsAccessibleLabel = computed(() => (
   `${t('Settings')}: ${t('Model')} ${selectedModelLabel.value || t('Model')}, ${t('Reasoning')} ${selectedReasoningLabel.value}, ${t('Codex permissions')} ${selectedPermissionLabel.value}`
 ))
+const mobileSettingsTitle = computed(() => {
+  if (mobileSettingsView.value === 'permission') return t('Codex permissions')
+  if (mobileSettingsView.value === 'model') return t('Model')
+  if (mobileSettingsView.value === 'reasoning') return t('Reasoning')
+  return t('Settings')
+})
 const speedModeDescription = computed(() => {
   if (props.isUpdatingSpeedMode) {
     return t('Saving speed setting...')
@@ -1529,11 +1647,104 @@ function openMobileSettings(): void {
   closeComposerAutocomplete()
   closeFileMention()
   inputRef.value?.blur()
+  mobileSettingsView.value = 'root'
   isMobileSettingsOpen.value = true
+  setMobileSettingsBackgroundLocked(true)
+  void nextTick(() => {
+    mobileSettingsCloseRef.value?.focus({ preventScroll: true })
+  })
 }
 
 function closeMobileSettings(): void {
+  dismissMobileSettings(true)
+}
+
+function dismissMobileSettings(restoreFocus: boolean): void {
+  if (!isMobileSettingsOpen.value) return
   isMobileSettingsOpen.value = false
+  mobileSettingsView.value = 'root'
+  setMobileSettingsBackgroundLocked(false)
+  if (restoreFocus) {
+    void nextTick(() => {
+      mobileSettingsTriggerRef.value?.focus({ preventScroll: true })
+    })
+  }
+}
+
+function setMobileSettingsBackgroundLocked(locked: boolean): void {
+  if (typeof document === 'undefined') return
+  if (locked) {
+    previousBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const background = document.querySelector<HTMLElement>('.desktop-layout')
+    mobileSettingsBackground = background
+    mobileSettingsBackgroundWasInert = background?.hasAttribute('inert') ?? false
+    if (background && !mobileSettingsBackgroundWasInert) background.setAttribute('inert', '')
+    return
+  }
+
+  document.body.style.overflow = previousBodyOverflow
+  if (mobileSettingsBackground && !mobileSettingsBackgroundWasInert) {
+    mobileSettingsBackground.removeAttribute('inert')
+  }
+  mobileSettingsBackground = null
+  mobileSettingsBackgroundWasInert = false
+}
+
+function openMobileSettingsView(view: MobileSettingsView): void {
+  mobileSettingsView.value = view
+  void nextTick(() => {
+    if (view === 'root') {
+      mobileSettingsFirstRowRef.value?.focus({ preventScroll: true })
+      return
+    }
+    mobileSettingsBackRef.value?.focus({ preventScroll: true })
+  })
+}
+
+function selectMobilePermission(value: CodexPermissionMode): void {
+  onPermissionModeSelect(value)
+  openMobileSettingsView('root')
+}
+
+function selectMobileModel(value: string): void {
+  onModelSelect(value)
+  openMobileSettingsView('root')
+}
+
+function selectMobileReasoning(value: ReasoningEffort): void {
+  onReasoningEffortSelect(value)
+  openMobileSettingsView('root')
+}
+
+function onMobileSettingsKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeMobileSettings()
+    return
+  }
+  if (event.key !== 'Tab') return
+
+  const sheet = mobileSettingsSheetRef.value
+  if (!sheet) return
+  const focusable = Array.from(sheet.querySelectorAll<HTMLElement>(
+    'button:not(:disabled), [href], input:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+  )).filter((element) => element.getClientRects().length > 0)
+  if (focusable.length === 0) {
+    event.preventDefault()
+    sheet.focus({ preventScroll: true })
+    return
+  }
+
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus({ preventScroll: true })
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus({ preventScroll: true })
+  }
 }
 
 function triggerPhotoLibrary(): void {
@@ -2312,6 +2523,7 @@ onBeforeUnmount(() => {
   if (fileMentionDebounceTimer) {
     clearTimeout(fileMentionDebounceTimer)
   }
+  setMobileSettingsBackgroundLocked(false)
 })
 
 watch(
@@ -2361,12 +2573,12 @@ watch(
   () => props.activeThreadId,
   () => {
     isContextDetailsOpen.value = false
-    closeMobileSettings()
+    dismissMobileSettings(false)
   },
 )
 
 watch(isMobile, (mobile) => {
-  if (!mobile) closeMobileSettings()
+  if (!mobile) dismissMobileSettings(false)
 })
 
 watch(
@@ -2386,12 +2598,20 @@ watch(
 }
 
 .thread-composer:has(.thread-composer-input-wrap--expanded) {
-  @apply fixed inset-x-0 bottom-0 top-0 z-[300] max-w-none bg-white/95 px-3 pb-3 pt-8 sm:px-6 sm:pb-6 sm:pt-10;
+  @apply fixed inset-x-0 bottom-0 top-0 max-w-none px-3 pb-3 pt-8 sm:px-6 sm:pb-6 sm:pt-10;
+  z-index: var(--ui-z-fullscreen);
+  background: var(--mac-main);
   height: 100dvh;
 }
 
 .thread-composer-shell {
-  @apply relative rounded-xl border border-zinc-300/90 bg-white p-2 shadow-sm;
+  @apply relative border p-2;
+  border-radius: var(--ui-radius-panel);
+  border-color: var(--mac-border-strong);
+  background: var(--mac-surface);
+  box-shadow: 0 18px 48px rgb(30 49 73 / 15%), inset 0 1px 0 var(--mac-highlight);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  backdrop-filter: blur(22px) saturate(150%);
 }
 
 .thread-composer:has(.thread-composer-input-wrap--expanded) .thread-composer-shell {
@@ -2427,7 +2647,7 @@ watch(
 }
 
 .thread-composer-attachment-remove {
-  @apply absolute right-0.5 top-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full border-0 bg-black/70 text-xs leading-none text-white;
+  @apply absolute right-0.5 top-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border-0 bg-black/70 text-xs leading-none text-white;
 }
 
 .thread-composer-image-modal-backdrop {
@@ -2545,11 +2765,21 @@ watch(
 }
 
 .thread-composer-file-mentions {
-  @apply absolute left-0 right-0 bottom-[calc(100%+8px)] z-40 max-h-52 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1 shadow-lg;
+  @apply absolute left-0 right-0 bottom-[calc(100%+8px)] max-h-52 overflow-y-auto border p-1;
+  z-index: var(--ui-z-popover);
+  border-radius: var(--ui-radius-card);
+  border-color: var(--mac-border-strong);
+  background: var(--mac-solid);
+  box-shadow: var(--mac-shadow-menu);
 }
 
 .thread-composer-autocomplete {
-  @apply absolute left-0 right-0 bottom-[calc(100%+8px)] z-40 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-lg;
+  @apply absolute left-0 right-0 bottom-[calc(100%+8px)] overflow-hidden border;
+  z-index: var(--ui-z-popover);
+  border-radius: var(--ui-radius-card);
+  border-color: var(--mac-border-strong);
+  background: var(--mac-solid);
+  box-shadow: var(--mac-shadow-menu);
 }
 
 .thread-composer-autocomplete-list {
@@ -2557,7 +2787,7 @@ watch(
 }
 
 .thread-composer-autocomplete-row {
-  @apply flex w-full min-w-0 items-baseline gap-3 rounded-lg border-0 bg-transparent px-2.5 py-1.5 text-left text-xs text-zinc-700 transition hover:bg-zinc-100;
+  @apply flex min-h-9 w-full min-w-0 items-baseline gap-3 rounded-lg border-0 bg-transparent px-2.5 py-1.5 text-left text-xs text-zinc-700 transition-colors hover:bg-zinc-100;
 }
 
 .thread-composer-autocomplete-row.is-active {
@@ -2589,7 +2819,7 @@ watch(
 }
 
 .thread-composer-file-mention-row {
-  @apply flex w-full items-center gap-2 rounded-md border-0 bg-transparent px-2 py-1.5 text-left text-xs text-zinc-700 transition hover:bg-zinc-100;
+  @apply flex min-h-9 w-full items-center gap-2 rounded-lg border-0 bg-transparent px-2 py-1.5 text-left text-xs text-zinc-700 transition-colors hover:bg-zinc-100;
 }
 
 .thread-composer-file-mention-row.is-active {
@@ -2653,7 +2883,7 @@ watch(
 }
 
 .thread-composer-expand {
-  @apply absolute right-0.5 top-0.5 inline-flex h-8 w-8 items-center justify-center rounded-full border-0 bg-zinc-100 text-zinc-500 shadow-sm transition hover:bg-zinc-200 hover:text-zinc-900 disabled:cursor-not-allowed disabled:text-zinc-400;
+  @apply absolute right-0.5 top-0.5 inline-flex h-8 w-8 items-center justify-center rounded-full border-0 bg-zinc-100 text-zinc-500 shadow-sm transition-colors hover:bg-zinc-200 hover:text-zinc-900 disabled:cursor-not-allowed disabled:text-zinc-400;
 }
 
 .thread-composer-expand-icon {
@@ -2677,11 +2907,18 @@ watch(
 }
 
 .thread-composer-attach-trigger {
-  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border-0 bg-transparent pb-px text-xl leading-tight text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-900 disabled:cursor-not-allowed disabled:text-zinc-400;
+  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border-0 bg-transparent pb-px text-xl leading-tight text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-900 disabled:cursor-not-allowed disabled:text-zinc-400;
 }
 
 .thread-composer-attach-menu {
-  @apply absolute bottom-11 left-0 z-20 w-72 max-w-[calc(100vw-1rem)] rounded-xl border border-zinc-200 bg-white p-1 shadow-lg;
+  @apply absolute bottom-11 left-0 w-72 max-w-[calc(100vw-1rem)] border p-1;
+  z-index: var(--ui-z-popover);
+  border-radius: var(--ui-radius-card);
+  border-color: var(--mac-border-strong);
+  background: var(--mac-solid);
+  box-shadow: var(--mac-shadow-menu);
+  -webkit-backdrop-filter: blur(var(--ui-blur-float)) saturate(145%);
+  backdrop-filter: blur(var(--ui-blur-float)) saturate(145%);
 }
 
 .thread-composer-attach-item {
@@ -2782,11 +3019,20 @@ watch(
 }
 
 .thread-composer-mobile-settings-backdrop {
-  @apply fixed inset-0 z-[280] hidden items-end bg-zinc-950/25 p-2;
+  @apply fixed inset-0 hidden items-end p-2;
+  z-index: var(--ui-z-modal);
+  background: var(--mac-overlay);
 }
 
 .thread-composer-mobile-settings-sheet {
-  @apply w-full max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-[1.5rem] border border-zinc-200 bg-white/95 px-4 pt-2 shadow-2xl;
+  @apply w-full max-h-[calc(100dvh-1rem)] overflow-y-auto border px-3 pt-2;
+  border-radius: var(--ui-radius-sheet);
+  border-color: var(--mac-border-strong);
+  background: var(--mac-solid);
+  color: var(--mac-text);
+  box-shadow: var(--mac-shadow-menu);
+  -webkit-backdrop-filter: blur(var(--ui-blur-float)) saturate(150%);
+  backdrop-filter: blur(var(--ui-blur-float)) saturate(150%);
   padding-bottom: calc(1rem + env(safe-area-inset-bottom));
 }
 
@@ -2795,7 +3041,12 @@ watch(
 }
 
 .thread-composer-mobile-settings-header {
-  @apply mt-3 flex min-w-0 items-center justify-between gap-3;
+  @apply sticky top-0 z-10 mt-2 flex min-w-0 items-center justify-between gap-2 py-1;
+  background: linear-gradient(to bottom, var(--mac-solid) 78%, transparent);
+}
+
+.thread-composer-mobile-settings-heading {
+  @apply min-w-0 flex-1;
 }
 
 .thread-composer-mobile-settings-eyebrow {
@@ -2803,41 +3054,94 @@ watch(
 }
 
 .thread-composer-mobile-settings-title {
-  @apply mt-0.5 truncate text-base font-semibold tracking-tight text-zinc-900;
+  @apply mt-0.5 truncate text-lg font-semibold text-zinc-900;
+  letter-spacing: -0.018em;
 }
 
+.thread-composer-mobile-settings-back,
 .thread-composer-mobile-settings-close {
-  @apply inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-zinc-200 bg-zinc-100 text-zinc-600 transition hover:bg-zinc-200 hover:text-zinc-900;
+  @apply inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border text-zinc-600 transition-colors;
+  border-color: var(--mac-border);
+  background: var(--mac-hover);
 }
 
+.thread-composer-mobile-settings-back-icon,
 .thread-composer-mobile-settings-close-icon {
   @apply h-5 w-5;
 }
 
-.thread-composer-mobile-settings-section {
-  @apply mt-4;
+.thread-composer-mobile-settings-list,
+.thread-composer-mobile-settings-options {
+  @apply mt-3 overflow-hidden border;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--mac-border);
+  background: color-mix(in srgb, var(--mac-surface-strong) 92%, transparent);
 }
 
-.thread-composer-mobile-settings-label {
-  @apply mb-1.5 block text-xs font-medium text-zinc-500;
+.thread-composer-mobile-settings-row,
+.thread-composer-mobile-settings-option {
+  @apply flex min-h-14 w-full items-center justify-between gap-3 border-0 bg-transparent px-3 py-2.5 text-left text-sm transition-colors;
+  color: var(--mac-text);
 }
 
-.thread-composer-mobile-settings-permission,
-.thread-composer-mobile-settings-model {
-  @apply block w-full;
+.thread-composer-mobile-settings-row + .thread-composer-mobile-settings-row,
+.thread-composer-mobile-settings-option + .thread-composer-mobile-settings-option {
+  border-top: 1px solid var(--mac-border);
 }
 
-.thread-composer-mobile-settings-permission :deep(.composer-dropdown) {
-  @apply block w-full;
+.thread-composer-mobile-settings-row-copy {
+  @apply flex min-w-0 flex-1 flex-col gap-0.5;
 }
 
-.thread-composer-mobile-settings-permission :deep(.composer-dropdown-trigger),
-.thread-composer-mobile-settings-model :deep(.model-reasoning-trigger) {
-  @apply min-h-11 w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-800 shadow-sm transition hover:border-zinc-300 hover:bg-white;
+.thread-composer-mobile-settings-row-label {
+  @apply font-semibold;
 }
 
-.thread-composer-mobile-settings-permission :deep(.composer-dropdown-menu-wrap) {
-  z-index: 320;
+.thread-composer-mobile-settings-row-value {
+  @apply truncate text-xs;
+  color: var(--mac-muted);
+}
+
+.thread-composer-mobile-settings-row-chevron {
+  @apply h-5 w-5 shrink-0;
+  color: var(--mac-faint);
+}
+
+.thread-composer-mobile-settings-option.is-selected {
+  background: var(--mac-accent-soft);
+  color: var(--mac-accent);
+  font-weight: 600;
+}
+
+.thread-composer-mobile-settings-check {
+  @apply inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-sm;
+  color: var(--mac-accent);
+}
+
+.mobile-settings-enter-active {
+  transition: opacity 180ms var(--ui-ease-out);
+}
+
+.mobile-settings-leave-active {
+  transition: opacity 140ms var(--ui-ease-out);
+}
+
+.mobile-settings-enter-active .thread-composer-mobile-settings-sheet {
+  transition: transform 240ms var(--ui-ease-drawer);
+}
+
+.mobile-settings-leave-active .thread-composer-mobile-settings-sheet {
+  transition: transform 170ms var(--ui-ease-out);
+}
+
+.mobile-settings-enter-from,
+.mobile-settings-leave-to {
+  opacity: 0;
+}
+
+.mobile-settings-enter-from .thread-composer-mobile-settings-sheet,
+.mobile-settings-leave-to .thread-composer-mobile-settings-sheet {
+  transform: translateY(100%);
 }
 
 
@@ -2867,7 +3171,8 @@ watch(
     var(--context-usage-accent) var(--context-usage-used-percent, 0%),
     rgb(228 228 231) 0
   );
-  @apply relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-0 p-0 text-[10px] font-semibold leading-none text-zinc-900 shadow-sm transition hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-2;
+  @apply relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-0 p-0 text-[10px] font-semibold leading-none text-zinc-900 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-2;
+  transition: scale var(--ui-duration-fast) var(--ui-ease-out);
 }
 
 .thread-composer-context-button::before {
@@ -2880,7 +3185,9 @@ watch(
 }
 
 .thread-composer-context-popover {
-  @apply pointer-events-none invisible absolute bottom-[calc(100%+0.75rem)] right-[-0.375rem] z-30 w-56 max-w-[calc(100vw-2rem)] translate-y-1 rounded-xl border border-zinc-200 bg-white p-3 text-left text-xs text-zinc-700 opacity-0 shadow-xl transition;
+  @apply pointer-events-none invisible absolute bottom-[calc(100%+0.75rem)] right-[-0.375rem] w-56 max-w-[calc(100vw-2rem)] translate-y-1 rounded-xl border border-zinc-200 bg-white p-3 text-left text-xs text-zinc-700 opacity-0 shadow-xl;
+  z-index: var(--ui-z-popover);
+  transition: opacity 140ms var(--ui-ease-out), transform 140ms var(--ui-ease-out), visibility 140ms step-end;
 }
 
 .thread-composer-context-popover.is-detail {
@@ -2892,9 +3199,20 @@ watch(
   @apply absolute -bottom-1.5 right-5 h-3 w-3 rotate-45 border-b border-r border-zinc-200 bg-white;
 }
 
-.thread-composer-context:hover .thread-composer-context-popover,
 .thread-composer-context.is-open .thread-composer-context-popover {
   @apply pointer-events-auto visible translate-y-0 opacity-100;
+  transition: opacity 140ms var(--ui-ease-out), transform 140ms var(--ui-ease-out), visibility 0ms step-start;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .thread-composer-context:hover .thread-composer-context-button {
+    scale: 1.04;
+  }
+
+  .thread-composer-context:hover .thread-composer-context-popover {
+    @apply pointer-events-auto visible translate-y-0 opacity-100;
+    transition: opacity 140ms var(--ui-ease-out), transform 140ms var(--ui-ease-out), visibility 0ms step-start;
+  }
 }
 
 .thread-composer-context-popover-title {
@@ -2982,6 +3300,7 @@ watch(
 @media (max-width: 767px) {
   .thread-composer-shell {
     @apply p-2;
+    border-radius: 18px;
   }
 
   .thread-composer-input {
@@ -3048,11 +3367,27 @@ watch(
   }
 
   .thread-composer-context-button {
-    @apply h-10 w-10;
+    @apply h-11 w-11;
   }
 
   .thread-composer-mobile-settings-backdrop {
     @apply flex;
+  }
+
+  .thread-composer-expand,
+  .thread-composer-attachment-remove,
+  .thread-composer-folder-chip-remove,
+  .thread-composer-file-chip-remove,
+  .thread-composer-skill-chip-remove {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  .thread-composer-autocomplete-row,
+  .thread-composer-file-mention-row,
+  .thread-composer-attach-item,
+  .thread-composer-attach-setting {
+    min-height: 2.75rem;
   }
 }
 
@@ -3074,8 +3409,20 @@ watch(
     @apply hidden;
   }
 
-  .thread-composer-context-button {
-    @apply h-9 w-9;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-settings-enter-active,
+  .mobile-settings-leave-active {
+    transition: opacity 100ms linear;
+  }
+
+  .mobile-settings-enter-active .thread-composer-mobile-settings-sheet,
+  .mobile-settings-leave-active .thread-composer-mobile-settings-sheet,
+  .mobile-settings-enter-from .thread-composer-mobile-settings-sheet,
+  .mobile-settings-leave-to .thread-composer-mobile-settings-sheet {
+    transform: none;
+    transition: none;
   }
 }
 </style>

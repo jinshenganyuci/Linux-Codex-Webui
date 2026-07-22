@@ -1,8 +1,13 @@
 <template>
   <div ref="rootRef" class="search-dropdown">
     <button
+      ref="triggerRef"
       class="search-dropdown-trigger"
       type="button"
+      :aria-label="displayLabel"
+      :aria-expanded="isOpen"
+      :aria-controls="menuId"
+      aria-haspopup="listbox"
       :disabled="disabled"
       @click="onToggle"
     >
@@ -13,6 +18,7 @@
     <Teleport to="body">
       <div
         v-if="isOpen"
+        :id="menuId"
         ref="menuRef"
         class="search-dropdown-menu-wrap"
         :class="{
@@ -29,7 +35,7 @@
               class="search-dropdown-search"
               type="text"
               :placeholder="searchPlaceholder"
-              @keydown.escape.prevent="isOpen = false"
+              @keydown.escape.prevent="closeMenu(true)"
               @keydown.enter.prevent="selectHighlighted"
               @keydown.arrow-down.prevent="moveHighlight(1)"
               @keydown.arrow-up.prevent="moveHighlight(-1)"
@@ -54,7 +60,7 @@
             {{ createLabel }}
           </button>
         </div>
-        <ul v-if="filtered.length > 0" class="search-dropdown-list" role="listbox">
+        <ul v-if="filtered.length > 0" class="search-dropdown-list" role="listbox" :aria-label="displayLabel">
           <li v-for="(opt, idx) in filtered" :key="opt.value">
             <div
               class="search-dropdown-option"
@@ -67,6 +73,8 @@
               <button
                 class="search-dropdown-option-main"
                 type="button"
+                role="option"
+                :aria-selected="selected.has(opt.value)"
                 @click="onSelect(opt)"
               >
                 <span class="search-dropdown-option-check">{{ selected.has(opt.value) ? '✓' : '' }}</span>
@@ -107,7 +115,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 
@@ -142,12 +150,14 @@ const emit = defineEmits<{
 }>()
 
 const rootRef = ref<HTMLElement | null>(null)
+const triggerRef = ref<HTMLButtonElement | null>(null)
 const menuRef = ref<HTMLElement | null>(null)
 const searchRef = ref<HTMLInputElement | null>(null)
 const isOpen = ref(false)
 const searchQuery = ref('')
 const highlightIdx = ref(0)
 const menuStyle = ref<Record<string, string>>({})
+const menuId = `search-dropdown-${useId()}`
 const { t } = useUiLanguage()
 
 const openDirection = computed(() => props.openDirection ?? 'down')
@@ -178,20 +188,29 @@ function updateMenuPosition(): void {
   const root = rootRef.value
   if (!menu || !root) return
   const rect = root.getBoundingClientRect()
-  const viewportWidth = window.innerWidth
-  const viewportHeight = window.innerHeight
+  const visualViewport = window.visualViewport
+  const viewportLeft = visualViewport?.offsetLeft ?? 0
+  const viewportTop = visualViewport?.offsetTop ?? 0
+  const viewportWidth = visualViewport?.width ?? window.innerWidth
+  const viewportHeight = visualViewport?.height ?? window.innerHeight
   const desiredWidth = Math.min(384, viewportWidth - 16)
-  const left = Math.max(8, Math.min(rect.right - desiredWidth, viewportWidth - desiredWidth - 8))
+  const left = Math.max(viewportLeft + 8, Math.min(rect.right - desiredWidth, viewportLeft + viewportWidth - desiredWidth - 8))
+  const menuHeight = menu.offsetHeight
+  let top = openDirection.value === 'up' ? rect.top - menuHeight - 8 : rect.bottom + 8
+  if (top + menuHeight > viewportTop + viewportHeight - 8) {
+    top = viewportTop + viewportHeight - menuHeight - 8
+  }
+  top = Math.max(viewportTop + 8, top)
 
   if (viewportWidth < 640) {
     menuStyle.value = {
       position: 'fixed',
-      left: '0.5rem',
-      right: '0.5rem',
-      width: 'auto',
-      top: openDirection.value === 'up' ? 'auto' : `${rect.bottom + 8}px`,
-      bottom: openDirection.value === 'up' ? `${viewportHeight - rect.top + 8}px` : 'auto',
-      zIndex: '120',
+      left: `${viewportLeft + 8}px`,
+      right: 'auto',
+      width: `${Math.max(0, viewportWidth - 16)}px`,
+      top: `${top}px`,
+      bottom: 'auto',
+      zIndex: '30',
     }
     return
   }
@@ -200,9 +219,9 @@ function updateMenuPosition(): void {
     position: 'fixed',
     width: `${desiredWidth}px`,
     left: `${left}px`,
-    top: openDirection.value === 'up' ? 'auto' : `${rect.bottom + 8}px`,
-    bottom: openDirection.value === 'up' ? `${viewportHeight - rect.top + 8}px` : 'auto',
-    zIndex: '120',
+    top: `${top}px`,
+    bottom: 'auto',
+    zIndex: '30',
   }
 }
 
@@ -225,7 +244,14 @@ function onToggle(): void {
 
 function onSelect(opt: SearchDropdownOption): void {
   emit('toggle', opt.value, !selected.value.has(opt.value))
+  closeMenu(true)
+}
+
+function closeMenu(restoreFocus = false): void {
   isOpen.value = false
+  if (restoreFocus) {
+    void nextTick(() => triggerRef.value?.focus({ preventScroll: true }))
+  }
 }
 
 function moveHighlight(delta: number): void {
@@ -261,11 +287,15 @@ onMounted(() => {
   window.addEventListener('pointerdown', onDocumentPointerDown)
   window.addEventListener('resize', onWindowLayoutChange)
   window.addEventListener('scroll', onWindowLayoutChange, true)
+  window.visualViewport?.addEventListener('resize', onWindowLayoutChange)
+  window.visualViewport?.addEventListener('scroll', onWindowLayoutChange)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('pointerdown', onDocumentPointerDown)
   window.removeEventListener('resize', onWindowLayoutChange)
   window.removeEventListener('scroll', onWindowLayoutChange, true)
+  window.visualViewport?.removeEventListener('resize', onWindowLayoutChange)
+  window.visualViewport?.removeEventListener('scroll', onWindowLayoutChange)
 })
 </script>
 
@@ -293,7 +323,7 @@ onBeforeUnmount(() => {
 }
 
 .search-dropdown-menu-wrap {
-  @apply z-[120];
+  z-index: var(--ui-z-popover);
 }
 
 @media (max-width: 639px) {
@@ -483,5 +513,19 @@ onBeforeUnmount(() => {
 
 :global(:root.dark) .search-dropdown-empty {
   @apply text-zinc-500;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .search-dropdown-trigger,
+  .search-dropdown-create-icon,
+  .search-dropdown-option-main,
+  .search-dropdown-option-remove {
+    min-height: 2.75rem;
+  }
+
+  .search-dropdown-create-icon,
+  .search-dropdown-option-remove {
+    min-width: 2.75rem;
+  }
 }
 </style>

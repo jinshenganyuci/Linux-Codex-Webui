@@ -1,10 +1,14 @@
 <template>
   <div ref="rootRef" class="model-reasoning-dropdown">
     <button
+      ref="triggerRef"
       class="model-reasoning-trigger"
       type="button"
       :aria-label="triggerAccessibleLabel"
       :title="triggerAccessibleLabel"
+      :aria-expanded="isOpen"
+      :aria-controls="layerId"
+      aria-haspopup="listbox"
       :disabled="disabled"
       @click="toggleMenu"
     >
@@ -18,6 +22,7 @@
     <Teleport to="body">
       <div
         v-if="isOpen"
+        :id="layerId"
         ref="layerRef"
         class="model-reasoning-layer"
         :class="[
@@ -25,7 +30,7 @@
           { 'is-model-open': isModelMenuOpen },
         ]"
         :style="layerStyle"
-        @keydown.esc.stop.prevent="closeMenu"
+        @keydown.esc.stop.prevent="closeMenu(true)"
       >
         <div ref="menuRef" class="model-reasoning-menu">
           <div class="model-reasoning-menu-label">{{ t('Reasoning') }}</div>
@@ -35,6 +40,8 @@
                 class="model-reasoning-option"
                 :class="{ 'is-selected': selectedReasoningEffort === option.value }"
                 type="button"
+                role="option"
+                :aria-selected="selectedReasoningEffort === option.value"
                 @click="selectReasoning(option.value)"
               >
                 <span>{{ option.label }}</span>
@@ -65,6 +72,8 @@
                 class="model-reasoning-option"
                 :class="{ 'is-selected': selectedModel === option.value }"
                 type="button"
+                role="option"
+                :aria-selected="selectedModel === option.value"
                 @click="selectModel(option.value)"
               >
                 <span>{{ option.label }}</span>
@@ -80,7 +89,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import type { ReasoningEffort, SpeedMode } from '../../types/codex'
 import IconTablerBolt from '../icons/IconTablerBolt.vue'
@@ -111,6 +120,7 @@ const emit = defineEmits<{
 
 const { t } = useUiLanguage()
 const rootRef = ref<HTMLElement | null>(null)
+const triggerRef = ref<HTMLButtonElement | null>(null)
 const layerRef = ref<HTMLElement | null>(null)
 const menuRef = ref<HTMLElement | null>(null)
 const modelMenuRef = ref<HTMLElement | null>(null)
@@ -119,6 +129,7 @@ const isModelMenuOpen = ref(false)
 const isMobileLayout = ref(false)
 const modelMenuSide = ref<'left' | 'right'>('left')
 const layerStyle = ref<Record<string, string>>({})
+const layerId = `model-reasoning-${useId()}`
 
 const selectedModelLabel = computed(() => {
   const selected = props.modelOptions.find((option) => option.value === props.selectedModel)
@@ -157,8 +168,11 @@ function updateMenuPosition(): void {
   if (!root || typeof window === 'undefined') return
 
   const rect = root.getBoundingClientRect()
-  const viewportWidth = window.innerWidth
-  const viewportHeight = window.innerHeight
+  const visualViewport = window.visualViewport
+  const viewportLeft = visualViewport?.offsetLeft ?? 0
+  const viewportTop = visualViewport?.offsetTop ?? 0
+  const viewportWidth = visualViewport?.width ?? window.innerWidth
+  const viewportHeight = visualViewport?.height ?? window.innerHeight
   const viewportPadding = 8
   const gap = 8
   const mobile = viewportWidth < 640
@@ -166,26 +180,26 @@ function updateMenuPosition(): void {
 
   const mainWidth = mobile ? Math.min(292, viewportWidth - viewportPadding * 2) : 196
   const modelWidth = mobile ? mainWidth : 232
-  const modelSide = rect.right + gap + modelWidth + viewportPadding <= viewportWidth ? 'right' : 'left'
+  const modelSide = rect.right + gap + modelWidth + viewportPadding <= viewportLeft + viewportWidth ? 'right' : 'left'
   modelMenuSide.value = modelSide
 
   let left = rect.right - mainWidth
   if (!mobile && isModelMenuOpen.value && modelSide === 'left') {
-    left = Math.max(left, viewportPadding + modelWidth + gap)
+    left = Math.max(left, viewportLeft + viewportPadding + modelWidth + gap)
   }
   if (!mobile && isModelMenuOpen.value && modelSide === 'right') {
-    left = Math.min(left, viewportWidth - mainWidth - modelWidth - gap - viewportPadding)
+    left = Math.min(left, viewportLeft + viewportWidth - mainWidth - modelWidth - gap - viewportPadding)
   }
-  left = clamp(left, viewportPadding, Math.max(viewportPadding, viewportWidth - mainWidth - viewportPadding))
+  left = clamp(left, viewportLeft + viewportPadding, Math.max(viewportLeft + viewportPadding, viewportLeft + viewportWidth - mainWidth - viewportPadding))
 
   const layerHeight = layerRef.value?.offsetHeight ?? menuRef.value?.offsetHeight ?? 260
   let top = props.openDirection === 'down'
     ? rect.bottom + gap
     : rect.top - layerHeight - gap
-  if (top + layerHeight > viewportHeight - viewportPadding) {
-    top = viewportHeight - layerHeight - viewportPadding
+  if (top + layerHeight > viewportTop + viewportHeight - viewportPadding) {
+    top = viewportTop + viewportHeight - layerHeight - viewportPadding
   }
-  top = Math.max(viewportPadding, top)
+  top = Math.max(viewportTop + viewportPadding, top)
 
   layerStyle.value = {
     position: 'fixed',
@@ -204,9 +218,12 @@ function toggleMenu(): void {
   }
 }
 
-function closeMenu(): void {
+function closeMenu(restoreFocus = false): void {
   isOpen.value = false
   isModelMenuOpen.value = false
+  if (restoreFocus) {
+    void nextTick(() => triggerRef.value?.focus({ preventScroll: true }))
+  }
 }
 
 function openModelMenu(): void {
@@ -231,12 +248,12 @@ function onModelRowClick(): void {
 
 function selectReasoning(value: ReasoningEffort): void {
   emit('update:selected-reasoning-effort', value)
-  closeMenu()
+  closeMenu(true)
 }
 
 function selectModel(value: string): void {
   emit('update:selected-model', value)
-  closeMenu()
+  closeMenu(true)
 }
 
 function onDocumentPointerDown(event: PointerEvent): void {
@@ -265,12 +282,16 @@ onMounted(() => {
   window.addEventListener('pointerdown', onDocumentPointerDown)
   window.addEventListener('resize', onWindowLayoutChange)
   window.addEventListener('scroll', onWindowLayoutChange, true)
+  window.visualViewport?.addEventListener('resize', onWindowLayoutChange)
+  window.visualViewport?.addEventListener('scroll', onWindowLayoutChange)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('pointerdown', onDocumentPointerDown)
   window.removeEventListener('resize', onWindowLayoutChange)
   window.removeEventListener('scroll', onWindowLayoutChange, true)
+  window.visualViewport?.removeEventListener('resize', onWindowLayoutChange)
+  window.visualViewport?.removeEventListener('scroll', onWindowLayoutChange)
 })
 </script>
 
@@ -370,5 +391,13 @@ onBeforeUnmount(() => {
 
 .model-reasoning-empty {
   @apply px-2 py-2 text-sm text-zinc-500;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .model-reasoning-trigger,
+  .model-reasoning-option,
+  .model-reasoning-model-row {
+    min-height: 2.75rem;
+  }
 }
 </style>

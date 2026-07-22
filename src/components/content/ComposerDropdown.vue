@@ -1,10 +1,14 @@
 <template>
   <div ref="rootRef" class="composer-dropdown">
     <button
+      ref="triggerRef"
       class="composer-dropdown-trigger"
       type="button"
       :title="triggerAccessibleLabel"
       :aria-label="triggerAccessibleLabel"
+      :aria-expanded="isOpen"
+      :aria-controls="menuId"
+      aria-haspopup="listbox"
       :disabled="disabled"
       @click="onToggle"
     >
@@ -16,6 +20,7 @@
     <div
       v-if="isOpen"
       ref="menuWrapRef"
+      :id="menuId"
       class="composer-dropdown-menu-wrap"
       :class="{
         'composer-dropdown-menu-wrap-up': openDirection === 'up',
@@ -35,12 +40,14 @@
           />
         </div>
 
-        <ul class="composer-dropdown-options" role="listbox">
+        <ul class="composer-dropdown-options" role="listbox" :aria-label="triggerAccessibleLabel">
           <li v-for="option in filteredOptions" :key="option.value">
             <button
               class="composer-dropdown-option"
               :class="{ 'is-selected': option.value === modelValue }"
               type="button"
+              role="option"
+              :aria-selected="option.value === modelValue"
               @click="onSelect(option.value)"
             >
               {{ option.label }}
@@ -57,7 +64,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch, type Component } from 'vue'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 
 type DropdownOption = {
@@ -84,6 +91,7 @@ const emit = defineEmits<{
 }>()
 
 const rootRef = ref<HTMLElement | null>(null)
+const triggerRef = ref<HTMLButtonElement | null>(null)
 const menuWrapRef = ref<HTMLElement | null>(null)
 const menuRef = ref<HTMLElement | null>(null)
 const searchInputRef = ref<HTMLInputElement | null>(null)
@@ -91,6 +99,7 @@ const isOpen = ref(false)
 const searchQuery = ref('')
 const menuWrapStyle = ref<Record<string, string>>({})
 let isLayoutListenerAttached = false
+const menuId = `composer-dropdown-${useId()}`
 
 const selectedLabel = computed(() => {
   const selected = props.options.find((option) => option.value === props.modelValue)
@@ -128,25 +137,29 @@ function updateMenuPosition(): void {
   if (!root || typeof window === 'undefined') return
 
   const rect = root.getBoundingClientRect()
-  const viewportWidth = window.innerWidth
-  const viewportHeight = window.innerHeight
+  const visualViewport = window.visualViewport
+  const viewportLeft = visualViewport?.offsetLeft ?? 0
+  const viewportTop = visualViewport?.offsetTop ?? 0
+  const viewportWidth = visualViewport?.width ?? window.innerWidth
+  const viewportHeight = visualViewport?.height ?? window.innerHeight
   const viewportPadding = 8
   const gap = 8
   const maxMenuWidth = Math.max(0, viewportWidth - viewportPadding * 2)
   const measuredWidth = menuRef.value?.offsetWidth ?? menuWrapRef.value?.offsetWidth ?? 224
   const measuredHeight = menuRef.value?.offsetHeight ?? menuWrapRef.value?.offsetHeight ?? 0
   const menuWidth = Math.min(measuredWidth, maxMenuWidth)
-  const maxLeft = Math.max(viewportPadding, viewportWidth - menuWidth - viewportPadding)
+  const minLeft = viewportLeft + viewportPadding
+  const maxLeft = Math.max(minLeft, viewportLeft + viewportWidth - menuWidth - viewportPadding)
   const desiredLeft = menuAlign.value === 'end' ? rect.right - menuWidth : rect.left
-  const left = clamp(desiredLeft, viewportPadding, maxLeft)
+  const left = clamp(desiredLeft, minLeft, maxLeft)
 
   let top = openDirection.value === 'up'
     ? rect.top - measuredHeight - gap
     : rect.bottom + gap
-  if (measuredHeight > 0 && top + measuredHeight > viewportHeight - viewportPadding) {
-    top = viewportHeight - measuredHeight - viewportPadding
+  if (measuredHeight > 0 && top + measuredHeight > viewportTop + viewportHeight - viewportPadding) {
+    top = viewportTop + viewportHeight - measuredHeight - viewportPadding
   }
-  top = Math.max(viewportPadding, top)
+  top = Math.max(viewportTop + viewportPadding, top)
 
   menuWrapStyle.value = {
     position: 'fixed',
@@ -162,6 +175,8 @@ function addLayoutListeners(): void {
   if (isLayoutListenerAttached || typeof window === 'undefined') return
   window.addEventListener('resize', updateMenuPosition)
   window.addEventListener('scroll', updateMenuPosition, true)
+  window.visualViewport?.addEventListener('resize', updateMenuPosition)
+  window.visualViewport?.addEventListener('scroll', updateMenuPosition)
   isLayoutListenerAttached = true
 }
 
@@ -169,6 +184,8 @@ function removeLayoutListeners(): void {
   if (!isLayoutListenerAttached || typeof window === 'undefined') return
   window.removeEventListener('resize', updateMenuPosition)
   window.removeEventListener('scroll', updateMenuPosition, true)
+  window.visualViewport?.removeEventListener('resize', updateMenuPosition)
+  window.visualViewport?.removeEventListener('scroll', updateMenuPosition)
   isLayoutListenerAttached = false
 }
 
@@ -176,6 +193,7 @@ function onSelect(value: string): void {
   emit('update:modelValue', value)
   isOpen.value = false
   searchQuery.value = ''
+  void nextTick(() => triggerRef.value?.focus({ preventScroll: true }))
 }
 
 function onEscapeSearch(): void {
@@ -184,6 +202,7 @@ function onEscapeSearch(): void {
     return
   }
   isOpen.value = false
+  void nextTick(() => triggerRef.value?.focus({ preventScroll: true }))
 }
 
 function onDocumentPointerDown(event: PointerEvent): void {
@@ -287,5 +306,12 @@ onBeforeUnmount(() => {
 
 .composer-dropdown-empty {
   @apply px-2 py-1.5 text-xs text-zinc-500;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .composer-dropdown-trigger,
+  .composer-dropdown-option {
+    min-height: 2.75rem;
+  }
 }
 </style>
