@@ -80,7 +80,7 @@ const outputDomId = computed(() => renderState.value.outputDomId)
 }
 
 .cmd-row {
-  @apply w-full flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-200 bg-zinc-50 cursor-pointer transition text-left hover:bg-zinc-100;
+  @apply w-full flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-200 bg-zinc-50 cursor-pointer transition-colors text-left hover:bg-zinc-100;
 }
 
 .cmd-row.cmd-compact {
@@ -119,7 +119,7 @@ const outputDomId = computed(() => renderState.value.outputDomId)
 }
 
 .cmd-status {
-  @apply max-w-24 truncate text-right text-[11px] font-medium flex-shrink-0;
+  @apply max-w-24 truncate text-right text-xs font-medium flex-shrink-0;
 }
 
 .cmd-status-running .cmd-status {
@@ -136,15 +136,13 @@ const outputDomId = computed(() => renderState.value.outputDomId)
 
 .cmd-output-wrap {
   @apply rounded-b-lg bg-zinc-900;
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 300ms ease-out, border-color 300ms ease-out;
+  display: none;
   border: 1px solid transparent;
   border-top: none;
 }
 
 .cmd-output-wrap.cmd-output-visible {
-  grid-template-rows: 1fr;
+  display: block;
   border-color: #e4e4e7;
 }
 
@@ -159,5 +157,17 @@ const outputDomId = computed(() => renderState.value.outputDomId)
 
 .cmd-output.cmd-output-condensed {
   max-height: 9rem;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .cmd-row {
+    min-height: 2.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmd-chevron {
+    transition: none;
+  }
 }
 </style>

@@ -4,6 +4,7 @@
       <label class="archived-search">
         <IconTablerSearch aria-hidden="true" />
         <input
+          ref="searchInputRef"
           v-model="searchQuery"
           type="search"
           :placeholder="t('Search archived threads...')"
@@ -69,7 +70,7 @@
             :title="t('Permanently delete thread')"
             :aria-label="t('Permanently delete thread')"
             :disabled="actionThreadId.length > 0"
-            @click="deleteCandidate = thread"
+            @click="openDeleteDialog(thread)"
           >
             <IconTablerTrash />
           </button>
@@ -89,14 +90,22 @@
 
     <Teleport to="body">
       <div v-if="deleteCandidate" class="archived-dialog-overlay" @click.self="closeDeleteDialog">
-        <div class="archived-dialog" role="dialog" aria-modal="true" :aria-label="t('Permanently delete thread?')" @keydown.esc="closeDeleteDialog">
+        <div
+          ref="deleteDialogRef"
+          class="archived-dialog"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="t('Permanently delete thread?')"
+          tabindex="-1"
+          @keydown="onDeleteDialogKeydown"
+        >
           <span class="archived-dialog-icon" aria-hidden="true"><IconTablerTrash /></span>
           <div class="archived-dialog-copy">
             <h2>{{ t('Permanently delete thread?') }}</h2>
             <p>{{ t('This permanently deletes "{title}" and cannot be undone.', { title: deleteCandidate.title }) }}</p>
           </div>
           <div class="archived-dialog-actions">
-            <button type="button" :disabled="actionThreadId.length > 0" @click="closeDeleteDialog">{{ t('Cancel') }}</button>
+            <button ref="deleteCancelButtonRef" type="button" :disabled="actionThreadId.length > 0" @click="closeDeleteDialog">{{ t('Cancel') }}</button>
             <button class="is-danger" type="button" :disabled="actionThreadId.length > 0" @click="deleteThread">
               <span v-if="actionThreadId === deleteCandidate.id && actionKind === 'delete'" class="archived-dialog-spinner" aria-hidden="true" />
               <span v-else>{{ t('Delete permanently') }}</span>
@@ -109,7 +118,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   getArchivedThreadsPage,
   permanentlyDeleteThread,
@@ -130,13 +139,21 @@ const { t, uiLanguage } = useUiLanguage()
 const threads = ref<UiThread[]>([])
 const nextCursor = ref<string | null>(null)
 const searchQuery = ref('')
+const searchInputRef = ref<HTMLInputElement | null>(null)
 const isLoading = ref(false)
 const loadError = ref('')
 const actionThreadId = ref('')
 const actionKind = ref<'restore' | 'delete' | ''>('')
 const deleteCandidate = ref<UiThread | null>(null)
+const deleteDialogRef = ref<HTMLElement | null>(null)
+const deleteCancelButtonRef = ref<HTMLButtonElement | null>(null)
 const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
 let loadRequestId = 0
+let deleteDialogPreviouslyFocused: HTMLElement | null = null
+let deleteDialogBackground: HTMLElement | null = null
+let deleteDialogBackgroundWasInert = false
+let deleteDialogPreviousBodyOverflow = ''
+let deleteDialogEnvironmentLocked = false
 
 const filteredThreads = computed(() => {
   const query = searchQuery.value.trim().toLocaleLowerCase()
@@ -150,6 +167,17 @@ const filteredThreads = computed(() => {
 onMounted(() => {
   void loadFirstPage()
 })
+
+watch(deleteCandidate, (candidate) => {
+  if (candidate) {
+    lockDeleteDialogEnvironment()
+    void nextTick(() => deleteCancelButtonRef.value?.focus({ preventScroll: true }))
+  } else {
+    restoreDeleteDialogEnvironment()
+  }
+})
+
+onBeforeUnmount(restoreDeleteDialogEnvironment)
 
 async function loadFirstPage(): Promise<void> {
   const requestId = ++loadRequestId
@@ -213,6 +241,64 @@ async function restoreThread(thread: UiThread): Promise<void> {
 function closeDeleteDialog(): void {
   if (actionThreadId.value) return
   deleteCandidate.value = null
+}
+
+function openDeleteDialog(thread: UiThread): void {
+  deleteDialogPreviouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  deleteCandidate.value = thread
+}
+
+function lockDeleteDialogEnvironment(): void {
+  if (deleteDialogEnvironmentLocked) return
+  deleteDialogPreviousBodyOverflow = document.body.style.overflow
+  document.body.style.overflow = 'hidden'
+  deleteDialogBackground = document.querySelector<HTMLElement>('.desktop-layout')
+  deleteDialogBackgroundWasInert = deleteDialogBackground?.hasAttribute('inert') ?? false
+  if (deleteDialogBackground && !deleteDialogBackgroundWasInert) deleteDialogBackground.setAttribute('inert', '')
+  deleteDialogEnvironmentLocked = true
+}
+
+function restoreDeleteDialogEnvironment(): void {
+  if (!deleteDialogEnvironmentLocked) return
+  document.body.style.overflow = deleteDialogPreviousBodyOverflow
+  if (deleteDialogBackground && !deleteDialogBackgroundWasInert) deleteDialogBackground.removeAttribute('inert')
+  deleteDialogBackground = null
+  deleteDialogBackgroundWasInert = false
+  const focusTarget = deleteDialogPreviouslyFocused
+  deleteDialogPreviouslyFocused = null
+  deleteDialogEnvironmentLocked = false
+  void nextTick(() => {
+    if (focusTarget?.isConnected) focusTarget.focus({ preventScroll: true })
+    else searchInputRef.value?.focus({ preventScroll: true })
+  })
+}
+
+function onDeleteDialogKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeDeleteDialog()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const dialog = deleteDialogRef.value
+  if (!dialog) return
+  const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+    'button:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
+  )).filter((element) => element.getClientRects().length > 0)
+  if (focusable.length === 0) {
+    event.preventDefault()
+    dialog.focus({ preventScroll: true })
+    return
+  }
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus({ preventScroll: true })
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus({ preventScroll: true })
+  }
 }
 
 async function deleteThread(): Promise<void> {
@@ -351,7 +437,7 @@ function formatArchivedDate(value: string): string {
 }
 
 .archived-icon-button {
-  @apply flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 disabled:cursor-default disabled:opacity-40;
+  @apply flex h-8 w-8 items-center justify-center rounded-[10px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 disabled:cursor-default disabled:opacity-40;
 }
 
 .archived-icon-button.is-restore:hover {
@@ -388,11 +474,16 @@ function formatArchivedDate(value: string): string {
 }
 
 .archived-dialog-overlay {
-  @apply fixed inset-0 z-[500] flex items-center justify-center bg-black/40 p-4;
+  @apply fixed inset-0 flex items-center justify-center bg-black/40 p-4;
+  z-index: var(--ui-z-modal);
 }
 
 .archived-dialog {
-  @apply grid w-full max-w-md grid-cols-[40px_minmax(0,1fr)] gap-3 rounded-lg border border-zinc-200 bg-white p-4 shadow-xl;
+  @apply grid w-full max-w-md grid-cols-[40px_minmax(0,1fr)] gap-3 border p-4;
+  border-radius: var(--ui-radius-panel);
+  border-color: var(--mac-border-strong);
+  background: var(--mac-solid);
+  box-shadow: var(--mac-shadow-menu);
 }
 
 .archived-dialog-icon {
@@ -425,6 +516,17 @@ function formatArchivedDate(value: string): string {
 
 .archived-dialog-actions button.is-danger {
   @apply border-red-600 bg-red-600 text-white hover:bg-red-700;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .archived-icon-button,
+  .archived-dialog-actions button {
+    min-height: 2.75rem;
+  }
+
+  .archived-icon-button {
+    min-width: 2.75rem;
+  }
 }
 
 :global(:root.dark) .archived-toolbar,
@@ -460,6 +562,11 @@ function formatArchivedDate(value: string): string {
 :global(:root.dark) .archived-load-more:hover,
 :global(:root.dark) .archived-dialog-actions button:hover {
   @apply bg-zinc-800 text-zinc-100;
+}
+
+:global(:root.dark) .archived-dialog-actions button.is-danger,
+:global(:root.dark) .archived-dialog-actions button.is-danger:hover {
+  @apply border-red-600 bg-red-600 text-white hover:bg-red-700;
 }
 
 @media (max-width: 640px) {

@@ -1923,6 +1923,10 @@
   @apply bg-zinc-700 text-zinc-200 hover:bg-zinc-600;
 }
 
+:root.dark .sdm-btn-danger {
+  @apply border-rose-900/70 bg-rose-950/55 text-rose-300 hover:border-rose-800 hover:bg-rose-950/80;
+}
+
 :root.dark .automations-toolbar {
   @apply border-zinc-800;
 }
@@ -1978,21 +1982,11 @@
 }
 
 .turn-progress-card {
-  @apply w-full max-w-[min(var(--chat-column-max,45rem),100%)] overflow-hidden rounded-2xl border border-slate-200 bg-white/95 shadow-sm shadow-slate-900/5;
-}
-
-.turn-progress-card[data-tone='running'] {
-  @apply border-sky-200;
-}
-
-.turn-progress-card[data-tone='stale'] {
-  @apply border-amber-300;
-}
-
-.turn-progress-card[data-tone='failed'],
-.turn-progress-card[data-tone='interrupted'],
-.turn-progress-card[data-tone='disconnected'] {
-  @apply border-rose-200;
+  @apply w-full max-w-[min(var(--chat-column-max,45rem),100%)] overflow-hidden border;
+  border-radius: var(--ui-radius-panel);
+  border-color: var(--mac-border);
+  background: var(--mac-surface-strong);
+  box-shadow: var(--mac-shadow-soft);
 }
 
 .turn-progress-header {
@@ -2061,8 +2055,8 @@
 }
 
 @keyframes turn-progress-pulse {
-  0%, 100% { opacity: 0.55; transform: scale(0.9); }
-  50% { opacity: 1; transform: scale(1.08); }
+  0%, 100% { opacity: 0.62; transform: scale(0.96); }
+  50% { opacity: 1; transform: scale(1.03); }
 }
 
 .turn-progress-connection,
@@ -2178,7 +2172,7 @@
 .turn-progress-timeline-toggle,
 .turn-progress-mobile-open,
 .turn-progress-close {
-  @apply cursor-pointer border-0 bg-transparent text-xs font-medium text-sky-700 transition hover:text-sky-900;
+  @apply cursor-pointer border-0 bg-transparent text-xs font-medium text-sky-700 transition-colors hover:text-sky-900;
 }
 
 .turn-progress-result {
@@ -2354,7 +2348,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .turn-progress-pulse {
+  .turn-progress-pulse,
+  .thread-status-indicator[data-state='working'],
+  .thread-composer-stop-spinner {
     animation: none;
   }
 }
@@ -2397,7 +2393,7 @@
   }
 
   .turn-progress-mobile-open {
-    @apply flex w-full items-center justify-between border-t border-slate-100 px-3 py-2.5 text-left;
+    @apply flex min-h-11 w-full items-center justify-between border-t border-slate-100 px-3 py-2.5 text-left;
   }
 
   .turn-progress-body {
@@ -2405,7 +2401,14 @@
   }
 
   .turn-progress-body.turn-progress-body-mobile-open {
-    @apply fixed inset-x-0 bottom-0 z-[300] flex max-h-[78dvh] overflow-y-auto rounded-t-2xl border border-slate-200 bg-white px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl;
+    @apply fixed inset-x-0 bottom-0 flex max-h-[78dvh] overflow-y-auto border px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3;
+    z-index: var(--ui-z-fullscreen);
+    border-radius: var(--ui-radius-sheet) var(--ui-radius-sheet) 0 0;
+    border-color: var(--mac-border-strong);
+    background: var(--mac-solid);
+    box-shadow: var(--mac-shadow-menu);
+    -webkit-backdrop-filter: blur(var(--ui-blur-float)) saturate(145%);
+    backdrop-filter: blur(var(--ui-blur-float)) saturate(145%);
   }
 
   .turn-progress-mobile-sheet-header {
@@ -2413,11 +2416,16 @@
   }
 
   .turn-progress-close {
-    @apply inline-flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xl leading-none text-slate-600 hover:bg-slate-200;
+    @apply inline-flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-xl leading-none text-slate-600 hover:bg-slate-200;
   }
 
   .turn-progress-mobile-backdrop {
-    @apply fixed inset-0 z-[290] block border-0 bg-black/45;
+    @apply fixed inset-0 block border-0 bg-black/45;
+    z-index: var(--ui-z-modal);
+  }
+
+  .turn-progress-agent-row {
+    min-height: 2.75rem;
   }
 
   .turn-progress-agent-path {
@@ -2703,6 +2711,28 @@ samp {
 :root.dark .skill-card,
 :root.dark .directory-card {
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%);
+}
+
+:root:not(.dark) .turn-progress-card[data-tone='running'],
+:root.dark .turn-progress-card[data-tone='running'] {
+  border-color: color-mix(in srgb, var(--mac-accent) 38%, var(--mac-border));
+  box-shadow: inset 0 2px 0 var(--mac-accent), var(--mac-shadow-soft);
+}
+
+:root:not(.dark) .turn-progress-card[data-tone='stale'],
+:root.dark .turn-progress-card[data-tone='stale'] {
+  border-color: color-mix(in srgb, #f59e0b 52%, var(--mac-border));
+  box-shadow: inset 0 2px 0 #f59e0b, var(--mac-shadow-soft);
+}
+
+:root:not(.dark) .turn-progress-card[data-tone='failed'],
+:root:not(.dark) .turn-progress-card[data-tone='interrupted'],
+:root:not(.dark) .turn-progress-card[data-tone='disconnected'],
+:root.dark .turn-progress-card[data-tone='failed'],
+:root.dark .turn-progress-card[data-tone='interrupted'],
+:root.dark .turn-progress-card[data-tone='disconnected'] {
+  border-color: color-mix(in srgb, #f43f5e 46%, var(--mac-border));
+  box-shadow: inset 0 2px 0 #f43f5e, var(--mac-shadow-soft);
 }
 
 :root:not(.dark) .new-thread-launch-card,
@@ -3150,7 +3180,14 @@ samp {
   .search-dropdown-menu-wrap-down,
   .model-reasoning-menu,
   .model-reasoning-model-menu,
-  .thread-composer-mobile-settings-sheet {
+  .thread-composer-mobile-settings-sheet,
+  .thread-composer-attach-menu,
+  .thread-composer-file-mentions,
+  .thread-composer-autocomplete,
+  .thread-composer-context-popover,
+  .file-link-context-menu,
+  .turn-progress-body.turn-progress-body-mobile-open,
+  .sdm-panel {
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
   }

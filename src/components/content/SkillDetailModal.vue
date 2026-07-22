@@ -1,7 +1,15 @@
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="sdm-overlay" @click.self="$emit('close')">
-      <div class="sdm-panel">
+    <div v-if="visible" class="sdm-overlay" @click.self="closeDialog">
+      <div
+        ref="panelRef"
+        class="sdm-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="skill-detail-modal-title"
+        tabindex="-1"
+        @keydown="onDialogKeydown"
+      >
         <div class="sdm-header">
           <div class="sdm-title-area">
             <img
@@ -13,13 +21,13 @@
             />
             <div class="sdm-title-col">
               <div class="sdm-title-row">
-                <h3 class="sdm-title">{{ skill.displayName || skill.name }}</h3>
+                <h3 id="skill-detail-modal-title" class="sdm-title">{{ skill.displayName || skill.name }}</h3>
                 <span v-if="skill.installed && !effectiveEnabled" class="sdm-badge-disabled">{{ t('Disabled') }}</span>
               </div>
               <span class="sdm-owner">{{ skill.owner }}</span>
             </div>
           </div>
-          <button class="sdm-close" type="button" :aria-label="t('Close')" @click="$emit('close')">
+          <button ref="closeButtonRef" class="sdm-close" type="button" :aria-label="t('Close')" @click="closeDialog">
             <IconTablerX class="sdm-close-icon" />
           </button>
         </div>
@@ -36,16 +44,7 @@
         <div class="sdm-footer">
           <div class="sdm-footer-actions">
             <button
-              v-if="skill.installed"
-              class="sdm-btn sdm-btn-danger"
-              type="button"
-              :disabled="isActing"
-              @click="onUninstall"
-            >
-              {{ props.isUninstalling ? t('Uninstalling...') : t('Uninstall') }}
-            </button>
-            <button
-              v-else
+              v-if="!skill.installed"
               class="sdm-btn sdm-btn-primary"
               type="button"
               :disabled="isActing"
@@ -82,6 +81,16 @@
             >
               {{ t('Browse files') }}
             </button>
+
+            <button
+              v-if="skill.installed"
+              class="sdm-btn sdm-btn-danger"
+              type="button"
+              :disabled="isActing"
+              @click="onUninstall"
+            >
+              {{ props.isUninstalling ? t('Uninstalling...') : t('Uninstall') }}
+            </button>
           </div>
         </div>
       </div>
@@ -90,7 +99,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { fetchWithTimeout } from '../../api/requestClient'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import IconTablerX from '../icons/IconTablerX.vue'
@@ -127,6 +136,13 @@ const emit = defineEmits<{
 }>()
 
 const localEnabled = ref<boolean | null>(null)
+const panelRef = ref<HTMLElement | null>(null)
+const closeButtonRef = ref<HTMLButtonElement | null>(null)
+let previouslyFocusedElement: HTMLElement | null = null
+let backgroundElement: HTMLElement | null = null
+let backgroundWasInert = false
+let previousBodyOverflow = ''
+let dialogEnvironmentLocked = false
 const localDescription = ref('')
 const readmeContent = ref('')
 const isLoadingReadme = ref(false)
@@ -188,12 +204,67 @@ async function fetchReadme(): Promise<void> {
 
 watch(() => props.visible, (v) => {
   if (v) {
+    previouslyFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    previousBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    backgroundElement = document.querySelector<HTMLElement>('.desktop-layout')
+    backgroundWasInert = backgroundElement?.hasAttribute('inert') ?? false
+    if (backgroundElement && !backgroundWasInert) backgroundElement.setAttribute('inert', '')
+    dialogEnvironmentLocked = true
     localEnabled.value = null
     localDescription.value = ''
     readmeContent.value = ''
     void fetchReadme()
+    void nextTick(() => closeButtonRef.value?.focus({ preventScroll: true }))
+  } else if (dialogEnvironmentLocked) {
+    restoreDialogEnvironment()
   }
-})
+}, { immediate: true })
+
+onBeforeUnmount(restoreDialogEnvironment)
+
+function restoreDialogEnvironment(): void {
+  if (!dialogEnvironmentLocked) return
+  document.body.style.overflow = previousBodyOverflow
+  if (backgroundElement && !backgroundWasInert) backgroundElement.removeAttribute('inert')
+  backgroundElement = null
+  backgroundWasInert = false
+  previouslyFocusedElement?.focus({ preventScroll: true })
+  previouslyFocusedElement = null
+  dialogEnvironmentLocked = false
+}
+
+function closeDialog(): void {
+  emit('close')
+}
+
+function onDialogKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeDialog()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const panel = panelRef.value
+  if (!panel) return
+  const focusable = Array.from(panel.querySelectorAll<HTMLElement>(
+    'button:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
+  )).filter((element) => element.getClientRects().length > 0)
+  if (focusable.length === 0) {
+    event.preventDefault()
+    panel.focus({ preventScroll: true })
+    return
+  }
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus({ preventScroll: true })
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus({ preventScroll: true })
+  }
+}
 
 function onInstall(): void {
   emit('install', props.skill)
@@ -225,11 +296,18 @@ function onBrowseFiles(): void {
 @reference "tailwindcss";
 
 .sdm-overlay {
-  @apply fixed inset-0 z-[300] flex items-end sm:items-center justify-center bg-black/40;
+  @apply fixed inset-0 flex items-end sm:items-center justify-center bg-black/40;
+  z-index: var(--ui-z-modal);
 }
 
 .sdm-panel {
-  @apply w-full max-w-lg max-h-[90vh] sm:max-h-[80vh] rounded-t-2xl sm:rounded-2xl bg-white shadow-xl flex flex-col overflow-hidden;
+  @apply w-full max-w-lg max-h-[90vh] sm:max-h-[80vh] border flex flex-col overflow-hidden;
+  border-radius: var(--ui-radius-sheet) var(--ui-radius-sheet) 0 0;
+  border-color: var(--mac-border-strong);
+  background: var(--mac-solid);
+  box-shadow: var(--mac-shadow-menu);
+  -webkit-backdrop-filter: blur(var(--ui-blur-float)) saturate(145%);
+  backdrop-filter: blur(var(--ui-blur-float)) saturate(145%);
 }
 
 .sdm-header {
@@ -265,7 +343,7 @@ function onBrowseFiles(): void {
 }
 
 .sdm-close {
-  @apply shrink-0 h-7 w-7 rounded-lg border-0 bg-transparent text-zinc-400 flex items-center justify-center transition hover:bg-zinc-100 hover:text-zinc-700;
+  @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] border-0 bg-transparent text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700;
 }
 
 .sdm-close-icon {
@@ -285,7 +363,7 @@ function onBrowseFiles(): void {
 }
 
 .sdm-readme {
-  @apply text-xs text-zinc-700 leading-relaxed border-t border-zinc-100 pt-3;
+  @apply text-sm text-zinc-700 leading-relaxed border-t border-zinc-100 pt-3;
 }
 
 .sdm-readme :deep(h2) {
@@ -329,7 +407,7 @@ function onBrowseFiles(): void {
 }
 
 .sdm-btn {
-  @apply rounded-lg px-3 py-1.5 text-sm font-medium transition border-0 disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply min-h-9 rounded-[10px] border px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
 }
 
 .sdm-btn-primary {
@@ -337,7 +415,7 @@ function onBrowseFiles(): void {
 }
 
 .sdm-btn-danger {
-  @apply bg-rose-600 text-white hover:bg-rose-700;
+  @apply border-rose-200 bg-rose-50 text-rose-700 hover:border-rose-300 hover:bg-rose-100;
 }
 
 .sdm-btn-secondary {
@@ -352,7 +430,33 @@ function onBrowseFiles(): void {
   .sdm-btn {
     flex: 1 1 calc(50% - 0.5rem);
     min-width: 0;
-    min-height: 2.5rem;
+    min-height: 2.75rem;
+  }
+
+  .sdm-close {
+    @apply h-11 w-11;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sdm-btn,
+  .sdm-link {
+    min-height: 2.75rem;
+  }
+
+  .sdm-link {
+    @apply inline-flex items-center;
+  }
+
+  .sdm-close {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+}
+
+@media (min-width: 640px) {
+  .sdm-panel {
+    border-radius: var(--ui-radius-sheet);
   }
 }
 </style>

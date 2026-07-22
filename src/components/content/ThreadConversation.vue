@@ -3249,7 +3249,7 @@ onBeforeUnmount(() => {
 }
 
 .jump-to-latest-button {
-  @apply absolute left-1/2 bottom-4 z-20 inline-flex h-11 w-11 -translate-x-1/2 items-center justify-center rounded-full border border-slate-300 bg-white/96 text-slate-700 shadow-lg shadow-slate-900/10 transition hover:-translate-x-1/2 hover:-translate-y-0.5 hover:bg-white hover:text-slate-900;
+  @apply absolute left-1/2 bottom-4 z-20 inline-flex h-11 w-11 -translate-x-1/2 items-center justify-center rounded-full border border-slate-300 bg-white/96 text-slate-700 shadow-lg shadow-slate-900/10 transition-colors hover:bg-white hover:text-slate-900;
 }
 
 .jump-to-latest-icon {
@@ -3375,19 +3375,20 @@ onBeforeUnmount(() => {
 }
 
 .message-toolbar {
-  @apply mt-1 self-start flex items-center gap-1 opacity-[0.01] transition-opacity duration-200;
+  @apply mt-1 self-start flex items-center gap-1 opacity-30;
+  transition: opacity 120ms var(--ui-ease-out);
 }
 
-.message-row:hover .message-toolbar {
+.message-row:focus-within .message-toolbar {
   @apply opacity-100;
 }
 
 .message-copy-button {
-  @apply inline-flex items-center gap-0.5 rounded-full border border-slate-200 bg-white/90 px-1.25 py-0.5 text-[9px] font-medium leading-none text-slate-500 transition hover:border-slate-300 hover:bg-white hover:text-slate-900;
+  @apply inline-flex min-h-7 items-center gap-1 rounded-full border border-slate-200 bg-white/90 px-2 py-1 text-[11px] font-medium leading-none text-slate-500 transition-colors hover:border-slate-300 hover:bg-white hover:text-slate-900;
 }
 
 .message-fork-button {
-  @apply inline-flex items-center gap-0.5 px-0.5 py-0 text-[9px] font-medium leading-none text-slate-500 transition hover:text-slate-900;
+  @apply inline-flex min-h-7 items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium leading-none text-slate-500 transition-colors hover:text-slate-900;
 }
 
 
@@ -3396,7 +3397,7 @@ onBeforeUnmount(() => {
 }
 
 .message-edit-button {
-  @apply inline-flex items-center gap-0.5 px-0.5 py-0 text-[9px] font-medium leading-none text-amber-600/70 transition hover:text-amber-700;
+  @apply inline-flex min-h-7 items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium leading-none text-amber-600/70 transition-colors hover:text-amber-700;
 }
 
 .message-fork-icon,
@@ -3419,7 +3420,13 @@ onBeforeUnmount(() => {
   .message-copy-button,
   .message-fork-button,
   .message-edit-button {
-    @apply min-h-8 min-w-8 justify-center px-2 py-1.5 text-xs;
+    @apply min-h-11 min-w-11 justify-center px-2 py-1.5 text-xs;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .message-row:hover .message-toolbar {
+    @apply opacity-100;
   }
 }
 
@@ -3605,6 +3612,17 @@ onBeforeUnmount(() => {
 
 .plan-card-markdown :deep(.message-code-header) {
   @apply flex min-h-10 items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/90 px-3 py-1.5;
+}
+
+.plan-card-markdown :deep(.message-code-header)::before {
+  content: '';
+  width: 42px;
+  height: 12px;
+  flex: 0 0 42px;
+  background:
+    radial-gradient(circle at 6px 6px, #ff5f57 0 5px, transparent 5.5px),
+    radial-gradient(circle at 21px 6px, #febc2e 0 5px, transparent 5.5px),
+    radial-gradient(circle at 36px 6px, #28c840 0 5px, transparent 5.5px);
 }
 
 .plan-card-markdown :deep(.message-code-language) {
@@ -3821,11 +3839,25 @@ onBeforeUnmount(() => {
 }
 
 .message-code-block {
-  @apply overflow-hidden rounded-xl border border-slate-200 bg-slate-950 text-slate-100;
+  @apply overflow-hidden border border-slate-200 bg-slate-950 text-slate-100;
+  border-radius: var(--ui-radius-card);
+  box-shadow: 0 16px 36px rgb(0 0 0 / 18%), inset 0 1px 0 rgb(255 255 255 / 5%);
 }
 
 .message-code-header {
   @apply flex min-h-10 items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/90 px-3 py-1.5;
+}
+
+.message-code-header::before {
+  content: '';
+  width: 42px;
+  height: 12px;
+  flex: 0 0 42px;
+  background:
+    radial-gradient(circle at 6px 6px, #ff5f57 0 5px, transparent 5.5px),
+    radial-gradient(circle at 21px 6px, #febc2e 0 5px, transparent 5.5px),
+    radial-gradient(circle at 36px 6px, #28c840 0 5px, transparent 5.5px);
+  filter: saturate(0.9);
 }
 
 .message-code-language {
@@ -3861,7 +3893,12 @@ onBeforeUnmount(() => {
 }
 
 .file-link-context-menu {
-  @apply fixed z-50 min-w-36 rounded-lg border border-zinc-200 bg-white p-1 shadow-xl;
+  @apply fixed min-w-36 border p-1;
+  z-index: var(--ui-z-popover);
+  border-radius: var(--ui-radius-card);
+  border-color: var(--mac-border-strong);
+  background: var(--mac-solid);
+  box-shadow: var(--mac-shadow-menu);
 }
 
 .file-link-context-menu-item {
@@ -3882,7 +3919,11 @@ onBeforeUnmount(() => {
 }
 
 .message-card[data-role='user'] {
-  @apply rounded-2xl bg-slate-200 px-4 py-3 max-w-[min(560px,100%)];
+  @apply max-w-[min(560px,100%)] border px-4 py-3;
+  border-radius: 18px 18px 6px 18px;
+  border-color: var(--mac-border);
+  background: color-mix(in srgb, var(--mac-surface-strong) 88%, var(--mac-accent) 12%);
+  box-shadow: 0 8px 24px rgb(35 54 78 / 8%), inset 0 1px 0 var(--mac-highlight);
   width: fit-content;
   margin-left: auto;
   align-self: flex-end;
@@ -3974,7 +4015,7 @@ onBeforeUnmount(() => {
 }
 
 .cmd-row {
-  @apply w-full flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-200 bg-zinc-50 cursor-pointer transition text-left hover:bg-zinc-100;
+  @apply w-full flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-200 bg-zinc-50 cursor-pointer transition-colors text-left hover:bg-zinc-100;
 }
 
 .cmd-row.cmd-row-group {
@@ -4013,7 +4054,7 @@ onBeforeUnmount(() => {
 }
 
 .cmd-status {
-  @apply max-w-24 truncate text-right text-[11px] font-medium flex-shrink-0;
+  @apply max-w-24 truncate text-right text-xs font-medium flex-shrink-0;
 }
 
 .cmd-status-running .cmd-status {
@@ -4029,13 +4070,11 @@ onBeforeUnmount(() => {
 }
 
 .cmd-group-wrap {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 220ms ease-out;
+  display: none;
 }
 
 .cmd-group-wrap.cmd-group-visible {
-  grid-template-rows: 1fr;
+  display: block;
 }
 
 .cmd-group-inner {
@@ -4143,7 +4182,8 @@ onBeforeUnmount(() => {
 }
 
 .diff-viewer-backdrop {
-  @apply fixed inset-0 z-[300] bg-black/45 p-3 sm:p-6 flex items-center justify-center;
+  @apply fixed inset-0 bg-black/45 p-3 sm:p-6 flex items-center justify-center;
+  z-index: var(--ui-z-fullscreen);
 }
 
 .diff-viewer-shell {
@@ -4329,14 +4369,20 @@ onBeforeUnmount(() => {
   @apply flex min-h-0 flex-col gap-2 overflow-y-auto px-3 py-3;
 }
 
-.diff-viewer-sheet-enter-active,
-.diff-viewer-sheet-leave-active {
-  @apply transition-opacity duration-200;
+.diff-viewer-sheet-enter-active {
+  transition: opacity 180ms var(--ui-ease-out);
 }
 
-.diff-viewer-sheet-enter-active .diff-viewer-mobile-sheet,
+.diff-viewer-sheet-leave-active {
+  transition: opacity 140ms var(--ui-ease-out);
+}
+
+.diff-viewer-sheet-enter-active .diff-viewer-mobile-sheet {
+  transition: transform 220ms var(--ui-ease-drawer);
+}
+
 .diff-viewer-sheet-leave-active .diff-viewer-mobile-sheet {
-  transition: transform 200ms ease;
+  transition: transform 160ms var(--ui-ease-out);
 }
 
 .diff-viewer-sheet-enter-from,
@@ -4379,7 +4425,7 @@ onBeforeUnmount(() => {
   }
 
   .diff-viewer-language {
-    @apply text-[10px];
+    @apply text-[11px];
   }
 
   .diff-viewer-line {
@@ -4387,15 +4433,54 @@ onBeforeUnmount(() => {
   }
 
   .diff-viewer-line-number {
-    @apply px-1.5 py-1 text-[10px];
+    @apply px-1.5 py-1 text-[11px];
   }
 
   .diff-viewer-line-marker {
-    @apply px-1 py-1 text-[10px];
+    @apply px-1 py-1 text-[11px];
   }
 
   .diff-viewer-line-code {
-    @apply px-2 py-1 text-[11px] leading-5;
+    @apply px-2 py-1 text-xs leading-5;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .worked-separator,
+  .cmd-row,
+  .file-change-path-button,
+  .file-change-action-button,
+  .message-code-copy-button,
+  .plan-card-markdown :deep(.message-code-copy-button),
+  .diff-viewer-file-button,
+  .diff-viewer-mobile-files-button {
+    min-height: 2.75rem;
+  }
+
+  .image-modal-close,
+  .diff-viewer-close {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .worked-chevron,
+  .cmd-chevron {
+    transition: none;
+  }
+
+  .diff-viewer-sheet-enter-active,
+  .diff-viewer-sheet-leave-active {
+    transition: opacity 100ms linear;
+  }
+
+  .diff-viewer-sheet-enter-active .diff-viewer-mobile-sheet,
+  .diff-viewer-sheet-leave-active .diff-viewer-mobile-sheet,
+  .diff-viewer-sheet-enter-from .diff-viewer-mobile-sheet,
+  .diff-viewer-sheet-leave-to .diff-viewer-mobile-sheet {
+    transform: none;
+    transition: none;
   }
 }
 </style>
