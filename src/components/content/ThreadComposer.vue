@@ -2651,7 +2651,8 @@ watch(
 }
 
 .thread-composer-image-modal-backdrop {
-  @apply fixed inset-0 z-[320] flex items-center justify-center bg-black/40 p-6;
+  @apply fixed inset-0 flex items-center justify-center bg-black/40 p-6;
+  z-index: var(--ui-z-preview);
   cursor: zoom-out;
 }
 
@@ -2661,7 +2662,7 @@ watch(
 }
 
 .thread-composer-image-modal-close {
-  @apply absolute right-2 top-2 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white/90 text-slate-900;
+  @apply absolute right-2 top-2 z-10 flex h-11 w-11 items-center justify-center rounded-full border border-slate-300 bg-white/90 text-slate-900;
 }
 
 .thread-composer-image-modal-close-icon {

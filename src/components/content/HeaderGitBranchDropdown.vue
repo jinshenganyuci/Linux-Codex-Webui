@@ -477,7 +477,8 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
 }
 
 .header-git-menu-wrap {
-  @apply fixed right-3 top-[4.25rem] z-[1000];
+  @apply fixed right-3 top-[4.25rem];
+  z-index: var(--ui-z-popover);
 }
 
 .header-git-menu {
@@ -713,7 +714,7 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
   .header-git-menu,
   .header-git-menu.has-commit-files {
     @apply w-auto max-w-none overflow-y-auto;
-    max-height: calc(100vh - 5.25rem);
+    max-height: calc(100dvh - 5.25rem);
   }
 
   .header-git-review-row {
@@ -744,6 +745,32 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
   .header-git-branches,
   .header-git-file-list {
     @apply max-h-48;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .header-git-trigger,
+  .header-git-review-row,
+  .header-git-branch-button,
+  .header-git-branch-checkout,
+  .header-git-commit,
+  .header-git-ref,
+  .header-git-reset-commit,
+  .header-git-file,
+  .header-git-feedback,
+  .header-git-toggle-row {
+    min-height: 2.75rem;
+  }
+
+  .header-git-branch-checkout,
+  .header-git-ref,
+  .header-git-feedback {
+    min-width: 2.75rem;
+  }
+
+  .header-git-search {
+    min-height: 2.75rem;
+    font-size: 1rem;
   }
 }
 </style>

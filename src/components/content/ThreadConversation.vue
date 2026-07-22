@@ -3993,7 +3993,8 @@ onBeforeUnmount(() => {
 }
 
 .image-modal-backdrop {
-  @apply fixed inset-0 z-[300] bg-black/40 p-6 flex items-center justify-center;
+  @apply fixed inset-0 bg-black/40 p-6 flex items-center justify-center;
+  z-index: var(--ui-z-preview);
   cursor: zoom-out;
 }
 

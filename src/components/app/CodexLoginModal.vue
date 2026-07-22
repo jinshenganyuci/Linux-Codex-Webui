@@ -112,7 +112,8 @@ defineExpose({ focusCallbackInput })
 @reference "tailwindcss";
 
 .codex-login-modal-backdrop {
-  @apply fixed inset-0 z-[100] flex items-center justify-center bg-black/35 px-4;
+  @apply fixed inset-0 flex items-center justify-center bg-black/35 px-4;
+  z-index: var(--ui-z-modal);
 }
 
 .codex-login-modal {
