@@ -2884,10 +2884,10 @@ function projectGroupStyle(projectName: string): Record<string, string> | undefi
       top: '0',
       left: '0',
       right: '0',
-      zIndex: shouldElevateForMenu ? '40' : '1',
+      zIndex: shouldElevateForMenu ? '30' : '1',
       transform: `translate3d(0, ${targetTop}px, 0)`,
-      willChange: 'transform',
-      transition: 'transform 180ms ease',
+      willChange: drag ? 'transform' : 'auto',
+      transition: drag ? 'transform 180ms var(--ui-ease-in-out)' : 'none',
     }
   }
 
@@ -2897,7 +2897,7 @@ function projectGroupStyle(projectName: string): Record<string, string> | undefi
     left: `${drag.groupLeft}px`,
     width: `${drag.groupWidth}px`,
     height: `${drag.groupHeight}px`,
-    zIndex: '50',
+    zIndex: '40',
     pointerEvents: 'none',
     transform: `translate3d(0, ${drag.ghostTop}px, 0)`,
     willChange: 'transform',
@@ -3022,7 +3022,7 @@ onBeforeUnmount(() => {
 }
 
 .pinned-section {
-  @apply order-1 mb-1;
+  @apply order-1 mb-2;
 }
 
 .projects-section {
@@ -3030,7 +3030,7 @@ onBeforeUnmount(() => {
 }
 
 .chats-section {
-  @apply order-3 mt-1;
+  @apply order-3 mt-2;
 }
 
 .thread-tree-root.chats-first .chats-section {
@@ -3046,11 +3046,12 @@ onBeforeUnmount(() => {
 }
 
 .section-toggle-row {
-  @apply hover:bg-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-400;
+  @apply focus-visible:outline-none;
 }
 
 .thread-tree-header {
-  @apply text-sm font-normal text-zinc-500 select-none;
+  @apply select-none text-xs font-semibold text-zinc-500;
+  letter-spacing: 0.025em;
 }
 
 .chats-section-actions {
@@ -3058,7 +3059,7 @@ onBeforeUnmount(() => {
 }
 
 .chats-section-action {
-  @apply h-5 w-5 rounded text-zinc-500 flex items-center justify-center transition hover:bg-zinc-200 hover:text-zinc-700;
+  @apply flex h-8 w-8 items-center justify-center rounded-[10px] text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-700;
 }
 
 .chats-section-action[aria-pressed='true'] {
@@ -3070,11 +3071,13 @@ onBeforeUnmount(() => {
 }
 
 .organize-menu-trigger {
-  @apply h-5 w-5 rounded text-zinc-500 flex items-center justify-center transition hover:bg-zinc-200 hover:text-zinc-700;
+  @apply flex h-8 w-8 items-center justify-center rounded-[10px] text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-700;
 }
 
 .organize-menu-panel {
-  @apply absolute right-0 top-full mt-1 z-30 min-w-44 rounded-xl border border-zinc-200 bg-white/95 p-1.5 shadow-lg backdrop-blur-sm;
+  @apply absolute right-0 top-full mt-1 min-w-44 border border-zinc-200 bg-white/95 p-1.5 shadow-lg backdrop-blur-sm;
+  z-index: var(--ui-z-popover);
+  border-radius: var(--ui-radius-card);
 }
 
 .organize-menu-panel[data-open-direction='up'] {
@@ -3092,7 +3095,7 @@ onBeforeUnmount(() => {
 }
 
 .organize-menu-item {
-  @apply w-full rounded-lg px-2 py-1.5 text-sm text-zinc-700 flex items-center justify-between hover:bg-zinc-100;
+  @apply flex min-h-9 w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100;
 }
 
 .organize-menu-item[data-active='true'] {
@@ -3100,7 +3103,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-start-button {
-  @apply h-5 w-5 rounded text-zinc-500 flex items-center justify-center transition hover:bg-zinc-200 hover:text-zinc-700;
+  @apply flex h-8 w-8 items-center justify-center rounded-[10px] text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-700;
 }
 
 .thread-tree-loading {
@@ -3128,11 +3131,11 @@ onBeforeUnmount(() => {
 }
 
 .project-header-row {
-  @apply hover:bg-zinc-200 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-400;
+  @apply cursor-pointer focus-visible:outline-none;
 }
 
 .project-main-button {
-  @apply min-w-0 w-full text-left rounded px-0 py-0 flex items-center gap-1.5 min-h-5 cursor-grab;
+  @apply flex min-h-8 w-full min-w-0 cursor-grab items-center gap-1.5 rounded px-0 py-0 text-left;
 }
 
 .project-main-button[data-dragging-handle='true'] {
@@ -3152,7 +3155,7 @@ onBeforeUnmount(() => {
 }
 
 .project-title {
-  @apply min-w-0 flex-1 text-sm font-normal text-zinc-700 truncate select-none;
+  @apply min-w-0 flex-1 select-none truncate text-sm font-medium text-zinc-700;
 }
 
 .project-menu-wrap {
@@ -3164,11 +3167,13 @@ onBeforeUnmount(() => {
 }
 
 .project-menu-trigger {
-  @apply h-4 w-4 rounded p-0 text-zinc-600 flex items-center justify-center;
+  @apply flex h-8 w-8 items-center justify-center rounded-[10px] p-0 text-zinc-600;
 }
 
 .project-menu-panel {
-  @apply absolute right-0 top-full mt-1 z-20 min-w-36 rounded-md border border-zinc-200 bg-white p-1 shadow-md flex flex-col gap-0.5;
+  @apply absolute right-0 top-full mt-1 min-w-40 border border-zinc-200 bg-white p-1.5 shadow-md flex flex-col gap-0.5;
+  z-index: var(--ui-z-popover);
+  border-radius: var(--ui-radius-card);
 }
 
 .project-menu-panel[data-open-direction='up'] {
@@ -3178,7 +3183,7 @@ onBeforeUnmount(() => {
 }
 
 .project-menu-item {
-  @apply rounded px-2 py-1 text-left text-sm text-zinc-700 hover:bg-zinc-100;
+  @apply min-h-9 rounded-lg px-2.5 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100;
 }
 
 .project-menu-item-danger {
@@ -3202,7 +3207,7 @@ onBeforeUnmount(() => {
 }
 
 .project-empty {
-  @apply text-sm text-zinc-400;
+  @apply flex min-h-8 items-center text-sm text-zinc-400;
 }
 
 .thread-list {
@@ -3222,7 +3227,8 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-item[data-menu-open='true'] {
-  @apply relative z-40;
+  @apply relative;
+  z-index: var(--ui-z-popover);
 }
 
 .thread-row {
@@ -3230,7 +3236,8 @@ onBeforeUnmount(() => {
 }
 
 .thread-row[data-menu-open='true'] {
-  @apply relative z-30;
+  @apply relative;
+  z-index: var(--ui-z-popover);
 }
 
 .thread-left-stack {
@@ -3238,7 +3245,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-main-button {
-  @apply min-w-0 w-full text-left rounded px-0 py-0 flex items-center min-h-5;
+  @apply flex min-h-8 w-full min-w-0 items-center rounded px-0 py-0 text-left;
 }
 
 .thread-row-title-wrap {
@@ -3250,7 +3257,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-title {
-  @apply min-w-0 block flex-1 text-sm leading-5 font-normal text-zinc-800 truncate whitespace-nowrap;
+  @apply block min-w-0 flex-1 truncate whitespace-nowrap text-sm font-normal leading-5 text-zinc-800;
 }
 
 .thread-row-worktree-icon {
@@ -3274,7 +3281,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-time {
-  @apply block text-sm font-normal text-zinc-500;
+  @apply block text-xs font-normal text-zinc-500;
 }
 
 .thread-menu-wrap {
@@ -3282,15 +3289,18 @@ onBeforeUnmount(() => {
 }
 
 .thread-menu-trigger {
-  @apply h-4 w-4 rounded p-0 text-xs text-zinc-600 flex items-center justify-center;
+  @apply flex h-8 w-8 items-center justify-center rounded-[10px] p-0 text-xs text-zinc-600;
 }
 
 .thread-menu-panel {
-  @apply absolute right-0 top-full mt-1 z-20 min-w-36 rounded-md border border-zinc-200 bg-white p-1 shadow-md flex flex-col gap-0.5;
+  @apply absolute right-0 top-full mt-1 min-w-40 border border-zinc-200 bg-white p-1.5 shadow-md flex flex-col gap-0.5;
+  z-index: var(--ui-z-popover);
+  border-radius: var(--ui-radius-card);
 }
 
 .thread-menu-panel-fixed {
-  @apply fixed top-0 right-auto bottom-auto left-0 mt-0 z-50;
+  @apply fixed top-0 right-auto bottom-auto left-0 mt-0;
+  z-index: var(--ui-z-popover);
 }
 
 .thread-menu-panel:not(.thread-menu-panel-fixed)[data-open-direction='up'] {
@@ -3300,7 +3310,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-menu-item {
-  @apply rounded px-2 py-1 text-left text-sm text-zinc-700 hover:bg-zinc-100;
+  @apply min-h-9 rounded-lg px-2.5 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100;
 }
 
 .thread-menu-item:disabled {
@@ -3348,7 +3358,8 @@ onBeforeUnmount(() => {
 }
 
 .thread-row[data-active='true'] {
-  @apply bg-zinc-200;
+  background: var(--mac-accent-soft);
+  box-shadow: inset 2px 0 0 var(--mac-accent);
 }
 
 .thread-status-indicator[data-state='unread'] {
@@ -3380,19 +3391,27 @@ onBeforeUnmount(() => {
   .thread-start-button,
   .project-menu-trigger,
   .thread-menu-trigger {
-    @apply h-9 w-9;
+    @apply h-11 w-11;
   }
 
   .organize-menu-item,
   .project-menu-item,
   .thread-menu-item,
   .rename-thread-button {
-    min-height: 2.5rem;
+    min-height: 2.75rem;
+  }
+
+  .project-main-button,
+  .thread-main-button,
+  .project-empty,
+  .sidebar-menu-row {
+    min-height: 2.75rem;
   }
 }
 
 .rename-thread-overlay {
-  @apply fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4;
+  @apply fixed inset-0 flex items-center justify-center bg-black/40 p-4;
+  z-index: var(--ui-z-modal);
 }
 
 .rename-thread-panel {

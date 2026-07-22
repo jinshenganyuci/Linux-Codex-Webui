@@ -88,7 +88,7 @@
             @click="router.push({ name: 'automations' }); isMobile && setSidebarCollapsed(true)"
           >
             <span class="sidebar-skills-link-icon sidebar-automations-link-icon" aria-hidden="true">
-              <IconTablerBolt />
+              <IconTablerClock />
             </span>
             <span class="sidebar-skills-link-copy">
               <span class="sidebar-skills-link-title">{{ t('Automations') }}</span>
@@ -395,7 +395,7 @@
               <IconTablerBolt />
             </span>
             <span v-else-if="isAutomationsRoute" class="skills-route-header-icon automations-route-header-icon" aria-hidden="true">
-              <IconTablerBolt />
+              <IconTablerClock />
             </span>
           </template>
           <template #actions>
@@ -965,6 +965,7 @@ import ComposerRuntimeDropdown from './components/content/ComposerRuntimeDropdow
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import IconTablerArchive from './components/icons/IconTablerArchive.vue'
 import IconTablerBolt from './components/icons/IconTablerBolt.vue'
+import IconTablerClock from './components/icons/IconTablerClock.vue'
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerSettings from './components/icons/IconTablerSettings.vue'
 import IconTablerTerminal from './components/icons/IconTablerTerminal.vue'
@@ -4153,7 +4154,9 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .sidebar-scrollable {
-  @apply flex-1 min-h-0 overflow-y-auto py-4 px-2 flex flex-col gap-2;
+  @apply flex-1 min-h-0 overflow-y-auto flex flex-col;
+  gap: 0.375rem;
+  padding: 0.75rem 0.625rem;
 }
 
 .content-root {
@@ -4167,11 +4170,11 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .sidebar-thread-controls-host {
-  @apply mt-1 -translate-y-px px-2 pb-1;
+  @apply px-1 pb-1;
 }
 
 .sidebar-search-toggle {
-  @apply h-6.75 w-6.75 rounded-md border border-transparent bg-transparent text-zinc-600 flex items-center justify-center transition hover:border-zinc-200 hover:bg-zinc-50;
+  @apply flex h-8 w-8 items-center justify-center rounded-[10px] border border-transparent bg-transparent text-zinc-600 transition-colors;
 }
 
 .sidebar-search-toggle[aria-pressed='true'] {
@@ -4183,7 +4186,7 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .sidebar-search-bar {
-  @apply flex items-center gap-1.5 mx-2 px-2 py-1 rounded-md border border-zinc-200 bg-white transition-colors focus-within:border-zinc-400;
+  @apply mx-1 flex h-9 items-center gap-2 rounded-xl border border-zinc-200 bg-white px-2.5 transition-colors focus-within:border-zinc-400;
 }
 
 .sidebar-search-bar-icon {
@@ -4195,7 +4198,7 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .sidebar-search-clear {
-  @apply w-4 h-4 rounded text-zinc-400 flex items-center justify-center transition hover:text-zinc-600;
+  @apply flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:text-zinc-600;
 }
 
 .sidebar-search-clear-icon {
@@ -4204,32 +4207,46 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 
 @media (hover: none), (pointer: coarse) {
   .sidebar-search-toggle {
-    @apply h-10 w-10;
+    @apply h-11 w-11;
   }
 
   .sidebar-search-clear {
-    @apply h-8 w-8;
+    @apply h-11 w-11;
+  }
+
+  .sidebar-search-bar {
+    @apply h-11;
   }
 }
 
 .sidebar-skills-link {
-  @apply mx-2 flex items-center gap-3 rounded-2xl border border-transparent bg-transparent px-3 py-2.5 text-left text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950 cursor-pointer;
+  @apply mx-1 flex min-h-[3.25rem] cursor-pointer items-center gap-2.5 rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-left text-zinc-700 transition-colors;
 }
 
 .sidebar-skills-link.is-active {
-  @apply border-transparent bg-zinc-100 text-zinc-950;
+  color: var(--mac-text);
+  background: var(--mac-accent-soft);
+  border-color: color-mix(in srgb, var(--mac-accent) 22%, transparent);
+  box-shadow: inset 2px 0 0 var(--mac-accent), inset 0 1px 0 var(--mac-highlight);
 }
 
 .sidebar-skills-link-icon {
-  @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white;
+  @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px];
+  color: #1c7f52;
+  background: rgb(38 174 102 / 12%);
+  box-shadow: inset 0 0 0 1px rgb(38 174 102 / 13%), inset 0 1px 0 rgb(255 255 255 / 48%);
 }
 
 .sidebar-automations-link-icon {
-  @apply bg-amber-500;
+  color: #b86c00;
+  background: rgb(245 158 11 / 14%);
+  box-shadow: inset 0 0 0 1px rgb(245 158 11 / 15%), inset 0 1px 0 rgb(255 255 255 / 48%);
 }
 
 .sidebar-archived-link-icon {
-  @apply bg-zinc-700;
+  color: #66758a;
+  background: rgb(100 116 139 / 13%);
+  box-shadow: inset 0 0 0 1px rgb(100 116 139 / 14%), inset 0 1px 0 rgb(255 255 255 / 48%);
 }
 
 .sidebar-skills-link-icon :deep(svg) {
@@ -4241,11 +4258,12 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .sidebar-skills-link-title {
-  @apply truncate text-sm font-semibold leading-5 tracking-[-0.01em];
+  @apply truncate text-sm font-semibold leading-5;
+  letter-spacing: -0.01em;
 }
 
 .sidebar-skills-link-subtitle {
-  @apply truncate text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-500;
+  @apply truncate text-xs font-medium leading-4 text-zinc-500;
 }
 
 .sidebar-thread-controls-header-host {
@@ -4317,6 +4335,9 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 
 .content-grid-home {
   @apply overflow-y-auto;
+  background:
+    radial-gradient(circle at 50% 28%, rgb(0 122 255 / 12%), transparent 21rem),
+    radial-gradient(circle at 68% 42%, rgb(175 82 222 / 9%), transparent 18rem);
 }
 
 .content-thread {
@@ -4348,7 +4369,7 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .content-header-terminal-command :deep(.composer-dropdown-trigger) {
-  @apply h-8 rounded-full border border-zinc-200 bg-white px-3 text-xs text-zinc-700 outline-none transition hover:bg-zinc-50 focus:border-zinc-300;
+  @apply h-9 rounded-full border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-700 outline-none transition-colors hover:bg-zinc-50 focus:border-zinc-300;
 }
 
 .content-header-terminal-command :deep(.composer-dropdown-prefix-icon) {
@@ -4374,7 +4395,7 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .content-header-terminal-command :deep(.composer-dropdown-trigger) {
-  @apply rounded-full border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-700 transition hover:bg-zinc-50;
+  @apply rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-700 transition-colors hover:bg-zinc-50;
 }
 
 .content-header-terminal-command :deep(.composer-dropdown-prefix-icon),
@@ -4388,7 +4409,14 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .content-header-branch-dropdown :deep(.composer-dropdown-trigger) {
-  @apply rounded-full border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-700 transition hover:bg-zinc-50;
+  @apply min-h-9 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-700 transition-colors hover:bg-zinc-50;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .content-header-terminal-command :deep(.composer-dropdown-trigger),
+  .content-header-branch-dropdown :deep(.composer-dropdown-trigger) {
+    min-height: 44px;
+  }
 }
 
 .content-header-branch-dropdown :deep(.composer-dropdown-value) {
@@ -4409,19 +4437,31 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .new-thread-empty {
-  @apply flex-1 min-h-0 flex flex-col items-center justify-center gap-0.5 px-3 sm:px-6;
+  @apply relative flex-1 min-h-0 flex flex-col items-center justify-center px-3 py-8 sm:px-6 sm:py-12;
+  gap: 0.625rem;
 }
 
 .new-thread-hero {
-  @apply m-0 text-2xl sm:text-[2.5rem] font-normal leading-[1.05] text-zinc-900;
+  @apply m-0 text-[2rem] sm:text-[2.75rem] font-semibold leading-[1.02];
+  letter-spacing: -0.035em;
+  color: var(--mac-text);
+  background: linear-gradient(135deg, var(--mac-text) 18%, color-mix(in srgb, var(--mac-accent) 76%, #8d5bda) 92%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .new-thread-folder-dropdown {
-  @apply text-2xl sm:text-[2.5rem] text-zinc-500;
+  @apply mt-1 text-xl text-zinc-500 sm:text-[1.65rem];
 }
 
 .new-thread-folder-dropdown :deep(.composer-dropdown-trigger) {
-  @apply h-auto p-0 text-2xl sm:text-[2.5rem] leading-[1.05];
+  @apply min-h-12 rounded-2xl border px-4 py-2 text-xl sm:min-h-14 sm:px-5 sm:text-[1.65rem] leading-[1.1];
+  background: var(--mac-surface);
+  border-color: var(--mac-border);
+  box-shadow: var(--mac-shadow-soft);
+  -webkit-backdrop-filter: blur(18px) saturate(145%);
+  backdrop-filter: blur(18px) saturate(145%);
 }
 
 .new-thread-folder-dropdown :deep(.composer-dropdown-value) {
@@ -4437,7 +4477,7 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .new-thread-folder-actions {
-  @apply mt-3 flex w-full max-w-3xl flex-wrap items-center justify-center gap-2;
+  @apply mt-2 flex w-full max-w-3xl flex-wrap items-center justify-center gap-2;
 }
 
 .new-thread-project-import-input {
@@ -4445,7 +4485,11 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .new-thread-launch-card {
-  @apply mt-4 w-full max-w-3xl rounded-[28px] border border-emerald-200 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.2),_transparent_42%),linear-gradient(135deg,_#f4fff8,_#ffffff_58%)] px-5 py-5 text-left shadow-[0_18px_50px_-28px_rgba(5,150,105,0.45)];
+  @apply mt-3 w-full max-w-3xl border px-5 py-5 text-left;
+  border-radius: 20px;
+  border-color: var(--mac-border);
+  background: radial-gradient(circle at top left, rgb(0 122 255 / 16%), transparent 44%), linear-gradient(135deg, var(--mac-surface-strong), color-mix(in srgb, var(--mac-surface) 88%, #af52de 12%));
+  box-shadow: var(--mac-shadow-card);
 }
 
 .new-thread-launch-card-copy {
@@ -4457,7 +4501,9 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .new-thread-launch-card-badge {
-  @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-emerald-700 text-white shadow-[0_12px_28px_-18px_rgba(5,150,105,0.9)];
+  @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-white;
+  background: linear-gradient(145deg, #1688ff, #6f58d9);
+  box-shadow: 0 10px 24px -14px rgb(0 122 255 / 78%), inset 0 1px 0 rgb(255 255 255 / 32%);
 }
 
 .new-thread-launch-card-badge :deep(svg) {
@@ -4465,7 +4511,8 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .new-thread-launch-card-eyebrow {
-  @apply m-0 text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-700;
+  @apply m-0 text-xs font-semibold text-sky-700;
+  letter-spacing: 0.03em;
 }
 
 .new-thread-launch-card-title {
@@ -4485,27 +4532,33 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .new-thread-launch-card-pill {
-  @apply inline-flex items-center rounded-full border border-emerald-100 bg-white/80 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-700;
+  @apply inline-flex items-center rounded-full border bg-white/70 px-2.5 py-1 text-xs font-semibold text-slate-600;
+  border-color: var(--mac-border);
 }
 
 .new-thread-launch-card-button {
-  @apply inline-flex h-10 items-center justify-center rounded-full border border-zinc-200 bg-white px-4 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50;
+  @apply inline-flex h-10 items-center justify-center rounded-full border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-700 transition-colors hover:bg-zinc-50;
 }
 
 .new-thread-launch-card-button-primary {
-  @apply border-emerald-700 bg-emerald-700 text-white hover:bg-emerald-600;
+  border-color: var(--mac-accent);
+  background: var(--mac-accent);
+  color: white;
 }
 
 :global(:root.dark) .new-thread-launch-card {
-  @apply border-emerald-900/80 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.2),_transparent_38%),linear-gradient(135deg,_rgba(6,78,59,0.32),_rgba(24,24,27,0.96)_58%)] shadow-[0_24px_64px_-34px_rgba(16,185,129,0.35)];
+  border-color: var(--mac-border);
+  background: radial-gradient(circle at top left, rgb(10 132 255 / 19%), transparent 42%), linear-gradient(135deg, var(--mac-surface-strong), color-mix(in srgb, var(--mac-surface) 88%, #6f58d9 12%));
+  box-shadow: var(--mac-shadow-card);
 }
 
 :global(:root.dark) .new-thread-launch-card-eyebrow {
-  @apply text-emerald-300;
+  @apply text-sky-300;
 }
 
 :global(:root.dark) .new-thread-launch-card-badge {
-  @apply bg-emerald-500 text-white;
+  background: linear-gradient(145deg, #1688ff, #6f58d9);
+  color: white;
 }
 
 :global(:root.dark) .new-thread-launch-card-title {
@@ -4517,7 +4570,9 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 :global(:root.dark) .new-thread-launch-card-pill {
-  @apply border-emerald-900 bg-zinc-900/70 text-emerald-300;
+  border-color: var(--mac-border);
+  background: rgb(17 24 39 / 55%);
+  color: var(--mac-muted);
 }
 
 :global(:root.dark) .new-thread-launch-card-button {
@@ -4525,15 +4580,24 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 :global(:root.dark) .new-thread-launch-card-button-primary {
-  @apply border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-500;
+  border-color: var(--mac-accent);
+  background: var(--mac-accent);
+  color: white;
 }
 
 .new-thread-folder-action {
-  @apply inline-flex h-9 items-center justify-center rounded-full border border-zinc-200 bg-white px-4 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 disabled:cursor-default disabled:opacity-60;
+  @apply inline-flex h-10 items-center justify-center rounded-full border px-4 text-sm font-semibold transition-colors disabled:cursor-default disabled:opacity-60;
+  border-color: var(--mac-border);
+  background: var(--mac-surface-strong);
+  color: var(--mac-text);
+  box-shadow: inset 0 1px 0 var(--mac-highlight);
 }
 
 .new-thread-folder-action-primary {
-  @apply border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800;
+  border-color: var(--mac-accent);
+  background: var(--mac-accent);
+  color: white;
+  box-shadow: 0 8px 22px rgb(0 122 255 / 22%), inset 0 1px 0 rgb(255 255 255 / 25%);
 }
 
 .new-thread-open-folder-overlay {
@@ -4758,11 +4822,12 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .sidebar-settings-area {
-  @apply shrink-0 bg-slate-100 pt-2 px-2 pb-2 border-t border-zinc-200;
+  @apply shrink-0 border-t px-2 pb-2 pt-2;
+  border-color: var(--mac-border);
 }
 
 .sidebar-settings-button {
-  @apply flex items-center gap-2 w-full rounded-lg border-0 bg-transparent px-2 py-2 text-sm text-zinc-600 transition hover:bg-zinc-200 hover:text-zinc-900 cursor-pointer;
+  @apply flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-xl border-0 bg-transparent px-2.5 py-2 text-sm text-zinc-600 transition-colors;
 }
 
 .sidebar-settings-button-version {
@@ -4774,7 +4839,12 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 }
 
 .sidebar-settings-panel {
-  @apply mb-1 max-h-[min(70vh,36rem)] overflow-y-auto rounded-lg border border-zinc-200 bg-white;
+  @apply mb-1 max-h-[min(70vh,36rem)] overflow-y-auto border bg-white;
+  border-radius: var(--ui-radius-panel);
+  border-color: var(--mac-border-strong);
+  box-shadow: var(--mac-shadow-menu);
+  -webkit-backdrop-filter: blur(var(--ui-blur-float)) saturate(145%);
+  backdrop-filter: blur(var(--ui-blur-float)) saturate(145%);
 }
 
 .sidebar-settings-row {
@@ -5004,7 +5074,7 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 
 .settings-panel-enter-active,
 .settings-panel-leave-active {
-  transition: all 150ms ease;
+  transition: opacity 150ms var(--ui-ease-out), transform 180ms var(--ui-ease-out);
 }
 
 .settings-panel-enter-from,
@@ -5019,6 +5089,28 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 
 .sidebar-settings-build-label {
   @apply border-t border-zinc-100 px-3 py-2 text-[11px] text-zinc-500;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .sidebar-search-toggle:hover,
+  .sidebar-skills-link:hover,
+  .sidebar-settings-button:hover {
+    background: var(--mac-hover);
+    color: var(--mac-text);
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .new-thread-folder-action,
+  .new-thread-launch-card-button {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 639px) {
+  .new-thread-empty {
+    justify-content: safe center;
+  }
 }
 
 </style>

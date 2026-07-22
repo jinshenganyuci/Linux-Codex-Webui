@@ -18,8 +18,15 @@
         v-if="!isSidebarCollapsed"
         class="desktop-resize-handle"
         type="button"
+        role="separator"
+        tabindex="0"
+        aria-orientation="vertical"
         :aria-label="t('Resize sidebar')"
-        @mousedown="onResizeHandleMouseDown"
+        :aria-valuemin="MIN_SIDEBAR_WIDTH"
+        :aria-valuemax="MAX_SIDEBAR_WIDTH"
+        :aria-valuenow="Math.round(sidebarWidth)"
+        @pointerdown="onResizeHandlePointerDown"
+        @keydown="onResizeHandleKeydown"
       />
     </template>
 
@@ -87,24 +94,42 @@ function saveSidebarWidth(value: number): void {
   window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(value))
 }
 
-function onResizeHandleMouseDown(event: MouseEvent): void {
+function onResizeHandlePointerDown(event: PointerEvent): void {
+  if (event.pointerType === 'mouse' && event.button !== 0) return
   event.preventDefault()
   const startX = event.clientX
   const startWidth = sidebarWidth.value
+  const target = event.currentTarget
+  if (target instanceof HTMLElement) {
+    target.setPointerCapture(event.pointerId)
+  }
 
-  const onMouseMove = (moveEvent: MouseEvent) => {
+  const onPointerMove = (moveEvent: PointerEvent) => {
+    if (moveEvent.pointerId !== event.pointerId) return
     const delta = moveEvent.clientX - startX
     sidebarWidth.value = clampSidebarWidth(startWidth + delta)
   }
 
-  const onMouseUp = () => {
+  const onPointerEnd = (endEvent: PointerEvent) => {
+    if (endEvent.pointerId !== event.pointerId) return
     saveSidebarWidth(sidebarWidth.value)
-    window.removeEventListener('mousemove', onMouseMove)
-    window.removeEventListener('mouseup', onMouseUp)
+    window.removeEventListener('pointermove', onPointerMove)
+    window.removeEventListener('pointerup', onPointerEnd)
+    window.removeEventListener('pointercancel', onPointerEnd)
   }
 
-  window.addEventListener('mousemove', onMouseMove)
-  window.addEventListener('mouseup', onMouseUp)
+  window.addEventListener('pointermove', onPointerMove)
+  window.addEventListener('pointerup', onPointerEnd)
+  window.addEventListener('pointercancel', onPointerEnd)
+}
+
+function onResizeHandleKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  event.preventDefault()
+  const direction = event.key === 'ArrowLeft' ? -1 : 1
+  const step = event.shiftKey ? 32 : 8
+  sidebarWidth.value = clampSidebarWidth(sidebarWidth.value + direction * step)
+  saveSidebarWidth(sidebarWidth.value)
 }
 </script>
 
@@ -123,7 +148,7 @@ function onResizeHandleMouseDown(event: MouseEvent): void {
 }
 
 .desktop-resize-handle {
-  @apply relative w-px cursor-col-resize bg-slate-300 hover:bg-slate-400 transition;
+  @apply relative z-10 w-px cursor-col-resize bg-slate-300 transition-colors;
 }
 
 .desktop-resize-handle::before {
@@ -131,26 +156,46 @@ function onResizeHandleMouseDown(event: MouseEvent): void {
   @apply absolute -left-2 -right-2 top-0 bottom-0;
 }
 
+.desktop-resize-handle:hover,
+.desktop-resize-handle:focus-visible,
+.desktop-resize-handle:active {
+  background-color: var(--mac-accent);
+}
+
 .desktop-main {
-  @apply relative z-[100] bg-white min-h-0 overflow-y-hidden overflow-x-visible;
+  @apply relative z-0 bg-white min-h-0 overflow-y-hidden overflow-x-visible;
+}
+
+.desktop-layout:not(.is-mobile) .desktop-main {
+  border-radius: var(--ui-radius-panel) 0 0 var(--ui-radius-panel);
+  box-shadow: -8px 0 30px rgb(25 44 69 / 5%);
 }
 
 .mobile-drawer-backdrop {
-  @apply fixed inset-0 z-40 bg-black/40;
+  @apply fixed inset-0 bg-black/40;
+  z-index: var(--ui-z-drawer);
 }
 
 .mobile-drawer {
-  @apply absolute top-0 left-0 bottom-0 w-[85vw] max-w-80 bg-slate-100 overflow-hidden shadow-2xl;
+  @apply absolute top-0 left-0 bottom-0 w-[88vw] max-w-[340px] bg-slate-100 overflow-hidden shadow-2xl;
+  border-radius: 0 var(--ui-radius-sheet) var(--ui-radius-sheet) 0;
+  padding-left: env(safe-area-inset-left);
 }
 
-.drawer-enter-active,
+.drawer-enter-active {
+  transition: opacity 180ms var(--ui-ease-out);
+}
+
 .drawer-leave-active {
-  @apply transition-opacity duration-200;
+  transition: opacity 140ms var(--ui-ease-out);
 }
 
-.drawer-enter-active .mobile-drawer,
+.drawer-enter-active .mobile-drawer {
+  transition: transform 220ms var(--ui-ease-drawer);
+}
+
 .drawer-leave-active .mobile-drawer {
-  transition: transform 200ms ease;
+  transition: transform 160ms var(--ui-ease-out);
 }
 
 .drawer-enter-from {
@@ -167,5 +212,20 @@ function onResizeHandleMouseDown(event: MouseEvent): void {
 
 .drawer-leave-to .mobile-drawer {
   transform: translateX(-100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer-enter-active,
+  .drawer-leave-active {
+    transition-duration: 100ms;
+  }
+
+  .drawer-enter-active .mobile-drawer,
+  .drawer-leave-active .mobile-drawer,
+  .drawer-enter-from .mobile-drawer,
+  .drawer-leave-to .mobile-drawer {
+    transform: none;
+    transition: none;
+  }
 }
 </style>

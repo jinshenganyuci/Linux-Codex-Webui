@@ -57,7 +57,7 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
 @reference "tailwindcss";
 
 .sidebar-menu-row {
-  @apply w-full min-w-0 rounded-lg px-3 py-1 text-left transition flex items-center gap-2;
+  @apply flex min-h-8 w-full min-w-0 items-center gap-2 rounded-[10px] px-2.5 py-1 text-left transition-colors;
 }
 
 .sidebar-menu-row-left {
@@ -74,7 +74,7 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
 
 .sidebar-menu-row-right-default,
 .sidebar-menu-row-right-hover {
-  @apply transition;
+  transition: opacity var(--ui-duration-fast) var(--ui-ease-out);
 }
 
 .sidebar-menu-row[data-has-right='true'] .sidebar-menu-row-right-hover {
@@ -101,7 +101,7 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
 
 @media (hover: none), (pointer: coarse) {
   .sidebar-menu-row[data-has-right-hover='true'] {
-    min-height: 2.5rem;
+    min-height: 2.75rem;
   }
 
   .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true'] .sidebar-menu-row-right {
@@ -123,8 +123,8 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
   }
 
   .sidebar-menu-row-right-hover :deep(button) {
-    min-width: 2rem;
-    min-height: 2rem;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
   }
 }
 </style>

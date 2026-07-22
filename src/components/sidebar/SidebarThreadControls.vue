@@ -49,11 +49,11 @@ const { t } = useUiLanguage()
 @reference "tailwindcss";
 
 .sidebar-thread-controls {
-  @apply flex flex-row flex-nowrap items-center gap-2;
+  @apply flex flex-row flex-nowrap items-center gap-1.5;
 }
 
 .sidebar-thread-controls-button {
-  @apply h-6.75 w-6.75 rounded-md border border-transparent bg-transparent text-zinc-600 flex items-center justify-center transition hover:border-zinc-200 hover:bg-zinc-50;
+  @apply flex h-8 w-8 items-center justify-center rounded-[10px] border border-transparent bg-transparent text-zinc-600 transition-colors;
 }
 
 .sidebar-thread-controls-icon {
@@ -62,7 +62,15 @@ const { t } = useUiLanguage()
 
 @media (hover: none), (pointer: coarse) {
   .sidebar-thread-controls-button {
-    @apply h-10 w-10;
+    @apply h-11 w-11;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .sidebar-thread-controls-button:hover {
+    border-color: var(--mac-border);
+    background: var(--mac-hover);
+    color: var(--mac-text);
   }
 }
 </style>
