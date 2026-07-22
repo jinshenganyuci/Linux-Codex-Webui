@@ -17,49 +17,50 @@
       <IconTablerChevronDown class="composer-dropdown-chevron" />
     </button>
 
-    <div
-      v-if="isOpen"
-      ref="menuWrapRef"
-      :id="menuId"
-      class="composer-dropdown-menu-wrap"
-      :class="{
-        'composer-dropdown-menu-wrap-up': openDirection === 'up',
-        'composer-dropdown-menu-wrap-down': openDirection === 'down',
-      }"
-      :style="menuWrapStyle"
-    >
-      <div ref="menuRef" class="composer-dropdown-menu">
-        <div v-if="enableSearch" class="composer-dropdown-search-wrap">
-          <input
-            ref="searchInputRef"
-            v-model="searchQuery"
-            class="composer-dropdown-search-input"
-            type="text"
-            :placeholder="searchPlaceholderText"
-            @keydown.esc.prevent="onEscapeSearch"
-          />
+    <Teleport to="body">
+      <div
+        v-if="isOpen"
+        ref="menuWrapRef"
+        :id="menuId"
+        class="composer-dropdown-menu-wrap"
+        :class="{
+          'composer-dropdown-menu-wrap-up': openDirection === 'up',
+          'composer-dropdown-menu-wrap-down': openDirection === 'down',
+        }"
+        :style="menuWrapStyle"
+      >
+        <div ref="menuRef" class="composer-dropdown-menu">
+          <div v-if="enableSearch" class="composer-dropdown-search-wrap">
+            <input
+              ref="searchInputRef"
+              v-model="searchQuery"
+              class="composer-dropdown-search-input"
+              type="text"
+              :placeholder="searchPlaceholderText"
+              @keydown.esc.prevent="onEscapeSearch"
+            />
+          </div>
+
+          <ul class="composer-dropdown-options" role="listbox" :aria-label="triggerAccessibleLabel">
+            <li v-for="option in filteredOptions" :key="option.value">
+              <button
+                class="composer-dropdown-option"
+                :class="{ 'is-selected': option.value === modelValue }"
+                type="button"
+                role="option"
+                :aria-selected="option.value === modelValue"
+                @click="onSelect(option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </li>
+            <li v-if="filteredOptions.length === 0" class="composer-dropdown-empty">
+              {{ emptyText }}
+            </li>
+          </ul>
         </div>
-
-        <ul class="composer-dropdown-options" role="listbox" :aria-label="triggerAccessibleLabel">
-          <li v-for="option in filteredOptions" :key="option.value">
-            <button
-              class="composer-dropdown-option"
-              :class="{ 'is-selected': option.value === modelValue }"
-              type="button"
-              role="option"
-              :aria-selected="option.value === modelValue"
-              @click="onSelect(option.value)"
-            >
-              {{ option.label }}
-            </button>
-          </li>
-          <li v-if="filteredOptions.length === 0" class="composer-dropdown-empty">
-            {{ emptyText }}
-          </li>
-        </ul>
-
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 
@@ -213,6 +214,7 @@ function onDocumentPointerDown(event: PointerEvent): void {
   const target = event.target
   if (!(target instanceof Node)) return
   if (root.contains(target)) return
+  if (menuWrapRef.value?.contains(target)) return
   isOpen.value = false
   searchQuery.value = ''
 }

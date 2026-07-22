@@ -14,6 +14,7 @@ Return to the [manual test index](../../tests.md).
 | [Composer expands long drafts to full screen](composer-expands-long-drafts-to-full-screen.md) |
 | [Composer mode scoping and Fast mode support](composer-mode-scoping-and-fast-mode-support.md) |
 | [Model-specific reasoning and compact composer](model-specific-reasoning-and-compact-composer.md) |
+| [Desktop permissions dropdown opens inside the viewport](desktop-permissions-dropdown-opens-in-viewport.md) |
 | [Composer controls stay editable during responses](composer-controls-stay-editable-during-responses.md) |
 | [Feature: Markdown file links with backticked filename labels render correctly](markdown-file-links-with-backticked-filename-labels-render-correctly.md) |
 | [Feature: Sandbox approval requests recognize newer Codex payloads](sandbox-approval-requests-recognize-newer-codex-payloads.md) |
