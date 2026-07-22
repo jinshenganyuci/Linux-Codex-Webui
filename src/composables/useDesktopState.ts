@@ -1626,6 +1626,8 @@ export function useDesktopState() {
   const isUpdatingSpeedMode = ref(false)
   const isUpdatingPermissionMode = ref(false)
   const isRollingBack = ref(false)
+  const pendingNewThreadMessages = ref<UiMessage[]>([])
+  const pendingNewThreadPreviewError = ref('')
 
   const error = ref('')
   const isPolling = ref(false)
@@ -1782,6 +1784,26 @@ export function useDesktopState() {
       errorText,
       connectionState,
       turnProgress,
+    }
+  })
+  const pendingNewThreadLiveOverlay = computed<UiLiveOverlay | null>(() => {
+    if (pendingNewThreadMessages.value.length === 0) return null
+    const details = buildPendingTurnDetails(
+      readModelIdForThread(NEW_THREAD_COLLABORATION_MODE_CONTEXT),
+      selectedReasoningEffort.value,
+      selectedCollaborationMode.value,
+      selectedSpeedMode.value,
+    )
+    return {
+      activityLabel: THINKING_ACTIVITY_LABEL,
+      activityDetails: details,
+      mainModelDetails: details.filter((detail) => (
+        detail.startsWith('Model:') || detail.startsWith('Thinking:') || detail.startsWith('Speed:')
+      )),
+      reasoningText: '',
+      errorText: pendingNewThreadPreviewError.value,
+      connectionState: notificationConnectionState.value,
+      turnProgress: null,
     }
   })
   const codexQuota = computed<UiRateLimitSnapshot | null>(() => codexRateLimit.value)
@@ -3296,6 +3318,41 @@ export function useDesktopState() {
       messageType: 'userMessage.optimistic',
     }
     setPersistedMessagesForThread(threadId, [...existing, nextMessage])
+  }
+
+  function beginPendingNewThreadPreview(
+    text: string,
+    imageUrls: string[] = [],
+    skills: Array<{ name: string; path: string }> = [],
+    fileAttachments: FileAttachment[] = [],
+  ): void {
+    const nextText = text.trim()
+    if (!nextText && imageUrls.length === 0 && fileAttachments.length === 0) return
+    const current = pendingNewThreadMessages.value[0]
+    const isSamePreview = pendingNewThreadMessages.value.length === 1
+      && current?.text === nextText
+      && areStringArraysEqual(current.images ?? [], imageUrls)
+      && areStringArraysEqual((current.skills ?? []).map((skill) => skill.path), skills.map((skill) => skill.path))
+      && areStringArraysEqual(
+        (current.fileAttachments ?? []).map((file) => file.path),
+        fileAttachments.map((file) => file.path),
+      )
+    pendingNewThreadPreviewError.value = ''
+    if (isSamePreview) return
+    pendingNewThreadMessages.value = [{
+      id: `optimistic-user:new-thread:${Date.now()}`,
+      role: 'user',
+      text: nextText,
+      images: imageUrls.length > 0 ? [...imageUrls] : undefined,
+      skills: skills.length > 0 ? skills.map((skill) => ({ name: skill.name, path: skill.path })) : undefined,
+      fileAttachments: fileAttachments.length > 0 ? fileAttachments.map((file) => ({ ...file })) : undefined,
+      messageType: 'userMessage.optimistic',
+    }]
+  }
+
+  function clearPendingNewThreadPreview(): void {
+    pendingNewThreadMessages.value = []
+    pendingNewThreadPreviewError.value = ''
   }
 
   function setLiveAgentMessagesForThread(threadId: string, nextMessages: UiMessage[]): void {
@@ -5731,6 +5788,9 @@ export function useDesktopState() {
       return
     }
 
+    isLoadingMessages.value = false
+    appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments)
+
     if (isInProgress) {
       shouldAutoScrollOnNextAgentEvent = true
       void startTurnForThread(
@@ -5752,6 +5812,10 @@ export function useDesktopState() {
     error.value = ''
     shouldAutoScrollOnNextAgentEvent = true
     latestRuntimeStateByThreadId.delete(threadId)
+    invalidateAgentProgressLoadForThread(threadId)
+    if (threadId in agentProgressByThreadId.value) {
+      agentProgressByThreadId.value = omitKey(agentProgressByThreadId.value, threadId)
+    }
     optimisticTurnStartedAtByThreadId.set(threadId, Date.now())
     setTurnSummaryForThread(threadId, null)
     setTurnActivityForThread(
@@ -5811,6 +5875,7 @@ export function useDesktopState() {
     const speedMode = selectedSpeedMode.value
     if (!nextText && imageUrls.length === 0 && fileAttachments.length === 0) return ''
 
+    beginPendingNewThreadPreview(nextText, imageUrls, skills, fileAttachments)
     isSendingMessage.value = true
     error.value = ''
     let threadId = ''
@@ -5936,6 +6001,7 @@ export function useDesktopState() {
         setTurnActivityForThread(threadId, null)
       }
       const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+      pendingNewThreadPreviewError.value = errorMessage
       if (threadId) {
         setTurnErrorForThread(threadId, errorMessage)
       }
@@ -6995,6 +7061,8 @@ export function useDesktopState() {
     isSelectedThreadInterruptPending,
     selectedThreadServerRequests,
     selectedLiveOverlay,
+    pendingNewThreadMessages,
+    pendingNewThreadLiveOverlay,
     codexQuota,
     selectedThreadId,
     availableCollaborationModes,
@@ -7039,6 +7107,8 @@ export function useDesktopState() {
 
     sendMessageToSelectedThread,
     sendMessageToNewThread,
+    beginPendingNewThreadPreview,
+    clearPendingNewThreadPreview,
     interruptSelectedThreadTurn,
     selectedThreadQueuedMessages,
     removeQueuedMessage,

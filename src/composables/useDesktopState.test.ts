@@ -129,6 +129,16 @@ function progressSnapshot(input: {
   }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 function installTestWindow(initialStorage: Record<string, string> = {}) {
   const store = new Map(Object.entries(initialStorage))
   vi.stubGlobal('window', {
@@ -519,6 +529,214 @@ describe('collaboration mode selection', () => {
     state.primeSelectedThread('thread-a')
 
     expect(state.selectedCollaborationMode.value).toBe('plan')
+  })
+})
+
+describe('immediate sent-message rendering', () => {
+  it('shows an existing-thread user message and thinking state before start-turn resolves', async () => {
+    installTestWindow()
+    const startedTurn = deferred<string>()
+    gatewayMocks.resumeThread.mockResolvedValue({ model: '', modelProvider: '' })
+    gatewayMocks.startThreadTurn.mockReturnValue(startedTurn.promise)
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-immediate')
+    const sendPromise = state.sendMessageToSelectedThread('show this now')
+
+    await vi.waitFor(() => {
+      expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+    })
+    expect(state.messages.value).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        text: 'show this now',
+        messageType: 'userMessage.optimistic',
+      }),
+    ])
+    expect(state.selectedLiveOverlay.value).toMatchObject({
+      activityLabel: 'Thinking activity',
+      errorText: '',
+    })
+
+    startedTurn.resolve('turn-immediate')
+    await sendPromise
+  })
+
+  it('reveals an optimistic message immediately while the selected thread is still loading', async () => {
+    installTestWindow()
+    const resumedThread = deferred<{
+      messages: Array<{ id: string; role: 'assistant'; text: string; messageType: string }>
+      inProgress: boolean
+      activeTurnId: string
+      turnIndexByTurnId: Record<string, number>
+      hasMoreOlder: boolean
+      model: string
+      modelProvider: string
+    }>()
+    gatewayMocks.resumeThread.mockReturnValue(resumedThread.promise)
+    gatewayMocks.startThreadTurn.mockResolvedValue('turn-after-load')
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-loading')
+    const loadPromise = state.loadMessages('thread-loading')
+    expect(state.isLoadingMessages.value).toBe(true)
+
+    const sendPromise = state.sendMessageToSelectedThread('visible during load')
+    await vi.waitFor(() => {
+      expect(state.messages.value.some((message) => message.text === 'visible during load')).toBe(true)
+    })
+    expect(state.isLoadingMessages.value).toBe(false)
+    expect(state.selectedLiveOverlay.value).toMatchObject({ activityLabel: 'Thinking activity' })
+
+    resumedThread.resolve({
+      messages: [{ id: 'assistant-old', role: 'assistant', text: 'Previous response', messageType: 'agentMessage' }],
+      inProgress: false,
+      activeTurnId: '',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+    })
+    await Promise.all([loadPromise, sendPromise])
+    expect(state.messages.value.filter((message) => message.text === 'visible during load')).toHaveLength(1)
+  })
+
+  it('replaces stale completed progress with a fresh thinking state on send', async () => {
+    installTestWindow()
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.resumeThread.mockResolvedValue({
+      messages: [{ id: 'assistant-old', role: 'assistant', text: 'Previous response', messageType: 'agentMessage' }],
+      inProgress: false,
+      activeTurnId: '',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+    })
+    gatewayMocks.getAgentProgress.mockResolvedValue(progressSnapshot({
+      threadId: 'thread-completed-progress',
+      turnId: 'turn-completed',
+      status: 'completed',
+      updatedAtMs: 1_000,
+    }))
+    const startedTurn = deferred<string>()
+    gatewayMocks.startThreadTurn.mockReturnValue(startedTurn.promise)
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-completed-progress')
+    await state.loadMessages('thread-completed-progress')
+    await vi.waitFor(() => {
+      expect(state.selectedLiveOverlay.value?.turnProgress?.status).toBe('completed')
+    })
+
+    const sendPromise = state.sendMessageToSelectedThread('start fresh')
+    await vi.waitFor(() => {
+      expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+    })
+    expect(state.selectedLiveOverlay.value).toMatchObject({
+      activityLabel: 'Thinking activity',
+      turnProgress: null,
+    })
+
+    startedTurn.resolve('turn-fresh')
+    await sendPromise
+  })
+
+  it('shows an in-progress steer message before the steer request resolves', async () => {
+    installTestWindow()
+    let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.resumeThread.mockResolvedValue({ model: '', modelProvider: '' })
+    const startedTurn = deferred<string>()
+    gatewayMocks.startThreadTurn.mockReturnValue(startedTurn.promise)
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-steer')
+    state.startPolling()
+    notificationHandler({
+      method: 'turn/started',
+      params: { threadId: 'thread-steer', turn: { id: 'turn-running' } },
+    })
+
+    await state.sendMessageToSelectedThread('steer immediately', [], [], 'steer')
+
+    expect(state.messages.value).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        text: 'steer immediately',
+        messageType: 'userMessage.optimistic',
+      }),
+    ])
+    startedTurn.resolve('turn-steer')
+  })
+
+  it('keeps queue-mode messages in the queue instead of the conversation', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-queue', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    state.primeSelectedThread('thread-queue')
+    await state.sendMessageToSelectedThread('queue only', [], [], 'queue')
+
+    expect(state.messages.value).toEqual([])
+    expect(state.selectedThreadQueuedMessages.value).toEqual([
+      expect.objectContaining({ text: 'queue only' }),
+    ])
+  })
+
+  it('shows a new-thread preview before thread creation resolves and transfers it once created', async () => {
+    installTestWindow()
+    const startedThread = deferred<{ threadId: string; model: string; modelProvider: string; turnId: string }>()
+    gatewayMocks.startThreadWithTurn.mockReturnValue(startedThread.promise)
+
+    const state = useDesktopState()
+    const sendPromise = state.sendMessageToNewThread('new thread now', '/tmp/project')
+
+    expect(state.pendingNewThreadMessages.value).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        text: 'new thread now',
+        messageType: 'userMessage.optimistic',
+      }),
+    ])
+    expect(state.pendingNewThreadLiveOverlay.value).toMatchObject({
+      activityLabel: 'Thinking activity',
+      errorText: '',
+    })
+    expect(state.selectedThreadId.value).toBe('')
+
+    startedThread.resolve({
+      threadId: 'created-thread',
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      turnId: 'turn-created',
+    })
+    await expect(sendPromise).resolves.toBe('created-thread')
+    expect(state.selectedThreadId.value).toBe('created-thread')
+    expect(state.messages.value.filter((message) => message.text === 'new thread now')).toHaveLength(1)
+
+    state.clearPendingNewThreadPreview()
+    expect(state.pendingNewThreadMessages.value).toEqual([])
+    expect(state.pendingNewThreadLiveOverlay.value).toBeNull()
+  })
+
+  it('keeps the new-thread message visible with an error when creation fails', async () => {
+    installTestWindow()
+    gatewayMocks.startThreadWithTurn.mockRejectedValue(new Error('Thread creation failed'))
+
+    const state = useDesktopState()
+    await expect(state.sendMessageToNewThread('do not lose this', '/tmp/project')).rejects.toThrow('Thread creation failed')
+
+    expect(state.pendingNewThreadMessages.value[0]).toMatchObject({ text: 'do not lose this' })
+    expect(state.pendingNewThreadLiveOverlay.value).toMatchObject({ errorText: 'Thread creation failed' })
   })
 })
 

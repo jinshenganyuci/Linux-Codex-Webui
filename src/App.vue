@@ -471,7 +471,19 @@
           </template>
           <template v-else-if="isHomeRoute">
             <div class="content-grid content-grid-home">
-              <div class="new-thread-empty">
+              <div v-if="pendingNewThreadMessages.length > 0" class="content-thread">
+                <ThreadConversation
+                  :messages="pendingNewThreadMessages"
+                  :is-loading="false"
+                  :active-thread-id="composerThreadContextId"
+                  :cwd="composerCwd"
+                  :live-overlay="pendingNewThreadLiveOverlay"
+                  :pending-requests="[]"
+                  :has-more-persisted-above="false"
+                  :is-loading-persisted-above="false"
+                />
+              </div>
+              <div v-else class="new-thread-empty">
                 <p class="new-thread-hero">{{ t("Let's build") }}</p>
                 <ComposerDropdown class="new-thread-folder-dropdown" :model-value="newThreadCwd"
                   :options="newThreadFolderOptions" :placeholder="t('Choose folder')"
@@ -1070,6 +1082,8 @@ const {
   selectedThreadTerminalOpen,
   selectedThreadServerRequests,
   selectedLiveOverlay,
+  pendingNewThreadMessages,
+  pendingNewThreadLiveOverlay,
   loadAgentResult,
   codexQuota,
   selectedThreadId,
@@ -1110,6 +1124,8 @@ const {
   forkThreadFromTurn,
   sendMessageToSelectedThread,
   sendMessageToNewThread,
+  beginPendingNewThreadPreview,
+  clearPendingNewThreadPreview,
   interruptSelectedThreadTurn,
   selectedThreadQueuedMessages,
   removeQueuedMessage,
@@ -4039,6 +4055,8 @@ async function submitFirstMessageForNewThread(
   skills: Array<{ name: string; path: string }> = [],
   fileAttachments: Array<{ label: string; path: string; fsPath: string }> = [],
 ): Promise<void> {
+  let didStartThreadRequest = false
+  beginPendingNewThreadPreview(text, imageUrls, skills, fileAttachments)
   try {
     worktreeInitStatus.value = { phase: 'idle', title: '', message: '' }
     let targetCwd = newThreadCwd.value
@@ -4054,6 +4072,7 @@ async function submitFirstMessageForNewThread(
         newThreadCwd.value = created.cwd
         worktreeInitStatus.value = { phase: 'idle', title: '', message: '' }
       } catch {
+        clearPendingNewThreadPreview()
         worktreeInitStatus.value = {
           phase: 'error',
           title: t('Worktree setup failed'),
@@ -4066,11 +4085,14 @@ async function submitFirstMessageForNewThread(
       targetCwd = directory.cwd
       newThreadCwd.value = directory.cwd
     }
+    didStartThreadRequest = true
     const threadId = await sendMessageToNewThread(text, targetCwd, imageUrls, skills, fileAttachments)
     if (!threadId) return
     await router.replace({ name: 'thread', params: { threadId } })
+    clearPendingNewThreadPreview()
     scheduleMobileConversationJumpToLatest()
   } catch {
+    if (!didStartThreadRequest) clearPendingNewThreadPreview()
     // Error is already reflected in state.
   }
 }
@@ -4106,6 +4128,7 @@ async function onTryDirectoryItem(payload: DirectoryTryItemPayload): Promise<voi
     const threadId = await sendMessageToNewThread(text, targetCwd, [], skills, [])
     if (!threadId) return
     await router.replace({ name: 'thread', params: { threadId } })
+    clearPendingNewThreadPreview()
     scheduleMobileConversationJumpToLatest()
   } catch {
     // Error is already reflected in shared thread state.
