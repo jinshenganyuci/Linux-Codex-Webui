@@ -602,13 +602,14 @@ function readString(value: unknown): string {
 @reference "tailwindcss";
 
 .thread-terminal-panel {
-  @apply overflow-hidden rounded-lg border border-zinc-800 bg-black shadow-lg;
-  height: min(34vh, 20rem);
+  @apply flex flex-col overflow-hidden border border-zinc-800 bg-black shadow-lg;
+  border-radius: var(--ui-radius-card);
+  height: min(34dvh, 20rem);
   min-height: 13rem;
 }
 
 .thread-terminal-header {
-  @apply flex h-9 items-center justify-between border-b border-zinc-800 bg-zinc-950 px-2;
+  @apply flex min-h-10 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-950 px-2;
 }
 
 .thread-terminal-tabs {
@@ -616,7 +617,7 @@ function readString(value: unknown): string {
 }
 
 .thread-terminal-tab {
-  @apply flex h-7 min-w-20 max-w-36 shrink-0 items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-2 text-xs text-zinc-300 transition hover:border-zinc-700 hover:text-white;
+  @apply flex min-h-8 min-w-20 max-w-36 shrink-0 items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-2 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:text-white;
 }
 
 .thread-terminal-tab.is-active {
@@ -644,19 +645,15 @@ function readString(value: unknown): string {
 }
 
 .thread-terminal-action {
-  @apply rounded-md border border-transparent px-2 py-1 text-xs text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-900 hover:text-white;
+  @apply min-h-8 rounded-md border border-transparent px-2 py-1 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:bg-zinc-900 hover:text-white;
 }
 
 .thread-terminal-error {
-  @apply m-0 border-b border-rose-900 bg-rose-950 px-3 py-1.5 text-xs text-rose-200;
+  @apply m-0 shrink-0 border-b border-rose-900 bg-rose-950 px-3 py-1.5 text-xs text-rose-200;
 }
 
 .thread-terminal-host {
-  @apply h-[calc(100%-2.25rem)] min-h-0 w-full overflow-hidden px-2 py-2;
-}
-
-.thread-terminal-panel.is-error .thread-terminal-host {
-  @apply h-[calc(100%-4.625rem)];
+  @apply min-h-0 w-full flex-1 overflow-hidden px-2 py-2;
 }
 
 .thread-terminal-host :deep(.xterm) {
@@ -669,12 +666,21 @@ function readString(value: unknown): string {
 
 @media (max-width: 767px) {
   .thread-terminal-panel {
-    height: min(28vh, 14rem);
+    height: min(28dvh, 14rem);
     min-height: 9rem;
   }
 
   .thread-terminal-header {
-    @apply px-1.5;
+    @apply min-h-11 px-1.5;
+  }
+
+  .thread-terminal-tab,
+  .thread-terminal-action {
+    min-height: 2.75rem;
+  }
+
+  .thread-terminal-action {
+    min-width: 2.75rem;
   }
 
   .thread-terminal-action {

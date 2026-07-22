@@ -1716,7 +1716,7 @@ onMounted(async () => {
 .directory-action,
 .directory-action-link,
 .directory-modal-close {
-  @apply shrink-0 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 no-underline transition hover:border-zinc-300 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50;
+  @apply shrink-0 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 no-underline transition-colors hover:border-zinc-300 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50;
 }
 
 .directory-action.primary {
@@ -1732,7 +1732,7 @@ onMounted(async () => {
 }
 
 .directory-tab {
-  @apply rounded-md border-0 bg-transparent px-2 py-1.5 text-sm font-medium text-zinc-500 transition hover:text-zinc-800;
+  @apply rounded-md border-0 bg-transparent px-2 py-1.5 text-sm font-medium text-zinc-500 transition-colors hover:text-zinc-800;
 }
 
 .directory-tab.is-active {
@@ -1752,7 +1752,7 @@ onMounted(async () => {
 }
 
 .skills-embedded-toggle {
-  @apply flex items-center gap-1.5 border-0 bg-transparent p-0 text-sm font-medium text-zinc-600 transition hover:text-zinc-900 cursor-pointer;
+  @apply flex items-center gap-1.5 border-0 bg-transparent p-0 text-sm font-medium text-zinc-600 transition-colors hover:text-zinc-900 cursor-pointer;
 }
 
 .skills-embedded-title {
@@ -1776,7 +1776,7 @@ onMounted(async () => {
 }
 
 .mcp-skill-card {
-  @apply flex w-full flex-col gap-1.5 rounded-xl border border-zinc-200 bg-white p-3 text-left transition hover:border-zinc-300 hover:shadow-sm cursor-pointer;
+  @apply flex w-full flex-col gap-1.5 rounded-xl border border-zinc-200 bg-white p-3 text-left transition-[border-color,box-shadow] hover:border-zinc-300 hover:shadow-sm cursor-pointer;
 }
 
 .mcp-skill-card-top {
@@ -1848,7 +1848,7 @@ onMounted(async () => {
 }
 
 .directory-sort-button {
-  @apply rounded-md border-0 bg-transparent px-2.5 py-1 text-xs font-medium text-zinc-500 transition hover:text-zinc-800;
+  @apply rounded-md border-0 bg-transparent px-2.5 py-1 text-xs font-medium text-zinc-500 transition-colors hover:text-zinc-800;
 }
 
 .directory-sort-button.is-active {
@@ -1864,7 +1864,7 @@ onMounted(async () => {
 }
 
 .directory-card {
-  @apply flex min-h-36 flex-col gap-2 rounded-xl border border-zinc-200 bg-white p-3 text-left transition hover:border-zinc-300 hover:shadow-sm;
+  @apply flex min-h-36 flex-col gap-2 rounded-xl border border-zinc-200 bg-white p-3 text-left transition-[border-color,box-shadow] hover:border-zinc-300 hover:shadow-sm;
 }
 
 button.directory-card {
@@ -1973,11 +1973,14 @@ button.directory-card {
 }
 
 .directory-modal-overlay {
-  @apply fixed inset-0 z-[300] flex items-end justify-center bg-black/40 sm:items-center;
+  @apply fixed inset-0 flex items-end justify-center bg-black/40 sm:items-center;
+  z-index: var(--ui-z-modal);
 }
 
 .directory-modal {
-  @apply flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl bg-white shadow-xl sm:max-h-[82vh] sm:rounded-2xl;
+  @apply flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden border bg-white shadow-xl sm:max-h-[82vh];
+  border-radius: var(--ui-radius-sheet) var(--ui-radius-sheet) 0 0;
+  border-color: var(--mac-border-strong);
 }
 
 .directory-modal-header,
@@ -2159,32 +2162,6 @@ button.directory-card {
   @apply text-zinc-500;
 }
 
-@media (prefers-color-scheme: dark) {
-  .mcp-skill-card {
-    @apply border-zinc-700 bg-zinc-900 hover:border-zinc-600;
-  }
-
-  .mcp-skill-avatar-fallback {
-    @apply bg-zinc-700 text-zinc-300;
-  }
-
-  .mcp-skill-name {
-    @apply text-zinc-100;
-  }
-
-  .mcp-skill-owner {
-    @apply text-zinc-400;
-  }
-
-  .mcp-skill-meta {
-    @apply text-zinc-300;
-  }
-
-  .mcp-skill-chevron {
-    @apply text-zinc-500;
-  }
-}
-
 :global(:root.dark) .directory-tabs,
 :global(:root.dark) .directory-search,
 :global(:root.dark) .directory-card,
@@ -2218,6 +2195,27 @@ button.directory-card {
   @apply border-zinc-700 bg-zinc-900 text-zinc-400;
 }
 
+:global(:root.dark) .directory-include-row {
+  @apply text-zinc-300;
+}
+
+:global(:root.dark) .directory-badge,
+:global(:root.dark) .directory-auth-status.is-ok,
+:global(:root.dark) .directory-toast,
+:global(:root.dark) .mcp-skill-badge-ok {
+  @apply border-emerald-800 bg-emerald-950/65 text-emerald-300;
+}
+
+:global(:root.dark) .directory-auth-status.is-warning,
+:global(:root.dark) .mcp-skill-badge-warning {
+  @apply border-amber-800 bg-amber-950/60 text-amber-300;
+}
+
+:global(:root.dark) .directory-badge.is-muted,
+:global(:root.dark) .mcp-skill-badge-muted {
+  @apply border-zinc-700 bg-zinc-800 text-zinc-300;
+}
+
 :global(:root.dark) .composio-preview-hero {
   @apply border-sky-900/70 bg-sky-950/40;
 }
@@ -2246,5 +2244,46 @@ button.directory-card {
 
 :global(:root.dark) .composio-fallback {
   @apply bg-sky-950 text-sky-300;
+}
+
+:global(:root.dark) .directory-action.danger,
+:global(:root.dark) .directory-action.danger:hover {
+  @apply border-rose-600 bg-rose-600 text-white hover:bg-rose-700;
+}
+
+@media (min-width: 640px) {
+  .directory-modal {
+    border-radius: var(--ui-radius-sheet);
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .directory-refresh,
+  .directory-action,
+  .directory-action-link,
+  .directory-modal-close,
+  .directory-tab,
+  .directory-sort-button,
+  .skills-embedded-toggle,
+  .directory-include-row button {
+    min-height: 2.75rem;
+  }
+
+  .directory-search {
+    min-height: 2.75rem;
+    font-size: 1rem;
+  }
+
+  .directory-sort-button,
+  .directory-include-row button {
+    min-width: 2.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skills-embedded-chevron,
+  .mcp-skill-chevron {
+    transition: none;
+  }
 }
 </style>

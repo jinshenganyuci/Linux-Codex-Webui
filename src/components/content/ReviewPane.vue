@@ -929,7 +929,9 @@ onBeforeUnmount(() => {
 @reference "tailwindcss";
 
 .review-pane {
-  @apply fixed inset-3 z-[1200] flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl;
+  @apply fixed inset-3 flex min-h-0 min-w-0 flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl;
+  z-index: var(--ui-z-fullscreen);
+  border-radius: var(--ui-radius-panel);
 }
 
 .review-pane.is-mobile {
@@ -962,7 +964,7 @@ onBeforeUnmount(() => {
 .review-pane-bulk-button,
 .review-pane-row-button,
 .review-pane-primary-cta {
-  @apply rounded-full border border-zinc-200 bg-white px-2.5 py-1.25 text-[11px] text-zinc-700 transition hover:bg-zinc-50 disabled:cursor-default disabled:opacity-50;
+  @apply rounded-full border border-zinc-200 bg-white px-2.5 py-1.25 text-[11px] text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-default disabled:opacity-50;
 }
 
 .review-pane-close {
@@ -1072,7 +1074,7 @@ onBeforeUnmount(() => {
 }
 
 .review-pane-tree-folder {
-  @apply flex w-full items-center gap-1 rounded-lg border border-transparent px-2 py-1.5 text-left text-[12px] font-medium text-zinc-600 transition hover:bg-white hover:text-zinc-900;
+  @apply flex w-full items-center gap-1 rounded-lg border border-transparent px-2 py-1.5 text-left text-[12px] font-medium text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900;
 }
 
 .review-pane-tree-folder[data-expanded='false'] {
@@ -1119,7 +1121,7 @@ onBeforeUnmount(() => {
 }
 
 .review-pane-file {
-  @apply flex w-full flex-col gap-0.75 rounded-xl border border-transparent px-2.5 py-2 text-left transition hover:border-zinc-200 hover:bg-white;
+  @apply flex w-full flex-col gap-0.75 rounded-xl border border-transparent px-2.5 py-2 text-left transition-colors hover:border-zinc-200 hover:bg-white;
 }
 
 .review-pane-tree-file {
@@ -1305,7 +1307,8 @@ onBeforeUnmount(() => {
 }
 
 .review-pane-sheet {
-  @apply absolute inset-x-0 bottom-0 rounded-t-3xl bg-white px-4 pb-6 pt-3 shadow-2xl;
+  @apply absolute inset-x-0 bottom-0 flex max-h-[min(70dvh,36rem)] flex-col overflow-hidden rounded-t-3xl bg-white px-4 pt-3 shadow-2xl;
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom));
 }
 
 .review-pane-sheet-handle {
@@ -1325,17 +1328,23 @@ onBeforeUnmount(() => {
 }
 
 .review-pane-sheet-list {
-  @apply flex max-h-[60vh] flex-col gap-2 overflow-y-auto pb-3;
+  @apply flex min-h-0 flex-col gap-2 overflow-y-auto pb-3;
 }
 
-.review-pane-sheet-enter-active,
+.review-pane-sheet-enter-active {
+  transition: opacity 180ms var(--ui-ease-out);
+}
+
 .review-pane-sheet-leave-active {
-  transition: opacity 160ms ease;
+  transition: opacity 140ms var(--ui-ease-out);
 }
 
-.review-pane-sheet-enter-active .review-pane-sheet,
+.review-pane-sheet-enter-active .review-pane-sheet {
+  transition: transform 220ms var(--ui-ease-drawer);
+}
+
 .review-pane-sheet-leave-active .review-pane-sheet {
-  transition: transform 200ms ease;
+  transition: transform 160ms var(--ui-ease-out);
 }
 
 .review-pane-sheet-enter-from,
@@ -1345,7 +1354,7 @@ onBeforeUnmount(() => {
 
 .review-pane-sheet-enter-from .review-pane-sheet,
 .review-pane-sheet-leave-to .review-pane-sheet {
-  transform: translateY(16px);
+  transform: translateY(100%);
 }
 
 @media (max-width: 767px) {
@@ -1388,7 +1397,7 @@ onBeforeUnmount(() => {
   }
 
   .review-pane-control-label {
-    @apply text-[9px];
+    @apply text-[10px];
   }
 
   .review-pane-branch-dropdown {
@@ -1455,7 +1464,8 @@ onBeforeUnmount(() => {
   }
 
   .review-pane-sheet {
-    @apply px-3 pb-4 pt-2.5;
+    @apply px-3 pt-2.5;
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
   }
 
   .review-pane-sheet-handle {
@@ -1504,6 +1514,44 @@ onBeforeUnmount(() => {
 
   .review-pane-sheet-list .review-pane-file-delta {
     @apply text-[11px];
+  }
+}
+
+:global(:root.dark) .review-pane-branch-dropdown :deep(.composer-dropdown-trigger) {
+  @apply border-zinc-700 bg-zinc-800 text-zinc-200 shadow-none;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .review-pane-close,
+  .review-pane-mobile-files-button,
+  .review-pane-refresh,
+  .review-pane-bulk-button,
+  .review-pane-row-button,
+  .review-pane-primary-cta,
+  .review-pane-segmented-button,
+  .review-pane-tree-folder,
+  .review-pane-file,
+  .review-pane-branch-dropdown :deep(.composer-dropdown-trigger) {
+    min-height: 2.75rem;
+  }
+
+  .review-pane-close {
+    min-width: 2.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-pane-tree-caret::before,
+  .review-pane-sheet-enter-active,
+  .review-pane-sheet-leave-active,
+  .review-pane-sheet-enter-active .review-pane-sheet,
+  .review-pane-sheet-leave-active .review-pane-sheet {
+    transition: none;
+  }
+
+  .review-pane-sheet-enter-from .review-pane-sheet,
+  .review-pane-sheet-leave-to .review-pane-sheet {
+    transform: none;
   }
 }
 
