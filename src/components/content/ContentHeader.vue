@@ -57,4 +57,11 @@ defineProps<{
     min-height: 3.5rem;
   }
 }
+
+@media (max-width: 639px) {
+  .content-actions {
+    min-width: 0;
+    flex-shrink: 1;
+  }
+}
 </style>
