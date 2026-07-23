@@ -5,6 +5,7 @@
 - Build and start the current checkout on disposable port `4173`.
 - Use a Codex model/configuration that can create sub-agents.
 - Prepare one task that creates one sub-agent and one task that creates at least six agents, including one nested child.
+- Prepare both a legacy thread and a paginated thread that can run the one-agent task.
 - Keep browser developer tools available to inspect `/codex-api/agent-progress`, `/codex-api/agent-result`, and the notification stream.
 
 ## Actions and expected results
@@ -53,9 +54,14 @@
    - UI updates are grouped rather than rendered once per character.
    - Background-thread output stays isolated from the selected thread.
    - Live output remains byte-bounded and the page stays responsive.
+9. Run the one-agent task in the paginated thread, wait for `turn/completed`, switch away and back, then scroll far enough to move that turn between loaded pages.
+   - The completion path requests `thread/items/list` for the completed root `turnId` rather than re-reading the whole thread.
+   - Parent/child rows, the child's own model/thinking metadata, completion state, and lazily fetched result survive item reconciliation, cache revisit, and older-page prepend.
+   - A delayed child-result or progress response from the previously selected thread cannot overwrite the currently selected thread.
+   - Reopening the unchanged completed paginated thread uses cached rows without another resume/read/items request; a real version change refreshes only the affected page/turn.
 
 ## Rollback / cleanup
 
 - Stop only the disposable `4173` verification process if it was started for this test.
 - Do not stop or restart the persistent `5173` server or the formal `13510` console.
-- No persistent test data is required; archive test threads if desired.
+- No persistent test data is required; archive the disposable legacy/paginated test threads if desired.

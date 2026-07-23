@@ -18,8 +18,8 @@ This file is the manual test index. Detailed regression and feature verification
 | [Projects, Sidebar, and New Chat](tests/projects-sidebar-new-chat/index.md) | 16 | Home route, project picker, sidebar organization, new-chat setup, projectless folders, and project/worktree shell behavior. |
 | [Automations](tests/automations/index.md) | 4 | Thread heartbeat automations, project cron automations, dialogs, action rows, and automation panel behavior. |
 | [Skills, Plugins, and Integrations](tests/skills-plugins-integrations/index.md) | 27 | Skills Hub, skill sync, plugin/app directory surfaces, prompts, Composio, Telegram, and installed skill behavior. |
-| [Chat Composer and Message Rendering](tests/chat-composer-rendering/index.md) | 33 | Composer controls, queued messages, plan mode, markdown parsing, file links, attachments, generated images, and visible message rows. |
-| [Thread Loading, Streaming, and State](tests/thread-loading-state/index.md) | 26 | Thread list/detail loading, pagination, selected-thread stability, streaming scroll behavior, live-state reads, and missing-thread handling. |
+| [Chat Composer and Message Rendering](tests/chat-composer-rendering/index.md) | 37 | Composer controls, queued messages, plan mode, markdown parsing, file links, attachments, generated images, and visible message rows. |
+| [Thread Loading, Streaming, and State](tests/thread-loading-state/index.md) | 28 | Thread list/detail loading, legacy and native paginated history, selected-thread stability, caching, streaming scroll behavior, and missing-thread handling. |
 | [Providers and Models](tests/providers-models/index.md) | 8 | Codex-only settings, model menus, configured Codex providers, and model refresh behavior. |
 | [Auth and Docker Runtime](tests/auth-docker-runtime/index.md) | 6 | Codex auth, Docker-packaged runtime cases, token refresh, and invalid-auth errors. |
 | [CLI, Network, and Platform](tests/cli-network-platform/index.md) | 17 | CLI startup, dev scripts, npx, Tailscale, Cloudflare tunnels, Windows, Android, Termux, and platform packaging behavior. |

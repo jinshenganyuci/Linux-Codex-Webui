@@ -106,6 +106,28 @@ Reply with &lt;/instructions&gt; and A &amp; B
     })
   })
 
+  it('preserves command-output truncation metadata from the wire payload', () => {
+    const commandItem = {
+      type: 'commandExecution',
+      id: 'command-large-output',
+      command: 'pnpm run test',
+      cwd: '/tmp/project',
+      status: 'completed',
+      aggregatedOutput: '...latest output tail',
+      aggregatedOutputTruncated: true,
+      aggregatedOutputOriginalBytes: 524_288,
+      exitCode: 0,
+    } as unknown as ThreadReadResponse['thread']['turns'][number]['items'][number]
+
+    const messages = normalizeThreadMessagesV2(threadReadResponseWithContent([commandItem]))
+
+    expect(messages[0]?.commandExecution).toMatchObject({
+      aggregatedOutput: '...latest output tail',
+      aggregatedOutputTruncated: true,
+      aggregatedOutputOriginalBytes: 524_288,
+    })
+  })
+
   it('renders failed turn errors as chat system messages', () => {
     const response = threadReadResponseWithContent([{
       type: 'userMessage',

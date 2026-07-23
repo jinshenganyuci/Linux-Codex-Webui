@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getArchivedThreadsPage, getAvailableModelIds, getAvailableModels, getPinnedThreadState, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, permanentlyDeleteThread, persistPinnedThreadIds, persistThreadModelPreference, resumeThread, startThread, startThreadTurn, startThreadWithTurn, unarchiveThread } from './codexGateway'
+import { getArchivedThreadsPage, getAvailableModelIds, getAvailableModels, getFullThreadCommandOutput, getOlderThreadMessages, getPinnedThreadState, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, listThreadItems, permanentlyDeleteThread, persistPinnedThreadIds, persistThreadModelPreference, resumeThread, startThread, startThreadTurn, startThreadWithTurn, unarchiveThread } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -526,10 +526,15 @@ describe('getThreadDetail', () => {
         ? JSON.parse(init.body) as { method: string; params: Record<string, unknown> }
         : { method: '', params: {} }
       expect(body.method).toBe('thread/read')
+      expect(body.params).toEqual({
+        threadId: 'legacy-thread',
+        includeTurns: true,
+      })
       return new Response(JSON.stringify({
         result: {
           thread: {
             id: body.params.threadId,
+            historyMode: 'legacy',
             modelProvider: 'myproxy',
             turns: [],
           },
@@ -541,8 +546,261 @@ describe('getThreadDetail', () => {
     }))
 
     await expect(getThreadDetail('legacy-thread')).resolves.toMatchObject({
+      historyMode: 'legacy',
       modelProvider: 'myproxy',
+      olderCursor: null,
     })
+  })
+
+  it('bootstraps paginated history through resume and keeps turn ids as canonical identity', async () => {
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = typeof init?.body === 'string'
+        ? JSON.parse(init.body) as { method: string; params: Record<string, unknown> }
+        : { method: '', params: {} }
+      requests.push(body)
+      return new Response(JSON.stringify({
+        result: {
+          model: 'gpt-5.6-sol',
+          modelProvider: 'openai',
+          thread: {
+            id: 'paginated-thread',
+            historyMode: 'paginated',
+            status: { type: 'active', activeFlags: [] },
+            turns: [],
+          },
+          initialTurnsPage: {
+            data: [
+              {
+                id: 'turn-newer',
+                itemsView: 'summary',
+                status: 'inProgress',
+                items: [{ type: 'agentMessage', id: 'agent-newer', text: 'summary copy' }],
+              },
+              {
+                id: 'turn-newer',
+                itemsView: 'full',
+                status: 'inProgress',
+                items: [
+                  { type: 'agentMessage', id: 'agent-newer', text: 'complete copy' },
+                  { type: 'reasoning', id: 'reasoning-newer', summary: ['done'], content: [] },
+                ],
+              },
+              {
+                id: 'turn-older',
+                itemsView: 'full',
+                status: 'completed',
+                items: [{
+                  type: 'userMessage',
+                  id: 'user-older',
+                  content: [{ type: 'text', text: 'older prompt', text_elements: [] }],
+                }],
+              },
+            ],
+            nextCursor: 'opaque-older-cursor',
+            backwardsCursor: 'opaque-newer-cursor',
+          },
+          turnsBackwardsCursor: 'opaque-head-cursor',
+          itemsBackwardsCursor: 'opaque-item-head-cursor',
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    const detail = await getThreadDetail('paginated-thread', 'paginated')
+
+    expect(requests).toEqual([{
+      method: 'thread/resume',
+      params: {
+        threadId: 'paginated-thread',
+        excludeTurns: true,
+        initialTurnsPage: {
+          limit: 10,
+          sortDirection: 'desc',
+          itemsView: 'full',
+        },
+      },
+    }])
+    expect(detail).toMatchObject({
+      historyMode: 'paginated',
+      model: 'gpt-5.6-sol',
+      modelProvider: 'openai',
+      inProgress: true,
+      activeTurnId: 'turn-newer',
+      hasMoreOlder: true,
+      olderCursor: 'opaque-older-cursor',
+      turnIndexByTurnId: {},
+    })
+    expect(detail.messages.map((message) => ({
+      id: message.id,
+      text: message.text,
+      turnId: message.turnId,
+      turnIndex: message.turnIndex,
+    }))).toEqual([
+      { id: 'user-older', text: 'older prompt', turnId: 'turn-older', turnIndex: undefined },
+      { id: 'agent-newer', text: 'complete copy', turnId: 'turn-newer', turnIndex: undefined },
+      { id: 'reasoning-newer', text: 'done', turnId: 'turn-newer', turnIndex: undefined },
+    ])
+  })
+})
+
+describe('thread history pagination', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('loads exactly one native turn page and reverses descending data for rendering', async () => {
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = typeof init?.body === 'string'
+        ? JSON.parse(init.body) as { method: string; params: Record<string, unknown> }
+        : { method: '', params: {} }
+      requests.push(body)
+      return new Response(JSON.stringify({
+        result: {
+          data: [
+            {
+              id: 'turn-3',
+              itemsView: 'full',
+              status: 'completed',
+              items: [{ type: 'agentMessage', id: 'agent-3', text: 'newest' }],
+            },
+            {
+              id: 'turn-2',
+              itemsView: 'summary',
+              status: 'completed',
+              items: [{ type: 'agentMessage', id: 'agent-2', text: 'summary' }],
+            },
+            {
+              id: 'turn-2',
+              itemsView: 'full',
+              status: 'completed',
+              items: [{ type: 'agentMessage', id: 'agent-2', text: 'complete' }],
+            },
+          ],
+          nextCursor: 'opaque-next-page',
+          backwardsCursor: 'opaque-backwards-page',
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    const page = await getOlderThreadMessages('paginated-thread', 'opaque-current-page', 2, 'paginated')
+
+    expect(requests).toEqual([{
+      method: 'thread/turns/list',
+      params: {
+        threadId: 'paginated-thread',
+        cursor: 'opaque-current-page',
+        limit: 2,
+        sortDirection: 'desc',
+        itemsView: 'full',
+      },
+    }])
+    expect(page).toMatchObject({
+      historyMode: 'paginated',
+      hasMoreOlder: true,
+      olderCursor: 'opaque-next-page',
+      startTurnIndex: null,
+      turnIndexByTurnId: {},
+    })
+    expect(page.messages.map((message) => [message.id, message.text, message.turnId, message.turnIndex])).toEqual([
+      ['agent-2', 'complete', 'turn-2', undefined],
+      ['agent-3', 'newest', 'turn-3', undefined],
+    ])
+  })
+
+  it('deduplicates item pages with the later item payload winning', async () => {
+    let requestCount = 0
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      requestCount += 1
+      return new Response(JSON.stringify({
+        result: {
+          data: [
+            { turnId: 'turn-1', item: { type: 'agentMessage', id: 'agent-1', text: 'partial' } },
+            { turnId: 'turn-1', item: { type: 'agentMessage', id: 'agent-1', text: 'complete' } },
+            { turnId: 'turn-1', item: { type: 'agentMessage', id: 'agent-2', text: 'second' } },
+          ],
+          nextCursor: 'items-next',
+          backwardsCursor: 'items-backwards',
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    const page = await listThreadItems('paginated-thread', {
+      turnId: 'turn-1',
+      cursor: 'items-current',
+      limit: 3,
+      sortDirection: 'desc',
+    })
+
+    expect(requestCount).toBe(1)
+    expect(page).toEqual({
+      data: [
+        { turnId: 'turn-1', item: { type: 'agentMessage', id: 'agent-1', text: 'complete' } },
+        { turnId: 'turn-1', item: { type: 'agentMessage', id: 'agent-2', text: 'second' } },
+      ],
+      nextCursor: 'items-next',
+      backwardsCursor: 'items-backwards',
+    })
+  })
+
+  it('caches the runtime not-supported result for optional item pagination', async () => {
+    let requestCount = 0
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      requestCount += 1
+      return new Response(JSON.stringify({ error: 'thread/items/list is not supported yet' }), {
+        status: 502,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await expect(listThreadItems('paginated-thread')).resolves.toBeNull()
+    await expect(listThreadItems('paginated-thread')).resolves.toBeNull()
+    expect(requestCount).toBe(1)
+  })
+})
+
+describe('getFullThreadCommandOutput', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('coalesces concurrent requests for the same thread, turn, and item', async () => {
+    const requests: Array<{ url: string; body: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+      })
+      return new Response(JSON.stringify({ data: { output: 'complete command output' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    const [first, second] = await Promise.all([
+      getFullThreadCommandOutput(' thread-1 ', ' turn-1 ', ' command-1 '),
+      getFullThreadCommandOutput('thread-1', 'turn-1', 'command-1'),
+    ])
+
+    expect(first).toBe('complete command output')
+    expect(second).toBe('complete command output')
+    expect(requests).toEqual([{
+      url: '/codex-api/thread-command-output',
+      body: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'command-1',
+      },
+    }])
   })
 })
 

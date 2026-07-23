@@ -43,16 +43,17 @@
 20. Collapse the command again and verify its `pre.cmd-output` is removed from the DOM, not merely hidden with CSS.
 21. Reload the oversized historical fixture while recording Network traffic. Inspect the relevant history response and locate the oversized `commandExecution` item.
 22. Verify that item has `aggregatedOutputTruncated: true`, `aggregatedOutputOriginalBytes` greater than `262144`, and `aggregatedOutput` beginning with `[较早输出已省略]\n` while retaining the fixture's unique final marker.
-23. Expand that command, select its `pre.cmd-output`, and run the following console expression:
+23. Expand that command while recording Network traffic. Verify exactly one `POST /codex-api/thread-command-output` request is sent for its `threadId`, `turnId`, and `itemId`; then select its `pre.cmd-output` after the request completes and run:
     ```js
     ({
       byteLength: new TextEncoder().encode($0.textContent ?? '').byteLength,
-      markerOk: ($0.textContent ?? '').startsWith('[较早输出已省略]\n'),
+      markerRemoved: !($0.textContent ?? '').startsWith('[较早输出已省略]\n'),
       tailOk: ($0.textContent ?? '').includes('<unique-final-marker>'),
-      earlyTextRemoved: !($0.textContent ?? '').includes('<unique-early-marker>'),
+      earlyTextRestored: ($0.textContent ?? '').includes('<unique-early-marker>'),
     })
     ```
-24. Verify `byteLength` is at most `262144` and all three Boolean checks are `true`. Collapse it and confirm the `<pre>` is removed again.
+24. Verify `byteLength` equals the original full output size (and is greater than `262144` for this fixture) and all three Boolean checks are `true`. Collapse and reopen it, confirm no duplicate full-output request is made and the complete output remains available, then collapse it and confirm the `<pre>` is removed again.
+25. Make the full-output request fail once (for example with a local request override), expand a freshly loaded truncated command, and confirm the truncated tail remains visible instead of becoming blank. Switch to another thread and return to confirm the per-thread full-output cache was cleared.
 
 #### Expected Results
 - Only ≤50 messages are in the DOM on initial load.
@@ -61,7 +62,8 @@
 - After a rollback the conversation remains visible; no blank screen.
 - A collapsed command mounts no output `<pre>` or output text; expansion mounts one accessible output region, and collapsing it unmounts the `<pre>` again.
 - Command outputs at or below the limit remain complete when expanded.
-- Oversized historical command output is bounded to 256 KiB by UTF-8 byte count, starts with the omission marker, retains the newest valid UTF-8 tail, and exposes the original byte count and truncation flag in the response.
+- Oversized historical command output is bounded to 256 KiB by UTF-8 byte count in the first-paint history response, starts with the omission marker, retains the newest valid UTF-8 tail, and exposes the original byte count and truncation flag.
+- Expanding a truncated command loads its complete output on demand once, preserves the truncated tail on failure, caches at most eight complete outputs for the active thread, and clears that cache when the active thread changes.
 
 #### Rollback/Cleanup
 - Closing or refreshing the tab resets the render window.

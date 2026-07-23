@@ -3,7 +3,7 @@
 ## Prerequisites / setup
 
 - Start the current checkout on disposable port `4173`.
-- Prepare one disposable chat and one disposable project.
+- Prepare one disposable legacy chat, one disposable paginated chat, and one disposable project.
 - Allow clipboard access and browser downloads for the test origin.
 
 ## Actions and expected results
@@ -15,7 +15,7 @@
 | Export project | Click the action and accept the download. | A project ZIP download starts and contains the selected project. | One-shot download; no persistent UI state is expected. |
 | Copy path | Click the action, then paste into a text field. | The chat working-directory path is in the clipboard. | Clipboard action only. |
 | Copy chat | Select the chat, open its menu, click the action, then paste. | Markdown for the selected conversation is in the clipboard; the item stays disabled for a non-selected chat. | Clipboard action only. |
-| Create chat fork | Fork a disposable chat. | A new forked chat is created and selected. | The fork remains in the thread list after reload. |
+| Create chat fork | Fork the disposable legacy chat. | A new forked chat is created and selected. | The fork remains in the thread list after reload. |
 | Pin this chat | Pin, reload, then reopen the same menu. | The chat remains under `Pinned chats`; the menu changes to `Unpin this chat`. | Must persist through `/codex-api/thread-pins`. |
 | Rename thread | Rename the disposable chat. | Sidebar and conversation heading use the new title. | The title remains after reload. |
 | Archive chat | Archive the disposable chat. | It leaves the active sidebar and appears in archived conversations. | Archive state remains after reload; an existing pin is explicitly removed. |
@@ -34,10 +34,14 @@
    - The chat, current selection, and pin state must remain unchanged, and the error must remain visible.
 4. After a successful permanent delete, query `thread/list` with both `archived:false` and `archived:true`.
    - The deleted chat id must be absent from both results.
+5. Open the paginated chat's sidebar menu and inspect per-message actions that would require `thread/fork` or `thread/rollback`.
+   - `Create chat fork`, response fork, rollback-backed edit/retry, and rollback controls are unavailable for paginated history and explain that the official protocol does not support the action.
+   - Clicking nearby supported actions never sends `thread/fork` or `thread/rollback` accidentally, and no disabled control can be activated by mouse, keyboard, or touch.
+   - The same fork/rollback-backed actions remain available for an eligible completed legacy chat.
 
 ## Rollback / cleanup
 
 - Delete the disposable automation.
-- Unpin and archive/delete disposable chats and forks.
+- Unpin and archive/delete the disposable legacy/paginated chats and any legacy forks.
 - Remove downloaded ZIP files if no longer needed.
 - Stop only the disposable `4173` process if this test started it.

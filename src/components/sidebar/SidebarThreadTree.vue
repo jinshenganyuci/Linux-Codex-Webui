@@ -602,7 +602,13 @@
         >
           {{ t('Copy chat') }}
         </button>
-        <button class="thread-menu-item" type="button" @click="onForkThread(openThreadMenuThread.id)">
+        <button
+          class="thread-menu-item"
+          type="button"
+          :disabled="openThreadMenuThread.historyMode === 'paginated'"
+          :title="openThreadMenuThread.historyMode === 'paginated' ? t('Codex does not support forking paginated threads yet.') : t('Create chat fork')"
+          @click="onForkThread(openThreadMenuThread.id)"
+        >
           {{ t('Create chat fork') }}
         </button>
         <button
@@ -1736,6 +1742,8 @@ function onCopyThreadChat(threadId: string): void {
 }
 
 function onForkThread(threadId: string): void {
+  const thread = props.groups.flatMap((group) => group.threads).find((candidate) => candidate.id === threadId)
+  if (thread?.historyMode === 'paginated') return
   emit('fork-thread', threadId)
   closeThreadMenu()
 }

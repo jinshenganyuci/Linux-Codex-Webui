@@ -25,7 +25,12 @@ const gatewayMocks = vi.hoisted(() => ({
   getPendingServerRequests: vi.fn(),
   getSkillsList: vi.fn(),
   getThreadDetail: vi.fn(),
+  getThreadSummary: vi.fn(),
+  getThreadHistoryDetail: vi.fn(),
+  getOlderThreadHistoryPage: vi.fn(),
+  getThreadTurnItemsPage: vi.fn(),
   getThreadGroupsPage: vi.fn(),
+  getOlderThreadMessages: vi.fn(),
   getThreadModelPreferences: vi.fn(),
   getThreadRuntimeStates: vi.fn(),
   getThreadQueueState: vi.fn(),
@@ -56,7 +61,11 @@ vi.mock('../api/codexGateway', () => ({
   pickCodexRateLimitSnapshot: vi.fn(() => null),
 }))
 
-function thread(id: string, cwd: string, options: { hasWorktree?: boolean; inProgress?: boolean } = {}) {
+function thread(
+  id: string,
+  cwd: string,
+  options: { hasWorktree?: boolean; inProgress?: boolean; historyMode?: 'legacy' | 'paginated' } = {},
+) {
   return {
     id,
     title: id,
@@ -68,6 +77,7 @@ function thread(id: string, cwd: string, options: { hasWorktree?: boolean; inPro
     preview: '',
     unread: false,
     inProgress: options.inProgress ?? false,
+    historyMode: options.historyMode ?? 'legacy',
   }
 }
 
@@ -178,6 +188,35 @@ beforeEach(() => {
     hasMoreOlder: false,
     turnIndexByTurnId: {},
   })
+  gatewayMocks.getThreadSummary.mockImplementation(async (threadId: string) => thread(threadId, ''))
+  gatewayMocks.getThreadHistoryDetail.mockImplementation(async (threadId: string, historyMode: 'legacy' | 'paginated') => {
+    const detail = await gatewayMocks.getThreadDetail(threadId)
+    return {
+      ...detail,
+      historyMode,
+      turnIds: [],
+      olderCursor: null,
+      resumed: historyMode === 'paginated',
+      materialized: historyMode === 'paginated',
+    }
+  })
+  gatewayMocks.getOlderThreadHistoryPage.mockImplementation(async (
+    threadId: string,
+    options: { historyMode: 'legacy' | 'paginated'; beforeTurnId?: string; cursor?: string | null; limit?: number },
+  ) => {
+    const page = await gatewayMocks.getOlderThreadMessages(
+      threadId,
+      options.beforeTurnId ?? options.cursor ?? '',
+      options.limit,
+    )
+    return {
+      ...page,
+      historyMode: options.historyMode,
+      turnIds: [],
+      olderCursor: null,
+    }
+  })
+  gatewayMocks.getThreadTurnItemsPage.mockResolvedValue({ messages: [], nextCursor: null })
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
   gatewayMocks.getThreadModelPreferences.mockResolvedValue({})
   gatewayMocks.getThreadRuntimeStates.mockResolvedValue([])
@@ -770,6 +809,834 @@ describe('immediate sent-message rendering', () => {
 
     expect(state.pendingNewThreadMessages.value[0]).toMatchObject({ text: 'do not lose this' })
     expect(state.pendingNewThreadLiveOverlay.value).toMatchObject({ errorText: 'Thread creation failed' })
+  })
+})
+
+describe('thread history loading races', () => {
+  it('keeps the newest thread loading state and messages when an older load resolves first', async () => {
+    installTestWindow()
+    const firstDetail = deferred<{
+      model: string
+      modelProvider: string
+      messages: Array<{ id: string; role: 'assistant'; text: string; messageType: string; turnId: string; turnIndex: number }>
+      inProgress: boolean
+      activeTurnId: string
+      hasMoreOlder: boolean
+      turnIndexByTurnId: Record<string, number>
+    }>()
+    const secondDetail = deferred<{
+      model: string
+      modelProvider: string
+      messages: Array<{ id: string; role: 'assistant'; text: string; messageType: string; turnId: string; turnIndex: number }>
+      inProgress: boolean
+      activeTurnId: string
+      hasMoreOlder: boolean
+      turnIndexByTurnId: Record<string, number>
+    }>()
+    gatewayMocks.getThreadDetail.mockImplementation((threadId: string) => (
+      threadId === 'thread-a' ? firstDetail.promise : secondDetail.promise
+    ))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    const firstLoad = state.loadMessages('thread-a')
+    state.primeSelectedThread('thread-b')
+    const secondLoad = state.loadMessages('thread-b')
+
+    expect(state.selectedThreadId.value).toBe('thread-b')
+    expect(state.isLoadingMessages.value).toBe(true)
+
+    firstDetail.resolve({
+      model: '',
+      modelProvider: '',
+      messages: [{
+        id: 'assistant-a',
+        role: 'assistant',
+        text: 'older selection',
+        messageType: 'agentMessage',
+        turnId: 'turn-a',
+        turnIndex: 0,
+      }],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: { 'turn-a': 0 },
+    })
+    await firstLoad
+
+    expect(state.selectedThreadId.value).toBe('thread-b')
+    expect(state.messages.value).toEqual([])
+    expect(state.isLoadingMessages.value).toBe(true)
+
+    secondDetail.resolve({
+      model: '',
+      modelProvider: '',
+      messages: [{
+        id: 'assistant-b',
+        role: 'assistant',
+        text: 'newest selection',
+        messageType: 'agentMessage',
+        turnId: 'turn-b',
+        turnIndex: 0,
+      }],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: { 'turn-b': 0 },
+    })
+    await secondLoad
+
+    expect(state.isLoadingMessages.value).toBe(false)
+    expect(state.messages.value.map((message) => message.text)).toEqual(['newest selection'])
+  })
+
+  it('ignores a stale thread selection failure after a newer thread succeeds', async () => {
+    installTestWindow()
+    const firstDetail = deferred<never>()
+    const secondDetail = deferred<{
+      model: string
+      modelProvider: string
+      messages: Array<{ id: string; role: 'assistant'; text: string; messageType: string; turnId: string; turnIndex: number }>
+      inProgress: boolean
+      activeTurnId: string
+      hasMoreOlder: boolean
+      turnIndexByTurnId: Record<string, number>
+    }>()
+    gatewayMocks.getThreadDetail.mockImplementation((threadId: string) => (
+      threadId === 'thread-a' ? firstDetail.promise : secondDetail.promise
+    ))
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: '',
+      reasoningEffort: 'medium',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities('gpt-5.5'))
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+
+    const state = useDesktopState()
+    const firstSelection = state.selectThread('thread-a')
+    const secondSelection = state.selectThread('thread-b')
+
+    secondDetail.resolve({
+      model: '',
+      modelProvider: '',
+      messages: [{
+        id: 'assistant-b',
+        role: 'assistant',
+        text: 'thread b',
+        messageType: 'agentMessage',
+        turnId: 'turn-b',
+        turnIndex: 0,
+      }],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: { 'turn-b': 0 },
+    })
+    await expect(secondSelection).resolves.toBe('ok')
+
+    firstDetail.reject(new Error('stale thread failed'))
+    await expect(firstSelection).resolves.toBe('ok')
+
+    expect(state.selectedThreadId.value).toBe('thread-b')
+    expect(state.messages.value.map((message) => message.text)).toEqual(['thread b'])
+    expect(state.error.value).toBe('')
+    expect(state.selectedLiveOverlay.value?.errorText ?? '').not.toContain('stale thread failed')
+  })
+})
+
+describe('paginated thread history state', () => {
+  function paginatedDetail(overrides: Record<string, unknown> = {}) {
+    return {
+      historyMode: 'paginated' as const,
+      model: '',
+      modelProvider: '',
+      messages: [],
+      turnIds: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      olderCursor: null,
+      startTurnIndex: null,
+      turnIndexByTurnId: {},
+      resumed: true,
+      materialized: true,
+      ...overrides,
+    }
+  }
+
+  function paginatedPage(overrides: Record<string, unknown> = {}) {
+    return {
+      historyMode: 'paginated' as const,
+      messages: [],
+      turnIds: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      olderCursor: null,
+      startTurnIndex: null,
+      turnIndexByTurnId: {},
+      ...overrides,
+    }
+  }
+
+  it('probes an unlisted direct-url thread without turns before choosing paginated history', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadSummary.mockResolvedValue(thread('direct-paginated', '/tmp/project', { historyMode: 'paginated' }))
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue(paginatedDetail({
+      messages: [{
+        id: 'answer',
+        role: 'assistant',
+        text: 'loaded safely',
+        messageType: 'agentMessage',
+        turnId: 'turn-latest',
+      }],
+      turnIds: ['turn-latest'],
+      hasMoreOlder: true,
+      olderCursor: 'opaque:first',
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('direct-paginated')
+    await Promise.all([
+      state.loadMessages('direct-paginated'),
+      state.loadMessages('direct-paginated'),
+    ])
+
+    expect(gatewayMocks.getThreadSummary).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledWith('direct-paginated', 'paginated')
+    expect(gatewayMocks.getThreadDetail).not.toHaveBeenCalled()
+    expect(state.messages.value).toEqual([
+      expect.objectContaining({ text: 'loaded safely', turnId: 'turn-latest' }),
+    ])
+    expect(state.hasMoreOlderMessages.value).toBe(true)
+  })
+
+  it('passes opaque older cursors once and deduplicates repeated page messages', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('paginated-older', '/tmp/project', { historyMode: 'paginated' })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue(paginatedDetail({
+      messages: [{ id: 'shared', role: 'assistant', text: 'latest', messageType: 'agentMessage', turnId: 'turn-2' }],
+      turnIds: ['turn-2'],
+      hasMoreOlder: true,
+      olderCursor: 'opaque:/older?one',
+    }))
+    gatewayMocks.getOlderThreadHistoryPage.mockResolvedValue(paginatedPage({
+      messages: [
+        { id: 'older', role: 'assistant', text: 'older', messageType: 'agentMessage', turnId: 'turn-1' },
+        { id: 'shared', role: 'assistant', text: 'latest', messageType: 'agentMessage', turnId: 'turn-2' },
+      ],
+      turnIds: ['turn-1', 'turn-2'],
+      hasMoreOlder: true,
+      olderCursor: 'opaque:/older?two',
+    }))
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('paginated-older')
+    await state.loadMessages('paginated-older')
+    await Promise.all([
+      state.loadOlderMessages('paginated-older'),
+      state.loadOlderMessages('paginated-older'),
+    ])
+
+    expect(gatewayMocks.getOlderThreadHistoryPage).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.getOlderThreadHistoryPage).toHaveBeenCalledWith('paginated-older', {
+      historyMode: 'paginated',
+      cursor: 'opaque:/older?one',
+      beforeTurnId: '',
+    })
+    expect(state.messages.value.map((message) => `${message.turnId}:${message.id}`)).toEqual([
+      'turn-1:older',
+      'turn-2:shared',
+    ])
+  })
+
+  it('does not resume an already materialized paginated thread before sending', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('paginated-send', '/tmp/project', { historyMode: 'paginated' })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue(paginatedDetail())
+    gatewayMocks.startThreadTurn.mockResolvedValue('turn-new')
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('paginated-send')
+    await state.loadMessages('paginated-send')
+    await state.sendMessageToSelectedThread('continue paginated')
+
+    expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for an in-flight paginated bootstrap before sending without a second resume', async () => {
+    installTestWindow()
+    const pendingDetail = deferred<ReturnType<typeof paginatedDetail>>()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('paginated-send-during-load', '/tmp/project', {
+        historyMode: 'paginated',
+      })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadHistoryDetail.mockReturnValue(pendingDetail.promise)
+    gatewayMocks.startThreadTurn.mockResolvedValue('turn-after-bootstrap')
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('paginated-send-during-load')
+    const loadPromise = state.loadMessages('paginated-send-during-load')
+    const sendPromise = state.sendMessageToSelectedThread('send while bootstrap is pending')
+
+    await vi.waitFor(() => expect(state.messages.value).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: 'send while bootstrap is pending', messageType: 'userMessage.optimistic' }),
+    ])))
+    expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+
+    pendingDetail.resolve(paginatedDetail())
+    await Promise.all([loadPromise, sendPromise])
+
+    expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses a mode-safe latest page to find the active paginated turn for interrupt', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('paginated-running', '/tmp/project', {
+        historyMode: 'paginated',
+        inProgress: true,
+      })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue(paginatedDetail({ inProgress: true }))
+    gatewayMocks.getOlderThreadHistoryPage.mockResolvedValue(paginatedPage({
+      inProgress: true,
+      activeTurnId: 'turn-active',
+      turnIds: ['turn-active'],
+    }))
+    gatewayMocks.interruptThreadTurn.mockResolvedValue(undefined)
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('paginated-running')
+    await state.loadMessages('paginated-running')
+    await state.interruptSelectedThreadTurn()
+
+    expect(gatewayMocks.getThreadDetail).not.toHaveBeenCalled()
+    expect(gatewayMocks.getOlderThreadHistoryPage).toHaveBeenCalledWith('paginated-running', {
+      historyMode: 'paginated',
+      cursor: null,
+    })
+    expect(gatewayMocks.interruptThreadTurn).toHaveBeenCalledWith('paginated-running', 'turn-active')
+  })
+
+  it('reconciles a completed turn once, preserves turn metadata, and skips a duplicate latest-page load', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    const initialThread = thread('paginated-complete', '/tmp/project', { historyMode: 'paginated', inProgress: true })
+    const refreshedThread = { ...initialThread, inProgress: false, updatedAtIso: '2026-04-28T00:00:02.000Z' }
+    gatewayMocks.getThreadGroupsPage
+      .mockResolvedValueOnce({ groups: [{ projectName: 'Project', threads: [initialThread] }], nextCursor: null })
+      .mockResolvedValueOnce({ groups: [{ projectName: 'Project', threads: [refreshedThread] }], nextCursor: null })
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue(paginatedDetail({
+      messages: [
+        { id: 'old-item', role: 'assistant', text: 'old', messageType: 'agentMessage', turnId: 'turn-done' },
+        { id: 'turn-done-error', role: 'system', text: 'keep metadata', messageType: 'turnError', turnId: 'turn-done' },
+      ],
+      turnIds: ['turn-done'],
+      inProgress: true,
+      activeTurnId: 'turn-done',
+    }))
+    gatewayMocks.getThreadTurnItemsPage.mockResolvedValue({
+      messages: [{ id: 'final-item', role: 'assistant', text: 'final', messageType: 'agentMessage', turnId: 'turn-done' }],
+      nextCursor: null,
+    })
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('paginated-complete')
+    await state.loadMessages('paginated-complete')
+    state.startPolling()
+    notificationHandler!({
+      method: 'turn/completed',
+      params: { threadId: 'paginated-complete', turn: { id: 'turn-done', status: 'completed' } },
+    })
+    const eventSync = timers.find((timer) => timer.delay === 220)
+    expect(eventSync).toBeDefined()
+    eventSync?.callback()
+
+    await vi.waitFor(() => expect(gatewayMocks.getThreadTurnItemsPage).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(state.messages.value
+      .filter((message) => message.messageType !== 'worked')
+      .map((message) => message.id)).toEqual([
+      'final-item',
+      'turn-done-error',
+    ]))
+    expect(gatewayMocks.getOlderThreadHistoryPage).not.toHaveBeenCalled()
+    expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledTimes(1)
+    state.stopPolling()
+  })
+
+  it('keeps the existing turn when thread/items/list is explicitly unsupported', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    const initialThread = thread('paginated-unsupported', '/tmp/project', { historyMode: 'paginated', inProgress: true })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [{ ...initialThread, updatedAtIso: '2026-04-28T00:00:02.000Z' }] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue(paginatedDetail({
+      messages: [{ id: 'existing', role: 'assistant', text: 'must remain', messageType: 'agentMessage', turnId: 'turn-done' }],
+      turnIds: ['turn-done'],
+      inProgress: true,
+      activeTurnId: 'turn-done',
+    }))
+    gatewayMocks.getThreadTurnItemsPage.mockResolvedValue(null)
+    gatewayMocks.getOlderThreadHistoryPage.mockResolvedValue(paginatedPage({
+      messages: [],
+      turnIds: ['turn-done'],
+    }))
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('paginated-unsupported')
+    await state.loadMessages('paginated-unsupported')
+    state.startPolling()
+    notificationHandler!({
+      method: 'turn/completed',
+      params: { threadId: 'paginated-unsupported', turn: { id: 'turn-done', status: 'completed' } },
+    })
+    timers.find((timer) => timer.delay === 220)?.callback()
+
+    await vi.waitFor(() => expect(gatewayMocks.getThreadTurnItemsPage).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(gatewayMocks.getOlderThreadHistoryPage).toHaveBeenCalledTimes(1))
+    expect(state.messages.value.filter((message) => message.messageType !== 'worked')).toEqual([
+      expect.objectContaining({ id: 'existing', text: 'must remain', turnId: 'turn-done' }),
+    ])
+    state.stopPolling()
+  })
+
+  it('falls back once without applying a partial turn when four item pages still have a cursor', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('paginated-four-pages', '/tmp/project', {
+        historyMode: 'paginated',
+        inProgress: true,
+      })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue(paginatedDetail({
+      messages: [{ id: 'existing', role: 'assistant', text: 'existing', messageType: 'agentMessage', turnId: 'turn-long' }],
+      turnIds: ['turn-long'],
+      inProgress: true,
+      activeTurnId: 'turn-long',
+    }))
+    gatewayMocks.getThreadTurnItemsPage.mockImplementation(async (_threadId: string, _turnId: string, cursor: string | null) => {
+      const pageIndex = cursor === null ? 1 : Number(cursor.slice(1))
+      return {
+        messages: Array.from({ length: 100 }, (_, itemIndex) => ({
+          id: `partial-${pageIndex}-${itemIndex}`,
+          role: 'assistant',
+          text: `partial ${pageIndex}/${itemIndex}`,
+          messageType: 'agentMessage',
+          turnId: 'turn-long',
+        })),
+        nextCursor: `c${pageIndex + 1}`,
+      }
+    })
+    gatewayMocks.getOlderThreadHistoryPage.mockResolvedValue(paginatedPage({
+      messages: [{ id: 'final', role: 'assistant', text: 'final from latest page', messageType: 'agentMessage', turnId: 'turn-long' }],
+      turnIds: ['turn-long'],
+    }))
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('paginated-four-pages')
+    await state.loadMessages('paginated-four-pages')
+    state.startPolling()
+    notificationHandler!({
+      method: 'turn/completed',
+      params: { threadId: 'paginated-four-pages', turn: { id: 'turn-long', status: 'completed' } },
+    })
+    timers.find((timer) => timer.delay === 220)?.callback()
+
+    await vi.waitFor(() => expect(gatewayMocks.getThreadTurnItemsPage).toHaveBeenCalledTimes(4))
+    await vi.waitFor(() => expect(gatewayMocks.getOlderThreadHistoryPage).toHaveBeenCalledTimes(1))
+    expect(gatewayMocks.getThreadTurnItemsPage.mock.calls.map((call) => call[2])).toEqual([null, 'c2', 'c3', 'c4'])
+    expect(state.messages.value.some((message) => message.id.startsWith('partial-'))).toBe(false)
+    expect(state.messages.value).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'existing' }),
+      expect.objectContaining({ id: 'final' }),
+    ]))
+    state.stopPolling()
+  })
+
+  it('does not fetch a duplicate latest page after runtime reconciliation refreshes thread metadata', async () => {
+    installTestWindow()
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {
+      if (typeof callback === 'function') timers.push({ callback: callback as () => void, delay: delay ?? 0 })
+      return timers.length
+    }) as typeof window.setTimeout)
+    let now = 1_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const initialThread = thread('paginated-runtime', '/tmp/project', { historyMode: 'paginated', inProgress: true })
+    const refreshedThread = { ...initialThread, inProgress: false, updatedAtIso: '2026-04-28T00:00:03.000Z' }
+    gatewayMocks.getThreadGroupsPage
+      .mockResolvedValueOnce({ groups: [{ projectName: 'Project', threads: [initialThread] }], nextCursor: null })
+      .mockResolvedValueOnce({ groups: [{ projectName: 'Project', threads: [refreshedThread] }], nextCursor: null })
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue(paginatedDetail({
+      messages: [{ id: 'before', role: 'assistant', text: 'before', messageType: 'agentMessage', turnId: 'turn-runtime' }],
+      turnIds: ['turn-runtime'],
+      inProgress: true,
+      activeTurnId: 'turn-runtime',
+    }))
+    gatewayMocks.getThreadTurnItemsPage.mockResolvedValue({
+      messages: [{ id: 'after', role: 'assistant', text: 'after', messageType: 'agentMessage', turnId: 'turn-runtime' }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'paginated-runtime',
+      turnId: 'turn-runtime',
+      state: 'completed',
+      isRunning: false,
+      source: 'session',
+      startedAtIso: '2026-04-28T00:00:00.000Z',
+      completedAtIso: '2026-04-28T00:00:02.000Z',
+      owner: null,
+    }])
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+
+    const state = useDesktopState()
+    try {
+      await state.loadThreads()
+      state.primeSelectedThread('paginated-runtime')
+      await state.loadMessages('paginated-runtime')
+      state.startPolling()
+      timers.find((timer) => timer.delay === 0)?.callback()
+
+      await vi.waitFor(() => expect(gatewayMocks.getThreadTurnItemsPage).toHaveBeenCalledTimes(1))
+      await vi.waitFor(() => expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(2))
+      now = 4_000
+      await state.loadMessages('paginated-runtime', { silent: true })
+
+      expect(gatewayMocks.getThreadTurnItemsPage).toHaveBeenCalledTimes(1)
+      expect(gatewayMocks.getOlderThreadHistoryPage).not.toHaveBeenCalled()
+    } finally {
+      state.stopPolling()
+      nowSpy.mockRestore()
+    }
+  })
+
+  it('blocks fork, rollback, and automatic fallback replay for paginated threads', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('paginated-actions', '/tmp/project', { historyMode: 'paginated' })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue(paginatedDetail({
+      messages: [{ id: 'user', role: 'user', text: 'old', messageType: 'userMessage', turnId: 'turn-old' }],
+      turnIds: ['turn-old'],
+    }))
+    gatewayMocks.startThreadTurn.mockResolvedValue('turn-failed')
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('paginated-actions')
+    await state.loadMessages('paginated-actions')
+    await expect(state.forkThreadById('paginated-actions')).resolves.toBe('')
+    await state.rollbackSelectedThread('turn-old')
+    await state.sendMessageToSelectedThread('trigger fallback guard')
+    state.startPolling()
+    notificationHandler!({
+      method: 'error',
+      params: {
+        threadId: 'paginated-actions',
+        turnId: 'turn-failed',
+        message: 'model is not supported',
+        willRetry: false,
+      },
+    })
+
+    await vi.waitFor(() => expect(state.error.value).toContain('paginated thread'))
+    expect(gatewayMocks.forkThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.rollbackThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
+    state.stopPolling()
+  })
+
+  it('retains live messages when another turn persists the same item id', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('paginated-identities', '/tmp/project', { historyMode: 'paginated' })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue(paginatedDetail({
+      messages: [{ id: 'shared-item', role: 'assistant', text: 'same text', messageType: 'agentMessage', turnId: 'turn-a' }],
+      turnIds: ['turn-a'],
+    }))
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('paginated-identities')
+    state.startPolling()
+    notificationHandler!({ method: 'turn/started', params: { threadId: 'paginated-identities', turn: { id: 'turn-b' } } })
+    notificationHandler!({
+      method: 'item/completed',
+      params: {
+        threadId: 'paginated-identities',
+        turnId: 'turn-b',
+        item: { id: 'shared-item', type: 'agentMessage', text: 'same text' },
+      },
+    })
+    await state.loadMessages('paginated-identities', { force: true, silent: true })
+
+    expect(state.messages.value.filter((message) => message.id === 'shared-item')).toEqual([
+      expect.objectContaining({ turnId: 'turn-a', messageType: 'agentMessage' }),
+      expect.objectContaining({ turnId: 'turn-b', messageType: 'agentMessage.live' }),
+    ])
+    state.stopPolling()
+  })
+
+  it('invalidates cached mode when thread/list changes historyMode', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage
+      .mockResolvedValueOnce({
+        groups: [{ projectName: 'Project', threads: [thread('mode-change', '/tmp/project')] }],
+        nextCursor: null,
+      })
+      .mockResolvedValueOnce({
+        groups: [{ projectName: 'Project', threads: [thread('mode-change', '/tmp/project', { historyMode: 'paginated' })] }],
+        nextCursor: null,
+      })
+    gatewayMocks.getThreadHistoryDetail.mockImplementation(async (_threadId: string, historyMode: 'legacy' | 'paginated') => ({
+      ...paginatedDetail(),
+      historyMode,
+      resumed: historyMode === 'paginated',
+      materialized: historyMode === 'paginated',
+    }))
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('mode-change')
+    await state.loadMessages('mode-change')
+    await state.loadThreads({ force: true })
+    await state.loadMessages('mode-change', { force: true })
+
+    expect(state.projectGroups.value[0]?.threads[0]?.historyMode).toBe('paginated')
+    expect(gatewayMocks.getThreadHistoryDetail.mock.calls.map((call) => call[1])).toEqual(['legacy', 'paginated'])
+  })
+
+  it('drops an unlisted thread mode probe cache when polling state resets', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadSummary
+      .mockResolvedValueOnce(thread('reset-mode', '/tmp/project', { historyMode: 'paginated' }))
+      .mockResolvedValueOnce(thread('reset-mode', '/tmp/project'))
+    gatewayMocks.getThreadHistoryDetail.mockImplementation(async (_threadId: string, historyMode: 'legacy' | 'paginated') => ({
+      ...paginatedDetail(),
+      historyMode,
+      resumed: historyMode === 'paginated',
+      materialized: historyMode === 'paginated',
+    }))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('reset-mode')
+    await state.loadMessages('reset-mode')
+    state.stopPolling()
+    await state.loadMessages('reset-mode', { force: true })
+
+    expect(gatewayMocks.getThreadSummary).toHaveBeenCalledTimes(2)
+    expect(gatewayMocks.getThreadHistoryDetail.mock.calls.map((call) => call[1])).toEqual(['paginated', 'legacy'])
+  })
+
+  it('ignores a stale history failure after polling state resets', async () => {
+    installTestWindow()
+    const pendingDetail = deferred<ReturnType<typeof paginatedDetail>>()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('reset-pending-load', '/tmp/project', {
+        historyMode: 'paginated',
+      })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadHistoryDetail.mockReturnValue(pendingDetail.promise)
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('reset-pending-load')
+    const loadPromise = state.loadMessages('reset-pending-load')
+    await vi.waitFor(() => expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledTimes(1))
+    state.stopPolling()
+    pendingDetail.reject(new Error('stale failure after reset'))
+
+    await expect(loadPromise).resolves.toBeUndefined()
+    expect(state.error.value).toBe('')
+    expect(state.selectedLiveOverlay.value?.errorText ?? '').not.toContain('stale failure after reset')
+  })
+
+  it('coalesces concurrent forced history refreshes for the same thread', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('forced-refresh', '/tmp/project')] }],
+      nextCursor: null,
+    })
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('forced-refresh')
+    await state.loadMessages('forced-refresh')
+
+    const pendingRefresh = deferred<Record<string, unknown>>()
+    gatewayMocks.getThreadHistoryDetail.mockClear()
+    gatewayMocks.getThreadHistoryDetail.mockReturnValue(pendingRefresh.promise)
+    const first = state.loadMessages('forced-refresh', { force: true, silent: true })
+    const second = state.loadMessages('forced-refresh', { force: true, silent: true })
+
+    await vi.waitFor(() => expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledTimes(1))
+    pendingRefresh.resolve({ ...paginatedDetail(), historyMode: 'legacy', resumed: false, materialized: false })
+    await Promise.all([first, second])
+
+    expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledTimes(1)
+  })
+
+  it('bounds inactive history caches and keeps a recently revisited thread', async () => {
+    installTestWindow()
+    const threads = Array.from({ length: 22 }, (_, index) => thread(`cache-${index}`, '/tmp/project'))
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadHistoryDetail.mockImplementation(async (threadId: string) => ({
+      historyMode: 'legacy',
+      model: '',
+      modelProvider: '',
+      messages: [{ id: `message-${threadId}`, role: 'assistant', text: threadId, messageType: 'agentMessage', turnId: `turn-${threadId}` }],
+      turnIds: [`turn-${threadId}`],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      olderCursor: null,
+      startTurnIndex: 0,
+      turnIndexByTurnId: { [`turn-${threadId}`]: 0 },
+      resumed: false,
+      materialized: false,
+    }))
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    for (let index = 0; index < 20; index += 1) {
+      await state.loadMessages(`cache-${index}`)
+    }
+    await state.loadMessages('cache-0')
+    await state.loadMessages('cache-20')
+    await state.loadMessages('cache-21')
+    const callsBeforeRevisit = gatewayMocks.getThreadHistoryDetail.mock.calls.length
+    await state.loadMessages('cache-0')
+    await state.loadMessages('cache-1')
+
+    expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledTimes(callsBeforeRevisit + 1)
+    expect(gatewayMocks.getThreadHistoryDetail.mock.calls.filter((call) => call[0] === 'cache-0')).toHaveLength(1)
+    expect(gatewayMocks.getThreadHistoryDetail.mock.calls.filter((call) => call[0] === 'cache-1')).toHaveLength(2)
+  })
+
+  it('enforces the history cache limit after concurrent protected loads settle', async () => {
+    installTestWindow()
+    const threads = Array.from({ length: 22 }, (_, index) => thread(`parallel-cache-${index}`, '/tmp/project'))
+    const pendingByThreadId = new Map(threads.map((candidate) => [
+      candidate.id,
+      deferred<Record<string, unknown>>(),
+    ]))
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadHistoryDetail.mockImplementation(async (threadId: string) => (
+      await pendingByThreadId.get(threadId)!.promise
+    ))
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    const loads = threads.map((candidate) => state.loadMessages(candidate.id))
+    await vi.waitFor(() => expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledTimes(22))
+    for (const candidate of threads) {
+      pendingByThreadId.get(candidate.id)!.resolve({
+        historyMode: 'legacy',
+        model: '',
+        modelProvider: '',
+        messages: [{
+          id: `message-${candidate.id}`,
+          role: 'assistant',
+          text: candidate.id,
+          messageType: 'agentMessage',
+          turnId: `turn-${candidate.id}`,
+          turnIndex: 0,
+        }],
+        turnIds: [`turn-${candidate.id}`],
+        inProgress: false,
+        activeTurnId: '',
+        hasMoreOlder: false,
+        olderCursor: null,
+        startTurnIndex: 0,
+        turnIndexByTurnId: { [`turn-${candidate.id}`]: 0 },
+        resumed: false,
+        materialized: false,
+      })
+    }
+    await Promise.all(loads)
+
+    const callsAfterSettle = gatewayMocks.getThreadHistoryDetail.mock.calls.length
+    await state.loadMessages('parallel-cache-0')
+    expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledTimes(callsAfterSettle)
+    await state.loadMessages('parallel-cache-1')
+    expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledTimes(callsAfterSettle + 1)
   })
 })
 
@@ -2490,7 +3357,7 @@ describe('notification recovery', () => {
     })
   })
 
-  it('forces the selected thread to reload when replay is unavailable', async () => {
+  it('skips duplicate initial-ready history and forces the selected thread when replay is unavailable', async () => {
     installTestWindow()
     let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
     gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
@@ -2515,14 +3382,16 @@ describe('notification recovery', () => {
     state.primeSelectedThread('thread-a')
     await state.refreshAll({ includeSelectedThreadMessages: true })
     const callsBeforeInitialReady = gatewayMocks.getThreadDetail.mock.calls.length
+    const pendingRequestsBeforeInitialReady = gatewayMocks.getPendingServerRequests.mock.calls.length
     state.startPolling()
     notificationHandler!({
       method: 'ready',
       params: { replayAvailable: true, streamChanged: false },
     })
     await vi.waitFor(() => {
-      expect(gatewayMocks.getThreadDetail.mock.calls.length).toBeGreaterThan(callsBeforeInitialReady)
+      expect(gatewayMocks.getPendingServerRequests.mock.calls.length).toBeGreaterThan(pendingRequestsBeforeInitialReady)
     })
+    expect(gatewayMocks.getThreadDetail.mock.calls.length).toBe(callsBeforeInitialReady)
     const callsBeforeReconnect = gatewayMocks.getThreadDetail.mock.calls.length
     notificationHandler!({
       method: 'ready',
@@ -2532,6 +3401,88 @@ describe('notification recovery', () => {
       expect(gatewayMocks.getThreadDetail.mock.calls.length).toBeGreaterThan(callsBeforeReconnect)
       expect(gatewayMocks.getAgentProgress).toHaveBeenCalledWith('thread-a')
     })
+  })
+
+  it('reuses a selected thread history request that is pending when initial readiness arrives', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-pending', '/tmp/project')] }],
+      nextCursor: null,
+    })
+    const pendingDetail = deferred<{
+      messages: []
+      inProgress: boolean
+      activeTurnId: string
+      turnIndexByTurnId: Record<string, number>
+      hasMoreOlder: boolean
+    }>()
+    gatewayMocks.getThreadDetail.mockReturnValue(pendingDetail.promise)
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('thread-pending')
+    const initialLoad = state.loadMessages('thread-pending')
+    state.startPolling()
+    const pendingRequestsBeforeReady = gatewayMocks.getPendingServerRequests.mock.calls.length
+    notificationHandler!({ method: 'ready', params: { replayAvailable: true, streamChanged: false } })
+
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getPendingServerRequests.mock.calls.length).toBeGreaterThan(pendingRequestsBeforeReady)
+    })
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(1)
+
+    pendingDetail.resolve({
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+    await initialLoad
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0))
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0))
+
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not hydrate unseen background running threads on initial notification readiness', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{
+        projectName: 'Project',
+        threads: [
+          thread('selected-thread', '/tmp/project'),
+          thread('background-running', '/tmp/project', { inProgress: true }),
+        ],
+      }],
+      nextCursor: null,
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('selected-thread')
+    await state.refreshAll({ includeSelectedThreadMessages: true })
+    const selectedCalls = gatewayMocks.getThreadDetail.mock.calls.filter((call) => call[0] === 'selected-thread').length
+    const pendingRequestsBeforeReady = gatewayMocks.getPendingServerRequests.mock.calls.length
+    state.startPolling()
+    notificationHandler!({ method: 'ready', params: { replayAvailable: true, streamChanged: false } })
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getPendingServerRequests.mock.calls.length).toBeGreaterThan(pendingRequestsBeforeReady)
+    })
+
+    expect(gatewayMocks.getThreadDetail.mock.calls.filter((call) => call[0] === 'selected-thread')).toHaveLength(selectedCalls)
+    expect(gatewayMocks.getThreadDetail.mock.calls.some((call) => call[0] === 'background-running')).toBe(false)
   })
 })
 

@@ -73,6 +73,32 @@ export type ThreadItem = {
   summary?: string[]
 }
 
+export type ThreadHistoryMode = 'legacy' | 'paginated'
+
+export type ThreadHistoryPage = {
+  historyMode: ThreadHistoryMode
+  messages: UiMessage[]
+  turnIds: string[]
+  inProgress: boolean
+  activeTurnId: string
+  hasMoreOlder: boolean
+  olderCursor: string | null
+  startTurnIndex: number | null
+  turnIndexByTurnId: Record<string, number>
+}
+
+export type ThreadHistoryDetail = ThreadHistoryPage & {
+  model: string
+  modelProvider: string
+  resumed: boolean
+  materialized: boolean
+}
+
+export type ThreadTurnItemsPage = {
+  messages: UiMessage[]
+  nextCursor: string | null
+}
+
 export type UserInput = {
   type: string
   text?: string
@@ -91,6 +117,7 @@ export type UiThread = {
   preview: string
   unread: boolean
   inProgress: boolean
+  historyMode: ThreadHistoryMode
   pendingRequestState?: UiPendingRequestState | null
 }
 
@@ -117,6 +144,8 @@ export type CommandExecutionData = {
   cwd: string | null
   status: 'inProgress' | 'completed' | 'failed' | 'declined' | 'interrupted'
   aggregatedOutput: string
+  aggregatedOutputTruncated?: boolean
+  aggregatedOutputOriginalBytes?: number
   exitCode: number | null
 }
 

@@ -244,7 +244,13 @@ const PROVIDER_MODELS_FETCH_TIMEOUT_MS = 5_000
 const THREAD_TURN_PAGE_READ_CACHE_TTL_MS = 30_000
 const AGENT_PROGRESS_HYDRATION_CACHE_TTL_MS = 5_000
 const AGENT_MODEL_DETAILS_CACHE_LIMIT = 2_048
+const AGENT_PROGRESS_HISTORY_TURN_LIMIT = 10
+const AGENT_RESULT_HISTORY_ITEM_LIMIT = 50
+const QUEUED_TURN_STATUS_HISTORY_LIMIT = 1
+const THREAD_COMMAND_OUTPUT_ITEM_PAGE_LIMIT = 100
+const THREAD_COMMAND_OUTPUT_MAX_PAGES = 16
 const THREAD_METHODS_WITH_THREAD_SNAPSHOT = new Set([...THREAD_METHODS_WITH_TURNS, 'thread/start'])
+const THREAD_METHODS_WITH_SESSION_SKILL_RECOVERY = new Set([...THREAD_METHODS_WITH_TURNS, 'thread/turns/list'])
 const THREAD_SEARCH_FULL_TEXT_THREAD_LIMIT = 100
 const PROJECTLESS_THREAD_DIRECTORY_MAX_ATTEMPTS = 100
 const PROJECTLESS_THREAD_READABLE_DIRECTORY_ATTEMPTS = 20
@@ -432,29 +438,99 @@ export function mergeSessionSkillInputsIntoTurns(turns: unknown[], sessionLogRaw
   return mergeSessionSkillInputsIntoTurnsFromMap(turns, buildSessionSkillInputsByTurn(sessionLogRaw))
 }
 
-async function mergeSessionSkillInputsIntoThreadResult(result: unknown): Promise<unknown> {
+function mergeSessionSkillInputsIntoThreadResultFromMap(
+  result: unknown,
+  skillsByTurnId: Map<string, SessionRecoveredSkillInput[]>,
+): unknown {
   const record = asRecord(result)
   const thread = asRecord(record?.thread)
   const turns = Array.isArray(thread?.turns) ? thread.turns : null
-  const sessionPath = readNonEmptyString(thread?.path)
-  if (!record || !thread || !turns || turns.length === 0 || !sessionPath || !isAbsolute(sessionPath)) {
+  if (!record || !thread || !turns || turns.length === 0) return result
+
+  const mergedTurns = mergeSessionSkillInputsIntoTurnsFromMap(turns, skillsByTurnId)
+  if (mergedTurns === turns) return result
+  return {
+    ...record,
+    thread: {
+      ...thread,
+      turns: mergedTurns,
+    },
+  }
+}
+
+function mergeSessionSkillInputsIntoTurnsPageFromMap(
+  result: unknown,
+  skillsByTurnId: Map<string, SessionRecoveredSkillInput[]>,
+): unknown {
+  const record = asRecord(result)
+  const turns = Array.isArray(record?.data) ? record.data : null
+  if (!record || !turns || turns.length === 0) return result
+
+  const mergedTurns = mergeSessionSkillInputsIntoTurnsFromMap(turns, skillsByTurnId)
+  if (mergedTurns === turns) return result
+  return {
+    ...record,
+    data: mergedTurns,
+  }
+}
+
+function mergeSessionSkillInputsIntoHistoryResultFromMap(
+  method: string,
+  result: unknown,
+  skillsByTurnId: Map<string, SessionRecoveredSkillInput[]>,
+): unknown {
+  if (method === 'thread/turns/list') {
+    return mergeSessionSkillInputsIntoTurnsPageFromMap(result, skillsByTurnId)
+  }
+
+  if (!THREAD_METHODS_WITH_TURNS.has(method)) {
+    // `thread/items/list` can split one turn across pages. Without the full
+    // turn there is no safe way to identify its final user message.
     return result
   }
 
+  let mergedResult = mergeSessionSkillInputsIntoThreadResultFromMap(result, skillsByTurnId)
+  if (method !== 'thread/resume') return mergedResult
+
+  const mergedRecord = asRecord(mergedResult)
+  const initialTurnsPage = asRecord(mergedRecord?.initialTurnsPage)
+  if (!mergedRecord || !initialTurnsPage) return mergedResult
+  const mergedInitialTurnsPage = mergeSessionSkillInputsIntoTurnsPageFromMap(initialTurnsPage, skillsByTurnId)
+  if (mergedInitialTurnsPage === initialTurnsPage) return mergedResult
+  return {
+    ...mergedRecord,
+    initialTurnsPage: mergedInitialTurnsPage,
+  }
+}
+
+export function mergeSessionSkillInputsIntoHistoryResult(
+  method: string,
+  result: unknown,
+  sessionLogRaw: string,
+): unknown {
+  return mergeSessionSkillInputsIntoHistoryResultFromMap(method, result, buildSessionSkillInputsByTurn(sessionLogRaw))
+}
+
+async function mergeCachedSessionSkillInputsIntoHistoryResult(
+  method: string,
+  result: unknown,
+  fallbackSessionPath = '',
+): Promise<unknown> {
+  const record = asRecord(result)
+  const thread = asRecord(record?.thread)
+  const sessionPath = readNonEmptyString(thread?.path) || fallbackSessionPath
+  if (!sessionPath || !isAbsolute(sessionPath)) return result
+
   try {
     const skillsByTurnId = await readCachedSessionSkillInputsByTurn(sessionPath)
-    const mergedTurns = mergeSessionSkillInputsIntoTurnsFromMap(turns, skillsByTurnId)
-    if (mergedTurns === turns) return result
-    return {
-      ...record,
-      thread: {
-        ...thread,
-        turns: mergedTurns,
-      },
-    }
+    return mergeSessionSkillInputsIntoHistoryResultFromMap(method, result, skillsByTurnId)
   } catch {
     return result
   }
+}
+
+async function mergeSessionSkillInputsIntoThreadResult(result: unknown): Promise<unknown> {
+  return mergeCachedSessionSkillInputsIntoHistoryResult('thread/read', result)
 }
 
 function readEnvValueFromFile(filePath: string, key: string): string | null {
@@ -750,18 +826,26 @@ async function sanitizeInlineUserContentBlock(
   }
 
   if (type === 'imageGeneration' || type === 'image_generation') {
-    const rawResult = asNonEmptyString(record.result)
-      ?? asNonEmptyString(record.b64_json)
-      ?? asNonEmptyString(record.image)
     const mimeType = asNonEmptyString(record.mime_type)
       ?? asNonEmptyString(record.mimeType)
       ?? 'image/png'
-    const dataUrl = rawResult ? normalizeBase64ImageDataUrl(rawResult, mimeType) : null
+    const dataUrl = [record.result, record.b64_json, record.image]
+      .map((candidate) => asNonEmptyString(candidate))
+      .filter((candidate): candidate is string => Boolean(candidate))
+      .map((candidate) => normalizeBase64ImageDataUrl(candidate, mimeType))
+      .find((candidate): candidate is string => Boolean(candidate))
+      ?? null
     if (dataUrl) {
       const localUrl = await persistInlineDataUrlToLocalFile(dataUrl, `generated-image-${context.turnId}-${context.itemId}`)
       if (localUrl) {
+        const {
+          result: _inlineResult,
+          b64_json: _inlineB64Json,
+          image: _inlineImage,
+          ...imageViewRecord
+        } = record
         return {
-          ...record,
+          ...imageViewRecord,
           type: 'imageView',
           path: localUrl,
         }
@@ -840,14 +924,7 @@ async function sanitizeInlinePayloadDeep(
   return changed ? { value: nextRecord, changed: true } : { value, changed: false }
 }
 
-export async function sanitizeThreadTurnsInlinePayloads(method: string, result: unknown): Promise<unknown> {
-  if (!THREAD_METHODS_WITH_TURNS.has(method)) return result
-
-  const record = asRecord(result)
-  const thread = asRecord(record?.thread)
-  const turns = Array.isArray(thread?.turns) ? thread.turns : null
-  if (!record || !thread || !turns || turns.length === 0) return result
-
+async function sanitizeTurnsInlinePayloads(turns: unknown[]): Promise<unknown[]> {
   let changed = false
   const nextTurns: unknown[] = []
   for (let turnIndex = 0; turnIndex < turns.length; turnIndex += 1) {
@@ -894,7 +971,18 @@ export async function sanitizeThreadTurnsInlinePayloads(method: string, result: 
     })
   }
 
-  if (!changed) return result
+  return changed ? nextTurns : turns
+}
+
+async function sanitizeThreadResultInlinePayloads(result: unknown): Promise<unknown> {
+  const record = asRecord(result)
+  const thread = asRecord(record?.thread)
+  const turns = Array.isArray(thread?.turns) ? thread.turns : null
+  if (!record || !thread || !turns || turns.length === 0) return result
+
+  const nextTurns = await sanitizeTurnsInlinePayloads(turns)
+  if (nextTurns === turns) return result
+
   return {
     ...record,
     thread: {
@@ -902,6 +990,85 @@ export async function sanitizeThreadTurnsInlinePayloads(method: string, result: 
       turns: nextTurns,
     },
   }
+}
+
+async function sanitizeTurnsPageInlinePayloads(result: unknown): Promise<unknown> {
+  const record = asRecord(result)
+  const turns = Array.isArray(record?.data) ? record.data : null
+  if (!record || !turns || turns.length === 0) return result
+
+  const nextTurns = await sanitizeTurnsInlinePayloads(turns)
+  if (nextTurns === turns) return result
+
+  return {
+    ...record,
+    data: nextTurns,
+  }
+}
+
+async function sanitizeItemsPageInlinePayloads(result: unknown): Promise<unknown> {
+  const record = asRecord(result)
+  const entries = Array.isArray(record?.data) ? record.data : null
+  if (!record || !entries || entries.length === 0) return result
+
+  let changed = false
+  const nextEntries: unknown[] = []
+  for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+    const entry = entries[entryIndex]
+    const entryRecord = asRecord(entry)
+    const itemRecord = asRecord(entryRecord?.item)
+    if (!entryRecord || !itemRecord) {
+      nextEntries.push(entry)
+      continue
+    }
+
+    const sanitizedItem = await sanitizeInlinePayloadDeep(itemRecord, {
+      turnId: asNonEmptyString(entryRecord.turnId) ?? 'turn',
+      itemId: asNonEmptyString(itemRecord.id) ?? 'item',
+      blockIndex: entryIndex,
+    })
+    if (!sanitizedItem.changed) {
+      nextEntries.push(entry)
+      continue
+    }
+
+    changed = true
+    nextEntries.push({
+      ...entryRecord,
+      item: sanitizedItem.value,
+    })
+  }
+
+  if (!changed) return result
+  return {
+    ...record,
+    data: nextEntries,
+  }
+}
+
+async function sanitizeInitialTurnsPageInlinePayloads(result: unknown): Promise<unknown> {
+  const record = asRecord(result)
+  const initialTurnsPage = asRecord(record?.initialTurnsPage)
+  if (!record || !initialTurnsPage) return result
+
+  const nextInitialTurnsPage = await sanitizeTurnsPageInlinePayloads(initialTurnsPage)
+  if (nextInitialTurnsPage === initialTurnsPage) return result
+
+  return {
+    ...record,
+    initialTurnsPage: nextInitialTurnsPage,
+  }
+}
+
+export async function sanitizeThreadTurnsInlinePayloads(method: string, result: unknown): Promise<unknown> {
+  if (method === 'thread/turns/list') return sanitizeTurnsPageInlinePayloads(result)
+  if (method === 'thread/items/list') return sanitizeItemsPageInlinePayloads(result)
+  if (!THREAD_METHODS_WITH_TURNS.has(method)) return result
+
+  const sanitizedThreadResult = await sanitizeThreadResultInlinePayloads(result)
+  return method === 'thread/resume'
+    ? sanitizeInitialTurnsPageInlinePayloads(sanitizedThreadResult)
+    : sanitizedThreadResult
 }
 
 function getErrorMessage(payload: unknown, fallback: string): string {
@@ -973,20 +1140,17 @@ function readStreamTurnErrorMessage(frame: StreamEventFrame): { turnId: string; 
   return null
 }
 
-function mergeStreamTurnErrorsIntoThreadResult(appServer: AppServerProcess, result: unknown): unknown {
-  const record = asRecord(result)
-  const thread = asRecord(record?.thread)
-  const threadId = readNonEmptyString(thread?.id)
-  const turns = Array.isArray(thread?.turns) ? thread.turns : null
-  if (!record || !thread || !threadId || !turns || turns.length === 0) return result
-
+function readStreamTurnErrorsById(appServer: AppServerProcess, threadId: string): Map<string, string> {
   const errorsByTurnId = new Map<string, string>()
   for (const frame of appServer.getStreamEvents(threadId, STREAM_EVENT_BUFFER_LIMIT)) {
     const error = readStreamTurnErrorMessage(frame)
     if (error) errorsByTurnId.set(error.turnId, error.message)
   }
-  if (errorsByTurnId.size === 0) return result
+  return errorsByTurnId
+}
 
+function mergeStreamTurnErrorsIntoTurns(turns: unknown[], errorsByTurnId: Map<string, string>): unknown[] {
+  if (turns.length === 0 || errorsByTurnId.size === 0) return turns
   let changed = false
   const mergedTurns = turns.map((turn) => {
     const turnRecord = asRecord(turn)
@@ -1007,12 +1171,61 @@ function mergeStreamTurnErrorsIntoThreadResult(appServer: AppServerProcess, resu
     }
   })
 
-  if (!changed) return result
+  return changed ? mergedTurns : turns
+}
+
+export function mergeStreamTurnErrorsIntoThreadResult(
+  appServer: AppServerProcess,
+  result: unknown,
+  method = 'thread/read',
+  fallbackThreadId = '',
+): unknown {
+  const record = asRecord(result)
+  const thread = asRecord(record?.thread)
+  const threadId = readNonEmptyString(thread?.id) || fallbackThreadId
+  if (!record || !threadId) return result
+
+  const errorsByTurnId = readStreamTurnErrorsById(appServer, threadId)
+  if (errorsByTurnId.size === 0) return result
+
+  if (method === 'thread/turns/list') {
+    const turns = Array.isArray(record.data) ? record.data : null
+    if (!turns || turns.length === 0) return result
+    const mergedTurns = mergeStreamTurnErrorsIntoTurns(turns, errorsByTurnId)
+    return mergedTurns === turns
+      ? result
+      : { ...record, data: mergedTurns }
+  }
+
+  let mergedResult = result
+  const turns = Array.isArray(thread?.turns) ? thread.turns : null
+  if (thread && turns && turns.length > 0) {
+    const mergedTurns = mergeStreamTurnErrorsIntoTurns(turns, errorsByTurnId)
+    if (mergedTurns !== turns) {
+      mergedResult = {
+        ...record,
+        thread: {
+          ...thread,
+          turns: mergedTurns,
+        },
+      }
+    }
+  }
+
+  if (method !== 'thread/resume') return mergedResult
+
+  const mergedRecord = asRecord(mergedResult)
+  const initialTurnsPage = asRecord(mergedRecord?.initialTurnsPage)
+  const initialTurns = Array.isArray(initialTurnsPage?.data) ? initialTurnsPage.data : null
+  if (!mergedRecord || !initialTurnsPage || !initialTurns || initialTurns.length === 0) return mergedResult
+  const mergedInitialTurns = mergeStreamTurnErrorsIntoTurns(initialTurns, errorsByTurnId)
+  if (mergedInitialTurns === initialTurns) return mergedResult
+
   return {
-    ...record,
-    thread: {
-      ...thread,
-      turns: mergedTurns,
+    ...mergedRecord,
+    initialTurnsPage: {
+      ...initialTurnsPage,
+      data: mergedInitialTurns,
     },
   }
 }
@@ -2404,6 +2617,180 @@ function extractLastAgentMessage(threadReadPayload: unknown, maxBytes = 64 * 102
     }
   }
   return { text: '', truncated: false }
+}
+
+function readThreadFromHistoryResult(result: unknown): Record<string, unknown> | null {
+  const record = asRecord(result)
+  return asRecord(record?.thread) ?? asRecord(asRecord(record?.data)?.thread)
+}
+
+function usesPaginatedThreadHistory(result: unknown): boolean {
+  return readNonEmptyString(readThreadFromHistoryResult(result)?.historyMode).toLowerCase() === 'paginated'
+}
+
+function attachTurnsToThreadSummary(summary: unknown, turns: unknown[]): unknown {
+  const record = asRecord(summary)
+  const thread = readThreadFromHistoryResult(summary)
+  if (!record || !thread) return summary
+  if (asRecord(record.thread)) {
+    return {
+      ...record,
+      thread: {
+        ...thread,
+        turns,
+      },
+    }
+  }
+
+  const data = asRecord(record.data)
+  if (!data) return summary
+  return {
+    ...record,
+    data: {
+      ...data,
+      thread: {
+        ...thread,
+        turns,
+      },
+    },
+  }
+}
+
+async function readThreadSummary(appServer: RpcExecutor, threadId: string): Promise<unknown> {
+  return appServer.rpc('thread/read', { threadId, includeTurns: false })
+}
+
+async function readBoundedPaginatedTurns(
+  appServer: RpcExecutor,
+  threadId: string,
+  limit: number,
+  itemsView: 'full' | 'summary' = 'full',
+): Promise<unknown[]> {
+  const boundedLimit = Math.max(1, Math.min(AGENT_PROGRESS_HISTORY_TURN_LIMIT, Math.floor(limit)))
+  const page = asRecord(await appServer.rpc('thread/turns/list', {
+    threadId,
+    cursor: null,
+    limit: boundedLimit,
+    sortDirection: 'desc',
+    itemsView,
+  }))
+  const descendingTurns = Array.isArray(page?.data) ? page.data.slice(0, boundedLimit) : []
+  return limitCommandOutputsInTurns(descendingTurns, 'desc').reverse()
+}
+
+async function readThreadHistoryForInternalUse(
+  appServer: RpcExecutor,
+  threadId: string,
+  paginatedTurnLimit = AGENT_PROGRESS_HISTORY_TURN_LIMIT,
+): Promise<{ result: unknown; paginated: boolean }> {
+  const summary = await readThreadSummary(appServer, threadId)
+  if (!readThreadFromHistoryResult(summary)) {
+    throw new Error(`thread/read returned an invalid summary for ${threadId}`)
+  }
+  if (!usesPaginatedThreadHistory(summary)) {
+    return {
+      result: await appServer.rpc('thread/read', { threadId, includeTurns: true }),
+      paginated: false,
+    }
+  }
+
+  const turns = await readBoundedPaginatedTurns(appServer, threadId, paginatedTurnLimit)
+  return {
+    result: attachTurnsToThreadSummary(summary, turns),
+    paginated: true,
+  }
+}
+
+async function readBoundedPaginatedAgentResult(
+  appServer: RpcExecutor,
+  threadId: string,
+): Promise<{ text: string; truncated: boolean }> {
+  const page = asRecord(await appServer.rpc('thread/items/list', {
+    threadId,
+    cursor: null,
+    limit: AGENT_RESULT_HISTORY_ITEM_LIMIT,
+    sortDirection: 'desc',
+  }))
+  const descendingEntries = Array.isArray(page?.data)
+    ? page.data.slice(0, AGENT_RESULT_HISTORY_ITEM_LIMIT)
+    : []
+  const chronologicalItems = descendingEntries
+    .map((entry) => asRecord(entry)?.item)
+    .filter((item): item is unknown => item !== undefined)
+    .reverse()
+  return extractLastAgentMessage({ thread: { turns: [{ items: chronologicalItems }] } })
+}
+
+function readMatchingCommandOutputFromTurns(turns: unknown[], turnId: string, itemId: string): string | null {
+  for (const turnValue of turns) {
+    const turn = asRecord(turnValue)
+    if (readNonEmptyString(turn?.id) !== turnId) continue
+    const items = Array.isArray(turn?.items) ? turn.items : []
+    for (const itemValue of items) {
+      const item = asRecord(itemValue)
+      if (
+        readNonEmptyString(item?.id) === itemId
+        && item?.type === 'commandExecution'
+        && typeof item.aggregatedOutput === 'string'
+      ) {
+        return item.aggregatedOutput
+      }
+    }
+  }
+  return null
+}
+
+export async function readFullThreadCommandOutput(
+  appServer: RpcExecutor,
+  threadId: string,
+  turnId: string,
+  itemId: string,
+): Promise<string | null> {
+  const summary = await readThreadSummary(appServer, threadId)
+  if (!readThreadFromHistoryResult(summary)) return null
+
+  if (!usesPaginatedThreadHistory(summary)) {
+    const fullResult = await appServer.rpc('thread/read', { threadId, includeTurns: true })
+    const thread = readThreadFromHistoryResult(fullResult)
+    const turns = Array.isArray(thread?.turns) ? thread.turns : []
+    return readMatchingCommandOutputFromTurns(turns, turnId, itemId)
+  }
+
+  let cursor: string | null = null
+  const seenCursors = new Set<string>()
+  for (let pageIndex = 0; pageIndex < THREAD_COMMAND_OUTPUT_MAX_PAGES; pageIndex += 1) {
+    const cursorKey = cursor ?? '__first__'
+    if (seenCursors.has(cursorKey)) break
+    seenCursors.add(cursorKey)
+
+    const page = asRecord(await appServer.rpc('thread/items/list', {
+      threadId,
+      turnId,
+      cursor,
+      limit: THREAD_COMMAND_OUTPUT_ITEM_PAGE_LIMIT,
+      sortDirection: 'asc',
+    }))
+    const entries = Array.isArray(page?.data)
+      ? page.data.slice(0, THREAD_COMMAND_OUTPUT_ITEM_PAGE_LIMIT)
+      : []
+    for (const entryValue of entries) {
+      const entry = asRecord(entryValue)
+      if (readNonEmptyString(entry?.turnId) !== turnId) continue
+      const item = asRecord(entry?.item)
+      if (
+        readNonEmptyString(item?.id) === itemId
+        && item?.type === 'commandExecution'
+        && typeof item.aggregatedOutput === 'string'
+      ) {
+        return item.aggregatedOutput
+      }
+    }
+
+    const nextCursor = readNonEmptyString(page?.nextCursor)
+    if (!nextCursor || seenCursors.has(nextCursor)) break
+    cursor = nextCursor
+  }
+  return null
 }
 
 function readNonEmptyString(value: unknown): string {
@@ -6694,7 +7081,11 @@ export class AppServerProcess {
       visited.add(threadId)
       let threadReadResult: unknown
       try {
-        threadReadResult = await this.rpc('thread/read', { threadId, includeTurns: true })
+        threadReadResult = (await readThreadHistoryForInternalUse(
+          this,
+          threadId,
+          AGENT_PROGRESS_HISTORY_TURN_LIMIT,
+        )).result
       } catch {
         // Keep the partial tree usable when one child session cannot be read.
         continue
@@ -6728,8 +7119,14 @@ export class AppServerProcess {
   async readAgentResult(threadId: string): Promise<{ threadId: string; text: string; truncated: boolean }> {
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId) return { threadId: '', text: '', truncated: false }
-    const result = await this.rpc('thread/read', { threadId: normalizedThreadId, includeTurns: true })
-    return { threadId: normalizedThreadId, ...extractLastAgentMessage(result) }
+    const summary = await readThreadSummary(this, normalizedThreadId)
+    if (!readThreadFromHistoryResult(summary)) {
+      throw new Error(`thread/read returned an invalid summary for ${normalizedThreadId}`)
+    }
+    const extracted = usesPaginatedThreadHistory(summary)
+      ? await readBoundedPaginatedAgentResult(this, normalizedThreadId)
+      : extractLastAgentMessage(await this.rpc('thread/read', { threadId: normalizedThreadId, includeTurns: true }))
+    return { threadId: normalizedThreadId, ...extracted }
   }
 
   storeThreadReadSnapshot(threadId: string, snapshot: unknown): void {
@@ -7233,16 +7630,37 @@ export class BackendQueueProcessor {
   }
 
   private async canStartQueuedTurn(threadId: string): Promise<boolean> {
+    const summary = await readThreadSummary(this.appServer, threadId)
+    const summaryThread = readThreadFromHistoryResult(summary)
+    if (!summaryThread) return false
+
+    const status = asRecord(summaryThread.status)
+    const statusType = readNonEmptyString(status?.type).toLowerCase()
+    if (statusType === 'inprogress' || statusType === 'running' || statusType === 'active') return false
+
+    if (usesPaginatedThreadHistory(summary)) {
+      if (statusType === 'idle' || statusType === 'notloaded' || statusType === 'systemerror') return true
+      const turns = await readBoundedPaginatedTurns(
+        this.appServer,
+        threadId,
+        QUEUED_TURN_STATUS_HISTORY_LIMIT,
+        'summary',
+      )
+      return !turns.some((turn) => {
+        const turnStatus = asRecord(turn)?.status
+        const type = typeof turnStatus === 'string'
+          ? turnStatus.trim().toLowerCase()
+          : readNonEmptyString(asRecord(turnStatus)?.type).toLowerCase()
+        return type === 'inprogress' || type === 'running' || type === 'active'
+      })
+    }
+
     const response = asRecord(await this.appServer.rpc('thread/read', { threadId, includeTurns: true }))
     const thread = asRecord(response?.thread)
     if (!thread) return false
 
-    const status = asRecord(thread.status)
-    const statusType = readNonEmptyString(status?.type)
-    if (statusType === 'inProgress' || statusType === 'running' || statusType === 'active') return false
-
     const turns = Array.isArray(thread.turns) ? thread.turns : []
-    return !turns.some((turn) => readNonEmptyString(asRecord(turn)?.status) === 'inProgress')
+    return !turns.some((turn) => readNonEmptyString(asRecord(turn)?.status).toLowerCase() === 'inprogress')
   }
 
   private async popNextQueuedTurn(threadId: string): Promise<BackendQueuedTurn | null> {
@@ -7992,6 +8410,29 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
+      if (req.method === 'POST' && url.pathname === '/codex-api/thread-command-output') {
+        const body = asRecord(await readJsonBody(req))
+        const threadId = readNonEmptyString(body?.threadId)
+        const turnId = readNonEmptyString(body?.turnId)
+        const itemId = readNonEmptyString(body?.itemId)
+        if (!threadId || !turnId || !itemId) {
+          setJson(res, 400, { error: 'Missing threadId, turnId, or itemId' })
+          return
+        }
+
+        try {
+          const output = await readFullThreadCommandOutput(appServer, threadId, turnId, itemId)
+          if (output === null) {
+            setJson(res, 404, { error: 'Command output not found' })
+            return
+          }
+          setJson(res, 200, { data: { output } })
+        } catch (error) {
+          setJson(res, 500, { error: getErrorMessage(error, 'Failed to load command output') })
+        }
+        return
+      }
+
       if (req.method === 'POST' && url.pathname === '/codex-api/rpc') {
         const payload = await readJsonBody(req)
         const body = asRecord(payload) as RpcProxyRequest | null
@@ -8028,7 +8469,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             const threadId = typeof params?.threadId === 'string' ? params.threadId.trim() : ''
             const snapshot = threadId ? appServer.getLastThreadReadSnapshot(threadId) : null
             if (snapshot) {
-              setJson(res, 200, { result: trimAndLimitThreadCommandOutputs(body.method, snapshot) })
+              setJson(res, 200, { result: trimAndLimitThreadCommandOutputs(body.method, snapshot, body.params) })
               return
             }
           }
@@ -8050,16 +8491,24 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }
           throw error
         }
-        const trimmedResult = trimAndLimitThreadCommandOutputs(body.method, rpcResult)
-        const errorMergedResult = THREAD_METHODS_WITH_TURNS.has(body.method)
-          ? mergeStreamTurnErrorsIntoThreadResult(appServer, trimmedResult)
+        const trimmedResult = trimAndLimitThreadCommandOutputs(body.method, rpcResult, body.params)
+        const rpcParams = asRecord(body.params)
+        const rpcThreadId = readNonEmptyString(rpcParams?.threadId)
+        const errorMergedResult = THREAD_METHODS_WITH_TURNS.has(body.method) || body.method === 'thread/turns/list'
+          ? mergeStreamTurnErrorsIntoThreadResult(appServer, trimmedResult, body.method, rpcThreadId)
           : trimmedResult
         const listMergedResult = body.method === 'thread/list'
           ? mergeImportedThreadsIntoThreadListResult(errorMergedResult)
           : errorMergedResult
         const sanitizedResult = await sanitizeThreadTurnsInlinePayloads(body.method, listMergedResult)
-        const result = THREAD_METHODS_WITH_TURNS.has(body.method)
-          ? await mergeSessionSkillInputsIntoThreadResult(sanitizedResult)
+        let fallbackSessionPath = ''
+        if (body.method === 'thread/turns/list') {
+          const snapshotRecord = asRecord(rpcThreadId ? appServer.getLastThreadReadSnapshot(rpcThreadId) : null)
+          const snapshotThread = asRecord(snapshotRecord?.thread)
+          fallbackSessionPath = readNonEmptyString(snapshotThread?.path)
+        }
+        const result = THREAD_METHODS_WITH_SESSION_SKILL_RECOVERY.has(body.method)
+          ? await mergeCachedSessionSkillInputsIntoHistoryResult(body.method, sanitizedResult, fallbackSessionPath)
           : sanitizedResult
 
         if (THREAD_METHODS_WITH_THREAD_SNAPSHOT.has(body.method)) {

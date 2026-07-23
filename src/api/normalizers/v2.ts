@@ -16,6 +16,7 @@ import type {
   UiPlanStep,
   UiProjectGroup,
   UiThread,
+  ThreadHistoryMode,
 } from '../../types/codex'
 import { normalizePathForComparison, normalizePathForUi, toProjectName } from '../../pathUtils.js'
 
@@ -493,6 +494,14 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
     const cmd = typeof raw.command === 'string' ? raw.command : ''
     const cwd = typeof raw.cwd === 'string' ? raw.cwd : null
     const aggregatedOutput = typeof raw.aggregatedOutput === 'string' ? raw.aggregatedOutput : ''
+    const aggregatedOutputTruncated = typeof raw.aggregatedOutputTruncated === 'boolean'
+      ? raw.aggregatedOutputTruncated
+      : undefined
+    const aggregatedOutputOriginalBytes = typeof raw.aggregatedOutputOriginalBytes === 'number'
+      && Number.isFinite(raw.aggregatedOutputOriginalBytes)
+      && raw.aggregatedOutputOriginalBytes >= 0
+      ? raw.aggregatedOutputOriginalBytes
+      : undefined
     const exitCode = typeof raw.exitCode === 'number' ? raw.exitCode : null
     return [
       {
@@ -500,7 +509,15 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
         role: 'system' as const,
         text: cmd,
         messageType: 'commandExecution',
-        commandExecution: { command: cmd, cwd, status, aggregatedOutput, exitCode },
+        commandExecution: {
+          command: cmd,
+          cwd,
+          status,
+          aggregatedOutput,
+          ...(aggregatedOutputTruncated === undefined ? {} : { aggregatedOutputTruncated }),
+          ...(aggregatedOutputOriginalBytes === undefined ? {} : { aggregatedOutputOriginalBytes }),
+          exitCode,
+        },
       },
     ]
   }
@@ -524,6 +541,39 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
   }
 
   return []
+}
+
+function toPaginatedUiMessages(item: ThreadItem): UiMessage[] {
+  const messages = toUiMessages(item)
+  if (messages.length > 0 || item.type !== 'reasoning') return messages
+
+  const raw = item as unknown as Record<string, unknown>
+  const summary = Array.isArray(raw.summary)
+    ? raw.summary.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+    : []
+  if (summary.length === 0) return []
+  return [{
+    id: item.id,
+    role: 'assistant',
+    text: summary.join('\n'),
+    messageType: 'reasoning',
+  }]
+}
+
+function dedupePaginatedItems(items: ThreadItem[]): ThreadItem[] {
+  const order: string[] = []
+  const itemById = new Map<string, ThreadItem>()
+  const anonymousItems: ThreadItem[] = []
+  for (const item of items) {
+    const itemId = typeof item?.id === 'string' ? item.id : ''
+    if (!itemId) {
+      anonymousItems.push(item)
+      continue
+    }
+    if (!itemById.has(itemId)) order.push(itemId)
+    itemById.set(itemId, item)
+  }
+  return [...order.map((itemId) => itemById.get(itemId) as ThreadItem), ...anonymousItems]
 }
 
 function normalizeCommandStatus(value: unknown): CommandExecutionData['status'] {
@@ -571,6 +621,10 @@ function readThreadInProgress(summary: Thread): boolean {
   return isTurnInProgress(lastTurn)
 }
 
+export function normalizeThreadHistoryMode(value: unknown): ThreadHistoryMode {
+  return value === 'paginated' ? 'paginated' : 'legacy'
+}
+
 function toUiThread(summary: Thread): UiThread {
   const rawSummary = summary as Record<string, unknown>
   const cwd = normalizePathForUi(typeof rawSummary.cwd === 'string' ? rawSummary.cwd : summary.cwd)
@@ -594,6 +648,7 @@ function toUiThread(summary: Thread): UiThread {
     preview: summary.preview,
     unread: false,
     inProgress: readThreadInProgress(summary),
+    historyMode: normalizeThreadHistoryMode(rawSummary.historyMode),
   }
 }
 
@@ -655,6 +710,96 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse, baseTurnI
       })
     }
   }
+  return messages
+}
+
+export type NormalizedPaginatedTurns = {
+  messages: UiMessage[]
+  turnIds: string[]
+  inProgress: boolean
+  activeTurnId: string
+}
+
+/**
+ * Normalizes a chronological page of native paginated turns. Native history
+ * cursors do not expose a stable absolute turn index, so paginated messages
+ * deliberately carry only their canonical turn id.
+ */
+export function normalizePaginatedThreadTurnsV2(turnsValue: unknown): NormalizedPaginatedTurns {
+  const turns = Array.isArray(turnsValue) ? turnsValue as Turn[] : []
+  const messages: UiMessage[] = []
+  const turnIds: string[] = []
+  const seenTurnIds = new Set<string>()
+  let inProgress = false
+  let activeTurnId = ''
+
+  for (const turn of turns) {
+    const rawTurnId = typeof turn?.id === 'string' ? turn.id.trim() : ''
+    if (!rawTurnId || seenTurnIds.has(rawTurnId)) continue
+    seenTurnIds.add(rawTurnId)
+    turnIds.push(rawTurnId)
+
+    if (isTurnInProgress(turn)) {
+      inProgress = true
+      activeTurnId = rawTurnId
+    }
+
+    const items = Array.isArray(turn.items) ? turn.items : []
+    for (const item of dedupePaginatedItems(items)) {
+      for (const message of toPaginatedUiMessages(item)) {
+        messages.push({ ...message, turnId: rawTurnId })
+      }
+    }
+
+    const errorText = readTurnErrorText(turn)
+    if (turn.status === 'failed' && errorText) {
+      messages.push({
+        id: `${rawTurnId}-error`,
+        role: 'system',
+        text: errorText,
+        messageType: 'turnError',
+        turnId: rawTurnId,
+      })
+    }
+  }
+
+  return { messages, turnIds, inProgress, activeTurnId }
+}
+
+/** Normalize `thread/items/list` entries without inventing turn indexes. */
+export function normalizePaginatedThreadItemsV2(entriesValue: unknown): UiMessage[] {
+  const entries = Array.isArray(entriesValue) ? entriesValue : []
+  const messages: UiMessage[] = []
+  const entryOrder: string[] = []
+  const entryById = new Map<string, { turnId: string; item: ThreadItem }>()
+  const anonymousEntries: Array<{ turnId: string; item: ThreadItem }> = []
+
+  for (const entryValue of entries) {
+    if (!entryValue || typeof entryValue !== 'object' || Array.isArray(entryValue)) continue
+    const entry = entryValue as Record<string, unknown>
+    const turnId = typeof entry.turnId === 'string' ? entry.turnId.trim() : ''
+    const item = entry.item as ThreadItem | null | undefined
+    if (!turnId || !item || typeof item !== 'object') continue
+    const itemId = typeof item.id === 'string' ? item.id : ''
+    const entryKey = `${turnId}\u0000${itemId}`
+    if (!itemId) {
+      anonymousEntries.push({ turnId, item })
+      continue
+    }
+    if (!entryById.has(entryKey)) entryOrder.push(entryKey)
+    entryById.set(entryKey, { turnId, item })
+  }
+
+  const normalizedEntries = [
+    ...entryOrder.map((entryKey) => entryById.get(entryKey) as { turnId: string; item: ThreadItem }),
+    ...anonymousEntries,
+  ]
+  for (const { turnId, item } of normalizedEntries) {
+    for (const message of toPaginatedUiMessages(item)) {
+      messages.push({ ...message, turnId })
+    }
+  }
+
   return messages
 }
 

@@ -1,37 +1,36 @@
-### Feature: Thread stream parity works on Linux (Oracle A1 ARM64)
+### Feature: Bounded thread history parity works on Linux (Oracle A1 ARM64)
 
-#### Prerequisites
+#### Prerequisites/Setup
 - Oracle A1 server accessible via SSH (`ssh a1`).
-- Codex CLI installed on A1 (`codex --version` works).
-- Existing Codex sessions with commands and file edits on A1.
+- A current Codex CLI with `historyMode`, `thread/turns/list`, and `thread/items/list` support installed on A1.
+- Existing legacy and paginated Codex sessions containing commands and file edits on A1.
+- The current checkout is available in `~/codexui`; Mac can reach its disposable server through Tailscale.
 
 #### Steps
-1. Clone or pull branch `codex/thread-stream-parity` on A1 into `~/codexui`.
-2. Run `pnpm install` and start dev server: `pnpm run dev --host 0.0.0.0 --port 4173`.
-3. From A1 locally, call `curl http://localhost:<port>/codex-api/rpc -X POST -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"thread/list","params":{},"id":1}'` and verify thread list returns.
-4. Pick a thread with known commands and file edits (e.g., MCP server deploy thread).
-5. Call `curl http://localhost:<port>/codex-api/thread-live-state?threadId=<id>` and inspect response.
-6. Verify `conversationState.turns[*].items` contains `commandExecution` items recovered from session log with correct `command`, `status`, and `aggregatedOutput`.
-7. Verify `fileChange` items recovered from `apply_patch` session log entries with `changes[].path`, `changes[].operation`, and `changes[].diff`.
-8. Verify items are interleaved chronologically with `agentMessage` items (not all commands at the start or end).
-9. Test from Mac via Tailscale: `curl --http1.1 http://100.127.77.25:<port>/codex-api/thread-live-state?threadId=<id>` (use `--http1.1` to avoid Vite HTTP/2 upgrade hang).
+1. Start the current checkout on A1 with `pnpm run dev --host 0.0.0.0 --port 4173` and retain the exact process id.
+2. Call `thread/list` locally, choose one thread of each `historyMode`, and record their ids.
+3. Call `thread/read` with `includeTurns: true` for the legacy thread and inspect its bounded turns/items.
+4. Call `thread/resume` for the paginated thread with `excludeTurns: true` and `initialTurnsPage: { "limit": 10, "sortDirection": "desc", "itemsView": "full" }`.
+5. Pass the returned opaque older cursor unchanged to `thread/turns/list`, then verify the descending page renders chronologically in the WebUI.
+6. Complete a disposable paginated turn and verify `thread/items/list` reconciles its command/file-change items by `turnId`.
+7. For both modes, verify `commandExecution` items have correct `command`, `status`, and bounded `aggregatedOutput`; verify `fileChange` items preserve `changes[].path`, `operation`, and `diff`.
+8. Verify commands and file changes remain interleaved chronologically with agent messages rather than being appended as a separate block.
+9. From Mac, open `http://<A1-Tailscale-IP>:4173/#/thread/<id>` for each mode and repeat initial-load plus one older-page check.
 
 #### Expected Results
-- Bridge server starts and spawns Codex app-server on Linux ARM64 without errors.
-- `thread/list` RPC returns all threads from `~/.codex/sessions/`.
-- `thread-live-state` returns full turn history with recovered `commandExecution` and `fileChange` items.
-- Session log parsing works with Linux file paths (`/home/ubuntu/.codex/sessions/...`).
-- Chronological interleaving matches the order seen on macOS (commands appear between agent messages, not appended).
-- Tailscale remote access works with `--http1.1` flag.
+- The bridge starts and spawns Codex app-server on Linux ARM64 without errors.
+- The legacy first paint uses one bounded `thread/read` and zero eager resume; older turns load on demand.
+- The paginated first paint uses one metadata-only resume with at most 10 embedded turns; older turns use native opaque cursors.
+- A completed paginated turn reconciles through `thread/items/list` without a whole-history read.
+- Session-log recovery and inline-payload sanitization work for both history envelopes with Linux paths such as `/home/ubuntu/.codex/sessions/...`.
+- Stable `turnId + item.id` identity prevents duplicates while preserving chronological command, file-change, agent-message, and child-agent rows.
+- Mac/Tailscale access displays the same bounded history and on-demand pagination behavior as local A1 access.
 
-#### Verified Results (2026-04-08)
-- A1 server: Ubuntu ARM64, Node v22.22.0, Codex CLI 0.101.0.
-- Thread `019d62d5-9fa7-7ad2-bab7-b5225d617734`: 21 turns, 120 commands, 17 file changes recovered.
-- Thread `019d6a60-d303-7d50-bdf3-7a7f7e38abb1`: 10 turns, 62 commands, 3 file changes recovered.
-- Thread `019d658d-ca06-7c80-8ef6-ee22c828b407`: 4 turns, 73 commands, 7 file changes recovered.
-- All items correctly interleaved with agent messages in chronological order.
-- Command content verified: `command`, `status`, `aggregatedOutput` fields present.
-- File change content verified: `changes[].path`, `changes[].operation`, `changes[].diff` fields present.
+#### Historical Baseline (2026-04-08)
+- Ubuntu ARM64 with Node v22.22.0 and Codex CLI 0.101.0 recovered commands/file changes from three legacy sessions.
+- Those source sessions contained 21/10/4 turns, 120/62/73 commands, and 17/3/7 file changes respectively.
+- These figures remain recovery-content evidence only; they are not an expectation that the current first-paint response returns every source turn.
 
 #### Rollback/Cleanup
-- Stop the dev server on A1: `pkill -f vite`.
+- Stop only the recorded disposable `4173` process started in step 1.
+- Remove disposable paginated turns and any temporary interception fixtures; do not stop unrelated Vite or formal console services.

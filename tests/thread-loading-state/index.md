@@ -1,6 +1,6 @@
 # Thread Loading, Streaming, and State
 
-Thread list/detail loading, pagination, selected-thread stability, streaming scroll behavior, live-state reads, and missing-thread handling.
+Thread list/detail loading, legacy and native paginated history, selected-thread stability, streaming scroll behavior, caching, and missing-thread handling.
 
 Return to the [manual test index](../../tests.md).
 
@@ -21,11 +21,11 @@ Return to the [manual test index](../../tests.md).
 | [Feature: Thread auto-scrolls to latest message after load](thread-auto-scrolls-to-latest-message-after-load.md) |
 | [Feature: Assistant streaming does not force-scroll when user is reading history](assistant-streaming-does-not-force-scroll-when-user-is-reading-history.md) |
 | [Feature: While reading older messages, stream growth keeps viewport pinned](while-reading-older-messages-stream-growth-keeps-viewport-pinned.md) |
-| [Feature: Thread stream parity — stream-first hydration with full turn history](thread-stream-parity-stream-first-hydration-with-full-turn-history.md) |
-| [Feature: Thread stream parity works on Linux (Oracle A1 ARM64)](thread-stream-parity-works-on-linux-oracle-a1-arm64.md) |
+| [Feature: Thread protocol parity with bounded legacy and paginated history](thread-stream-parity-stream-first-hydration-with-full-turn-history.md) |
+| [Feature: Bounded thread history parity works on Linux (Oracle A1 ARM64)](thread-stream-parity-works-on-linux-oracle-a1-arm64.md) |
 | [Feature: Real multi-agent progress UI](real-multi-agent-progress-ui.md) |
 | [Thread list startup pagination and direct older-thread links](thread-list-startup-pagination-and-direct-older-thread-links.md) |
-| [Thread detail load avoids duplicate live-state history fetch](thread-detail-load-avoids-duplicate-live-state-history-fetch.md) |
+| [Thread detail load avoids duplicate history fetch and eager resume](thread-detail-load-avoids-duplicate-live-state-history-fetch.md) |
 | [Thread message cache skips unchanged refetches](thread-message-cache-skips-unchanged-refetches.md) |
 | [Thread selection keeps sidebar list stable during refresh](thread-selection-keeps-sidebar-list-stable-during-refresh.md) |
 | [Sidebar thread row edge click selects thread](sidebar-thread-row-edge-click-selects-thread.md) |

@@ -15,9 +15,12 @@ import {
   getPendingServerRequests,
   getSkillsList,
   getThreadDetail,
+  getThreadSummary,
+  getThreadHistoryDetail,
+  getOlderThreadHistoryPage,
+  getThreadTurnItemsPage,
   getThreadRuntimeStates,
   getThreadModelPreferences,
-  getOlderThreadMessages,
   getBackgroundThreadListLimit,
   interruptThreadTurn,
   pickCodexRateLimitSnapshot,
@@ -75,6 +78,7 @@ import type {
   UiTokenUsageBreakdown,
   UiThread,
   UiTurnProgress,
+  ThreadHistoryMode,
 } from '../types/codex'
 import { getPathParent, isProjectlessChatPath, normalizePathForUi, toProjectName } from '../pathUtils.js'
 import {
@@ -99,6 +103,15 @@ export { removeThreadFromGroups } from './desktop/threadListLoader'
 
 function flattenThreads(groups: UiProjectGroup[]): UiThread[] {
   return groups.flatMap((group) => group.threads)
+}
+
+type ThreadHistoryState = {
+  mode: ThreadHistoryMode
+  initialized: boolean
+  materialized: boolean
+  olderCursor: string | null
+  hasMoreOlder: boolean
+  loadedTurnIds: string[]
 }
 
 export function findAdjacentThreadId(threads: UiThread[], threadId: string): string {
@@ -126,6 +139,8 @@ const EVENT_SYNC_RETRY_DELAY_MS = 1_000
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 500
 const TURN_START_FOLLOW_UP_SYNC_DELAY_MS = 3000
 const RECENT_THREAD_MESSAGE_LOAD_REUSE_MS = 2000
+const MAX_CACHED_THREAD_HISTORIES = 20
+const MAX_RECENT_PAGINATED_RECONCILIATIONS = 100
 const RECENT_AGENT_PROGRESS_LOAD_REUSE_MS = 30_000
 const AGENT_PROGRESS_RETRY_BASE_DELAY_MS = 5_000
 const AGENT_PROGRESS_RETRY_MAX_DELAY_MS = 60_000
@@ -776,16 +791,27 @@ function areMessageArraysEqual(first: UiMessage[], second: UiMessage[]): boolean
   return true
 }
 
+function messageIdentityKey(message: UiMessage): string {
+  const turnId = message.turnId?.trim() ?? ''
+  return turnId ? `${turnId}\u0000${message.id}` : message.id
+}
+
+function messageTextIdentityKey(message: UiMessage): string {
+  const normalizedText = normalizeMessageText(message.text)
+  const turnId = message.turnId?.trim() ?? ''
+  return turnId ? `${turnId}\u0000${normalizedText}` : normalizedText
+}
+
 function mergeMessages(
   previous: UiMessage[],
   incoming: UiMessage[],
   options: { preserveMissing?: boolean } = {},
 ): UiMessage[] {
-  const previousById = new Map(previous.map((message) => [message.id, message]))
-  const incomingById = new Map(incoming.map((message) => [message.id, message]))
+  const previousById = new Map(previous.map((message) => [messageIdentityKey(message), message]))
+  const incomingById = new Map(incoming.map((message) => [messageIdentityKey(message), message]))
 
   const mergedIncoming = incoming.map((incomingMessage) => {
-    const previousMessage = previousById.get(incomingMessage.id)
+    const previousMessage = previousById.get(messageIdentityKey(incomingMessage))
     if (previousMessage && areMessageFieldsEqual(previousMessage, incomingMessage)) {
       return previousMessage
     }
@@ -798,7 +824,7 @@ function mergeMessages(
 
   const mergedFromPrevious = previous
     .map((previousMessage) => {
-      const nextMessage = incomingById.get(previousMessage.id)
+      const nextMessage = incomingById.get(messageIdentityKey(previousMessage))
       if (!nextMessage) {
         return previousMessage
       }
@@ -809,8 +835,8 @@ function mergeMessages(
     })
     .filter((message) => !isOptimisticUserMessage(message) || !hasEquivalentUserMessage(message, incoming))
 
-  const previousIdSet = new Set(previous.map((message) => message.id))
-  const appended = mergedIncoming.filter((message) => !previousIdSet.has(message.id))
+  const previousIdSet = new Set(previous.map(messageIdentityKey))
+  const appended = mergedIncoming.filter((message) => !previousIdSet.has(messageIdentityKey(message)))
   const merged = [...mergedFromPrevious, ...appended]
 
   return areMessageArraysEqual(previous, merged) ? previous : merged
@@ -845,6 +871,10 @@ function isOptimisticUserMessage(message: UiMessage): boolean {
   return message.messageType === 'userMessage.optimistic'
 }
 
+function isNonItemTurnMetadataMessage(message: UiMessage): boolean {
+  return message.messageType?.startsWith('turn') === true
+}
+
 function hasOptimisticUserMessages(messages: UiMessage[]): boolean {
   return messages.some(isOptimisticUserMessage)
 }
@@ -872,12 +902,12 @@ function hasEquivalentUserMessage(target: UiMessage, messages: UiMessage[]): boo
 }
 
 function removeRedundantLiveAgentMessages(previous: UiMessage[], incoming: UiMessage[]): UiMessage[] {
-  const incomingMessageIds = new Set(incoming.map((message) => message.id))
+  const incomingMessageIds = new Set(incoming.map(messageIdentityKey))
   const incomingAssistantTexts = new Set(
     incoming
       .filter((message) => message.role === 'assistant')
-      .map((message) => normalizeMessageText(message.text))
-      .filter((text) => text.length > 0),
+      .filter((message) => normalizeMessageText(message.text).length > 0)
+      .map(messageTextIdentityKey),
   )
 
   if (incomingAssistantTexts.size === 0) {
@@ -886,23 +916,24 @@ function removeRedundantLiveAgentMessages(previous: UiMessage[], incoming: UiMes
 
   const next = previous.filter((message) => {
     if (message.messageType !== 'agentMessage.live') return true
-    if (incomingMessageIds.has(message.id)) return false
+    if (incomingMessageIds.has(messageIdentityKey(message))) return false
     const normalized = normalizeMessageText(message.text)
     if (normalized.length === 0) return false
-    return !incomingAssistantTexts.has(normalized)
+    return !incomingAssistantTexts.has(messageTextIdentityKey(message))
   })
 
   return next.length === previous.length ? previous : next
 }
 
 function removePersistedLiveMessages(previous: UiMessage[], incoming: UiMessage[]): UiMessage[] {
-  const incomingIds = new Set(incoming.map((message) => message.id))
-  const next = previous.filter((message) => !incomingIds.has(message.id))
+  const incomingIds = new Set(incoming.map(messageIdentityKey))
+  const next = previous.filter((message) => !incomingIds.has(messageIdentityKey(message)))
   return next.length === previous.length ? previous : next
 }
 
 function upsertMessage(previous: UiMessage[], nextMessage: UiMessage): UiMessage[] {
-  const existingIndex = previous.findIndex((message) => message.id === nextMessage.id)
+  const nextIdentity = messageIdentityKey(nextMessage)
+  const existingIndex = previous.findIndex((message) => messageIdentityKey(message) === nextIdentity)
   if (existingIndex < 0) {
     return [...previous, nextMessage]
   }
@@ -1057,6 +1088,7 @@ function areThreadFieldsEqual(first: UiThread, second: UiThread): boolean {
     first.preview === second.preview &&
     first.unread === second.unread &&
     first.inProgress === second.inProgress &&
+    first.historyMode === second.historyMode &&
     first.pendingRequestState === second.pendingRequestState
   )
 }
@@ -1575,6 +1607,7 @@ export function useDesktopState() {
   const projectDisplayNameById = ref<Record<string, string>>(loadProjectDisplayNames())
   const loadedVersionByThreadId = ref<Record<string, string>>({})
   const loadedMessagesByThreadId = ref<Record<string, boolean>>({})
+  const threadHistoryStateById = ref<Record<string, ThreadHistoryState>>({})
 
   const fastModeSupportByModelId = ref<Record<string, boolean>>({})
 
@@ -1682,6 +1715,17 @@ export function useDesktopState() {
   let rateLimitRefreshTimer: number | null = null
   const delayedTurnSyncTimerByThreadId = new Map<string, number>()
   const loadMessagePromiseByThreadId = new Map<string, Promise<void>>()
+  const forcedMessageLoadPromiseByThreadId = new Map<string, Promise<void>>()
+  const threadHistoryModeProbeByThreadId = new Map<string, Promise<ThreadHistoryMode>>()
+  const paginatedTurnReconcileByKey = new Map<string, {
+    promise: Promise<boolean>
+    createdAt: number
+    settled: boolean
+  }>()
+  const threadHistoryAccessOrderByThreadId = new Map<string, number>()
+  let threadHistoryAccessSequence = 0
+  let visibleMessageLoadOwnerThreadId = ''
+  let messageLoadGeneration = 0
   let refreshSkillsPromise: Promise<void> | null = null
   const modelCatalogPromiseByKey = new Map<string, Promise<UiModelCapability[]>>()
   let hasLoadedSkills = false
@@ -1694,6 +1738,7 @@ export function useDesktopState() {
   let pendingThreadsRefresh = false
   let pendingThreadsRefreshForce = false
   const pendingThreadMessageRefresh = new Set<string>()
+  const pendingCompletedTurnReconciliationByThreadId = new Map<string, Set<string>>()
   const lastMessageLoadAtByThreadId = new Map<string, number>()
   const lastMessageLoadFailureAtByThreadId = new Map<string, number>()
   let hasHydratedWorkspaceRootsState = false
@@ -2165,6 +2210,16 @@ export function useDesktopState() {
     if (fallbackRetryInFlightThreadIds.has(threadId)) return
     const pending = pendingTurnRequestByThreadId.value[threadId]
     if (!pending || pending.fallbackRetried) return
+
+    if (readThreadHistoryMode(threadId) === 'paginated') {
+      const message = 'Automatic model fallback cannot replay a paginated thread because Codex does not support rollback for this history mode.'
+      setTurnErrorForThread(threadId, message)
+      error.value = message
+      setThreadInProgress(threadId, false)
+      setTurnActivityForThread(threadId, null)
+      clearPendingTurnRequest(threadId)
+      return
+    }
 
     fallbackRetryInFlightThreadIds.add(threadId)
     setPendingTurnRequest(threadId, {
@@ -2682,6 +2737,7 @@ export function useDesktopState() {
       preview: firstMessageText,
       unread: false,
       inProgress: false,
+      historyMode: 'legacy',
     }
 
     const existingGroupIndex = sourceGroups.value.findIndex((group) => group.projectName === projectName)
@@ -2728,6 +2784,14 @@ export function useDesktopState() {
     for (const threadId of optimisticTurnStartedAtByThreadId.keys()) {
       if (!activeThreadIds.has(threadId)) optimisticTurnStartedAtByThreadId.delete(threadId)
     }
+    for (const key of paginatedTurnReconcileByKey.keys()) {
+      const separatorIndex = key.indexOf('\u0000')
+      const threadId = separatorIndex >= 0 ? key.slice(0, separatorIndex) : key
+      if (!activeThreadIds.has(threadId)) paginatedTurnReconcileByKey.delete(key)
+    }
+    for (const threadId of threadHistoryAccessOrderByThreadId.keys()) {
+      if (!activeThreadIds.has(threadId)) threadHistoryAccessOrderByThreadId.delete(threadId)
+    }
     const nextSelectedModelMap = pruneThreadContextStateMap(selectedModelIdByContext.value, activeThreadIds)
     if (nextSelectedModelMap !== selectedModelIdByContext.value) {
       selectedModelIdByContext.value = nextSelectedModelMap
@@ -2753,6 +2817,9 @@ export function useDesktopState() {
     }
     loadedMessagesByThreadId.value = pruneThreadStateMap(loadedMessagesByThreadId.value, activeThreadIds)
     loadedVersionByThreadId.value = pruneThreadStateMap(loadedVersionByThreadId.value, activeThreadIds)
+    threadHistoryStateById.value = pruneThreadStateMap(threadHistoryStateById.value, activeThreadIds)
+    hasMoreOlderMessagesByThreadId.value = pruneThreadStateMap(hasMoreOlderMessagesByThreadId.value, activeThreadIds)
+    loadingOlderMessagesByThreadId.value = pruneThreadStateMap(loadingOlderMessagesByThreadId.value, activeThreadIds)
     resumedThreadById.value = pruneThreadStateMap(resumedThreadById.value, activeThreadIds)
     turnIndexByTurnIdByThreadId.value = pruneThreadStateMap(turnIndexByTurnIdByThreadId.value, activeThreadIds)
     persistedMessagesByThreadId.value = pruneThreadStateMap(persistedMessagesByThreadId.value, activeThreadIds)
@@ -3011,6 +3078,181 @@ export function useDesktopState() {
   function currentThreadVersion(threadId: string): string {
     const thread = flattenThreads(sourceGroups.value).find((row) => row.id === threadId)
     return thread?.updatedAtIso ?? ''
+  }
+
+  function listedThreadHistoryMode(threadId: string): ThreadHistoryMode | null {
+    const thread = flattenThreads(sourceGroups.value).find((row) => row.id === threadId)
+    if (!thread) return null
+    return thread.historyMode === 'paginated' ? 'paginated' : 'legacy'
+  }
+
+  function knownThreadHistoryMode(threadId: string): ThreadHistoryMode | null {
+    return listedThreadHistoryMode(threadId) ?? threadHistoryStateById.value[threadId]?.mode ?? null
+  }
+
+  function readThreadHistoryMode(threadId: string): ThreadHistoryMode {
+    return knownThreadHistoryMode(threadId) ?? 'legacy'
+  }
+
+  function mergeTurnIds(first: string[], second: string[]): string[] {
+    const seen = new Set<string>()
+    const merged: string[] = []
+    for (const turnId of [...first, ...second]) {
+      const normalized = turnId.trim()
+      if (!normalized || seen.has(normalized)) continue
+      seen.add(normalized)
+      merged.push(normalized)
+    }
+    return merged
+  }
+
+  function invalidateThreadHistoryCache(threadId: string, mode: ThreadHistoryMode): void {
+    const cached = threadHistoryStateById.value[threadId]
+    if (!cached || cached.mode === mode) return
+    threadHistoryStateById.value = omitKey(threadHistoryStateById.value, threadId)
+    loadedMessagesByThreadId.value = omitKey(loadedMessagesByThreadId.value, threadId)
+    loadedVersionByThreadId.value = omitKey(loadedVersionByThreadId.value, threadId)
+    hasMoreOlderMessagesByThreadId.value = omitKey(hasMoreOlderMessagesByThreadId.value, threadId)
+    loadingOlderMessagesByThreadId.value = omitKey(loadingOlderMessagesByThreadId.value, threadId)
+    resumedThreadById.value = omitKey(resumedThreadById.value, threadId)
+    turnIndexByTurnIdByThreadId.value = omitKey(turnIndexByTurnIdByThreadId.value, threadId)
+    persistedMessagesByThreadId.value = omitKey(persistedMessagesByThreadId.value, threadId)
+    lastMessageLoadAtByThreadId.delete(threadId)
+    lastMessageLoadFailureAtByThreadId.delete(threadId)
+    threadHistoryAccessOrderByThreadId.delete(threadId)
+    const reconciliationPrefix = `${threadId}\u0000`
+    for (const key of paginatedTurnReconcileByKey.keys()) {
+      if (key.startsWith(reconciliationPrefix)) paginatedTurnReconcileByKey.delete(key)
+    }
+  }
+
+  function hasPaginatedTurnReconciliation(threadId: string): boolean {
+    const prefix = `${threadId}\u0000`
+    for (const key of paginatedTurnReconcileByKey.keys()) {
+      if (key.startsWith(prefix)) return true
+    }
+    return false
+  }
+
+  function evictThreadHistoryCache(threadId: string): void {
+    threadHistoryStateById.value = omitKey(threadHistoryStateById.value, threadId)
+    persistedMessagesByThreadId.value = omitKey(persistedMessagesByThreadId.value, threadId)
+    loadedMessagesByThreadId.value = omitKey(loadedMessagesByThreadId.value, threadId)
+    loadedVersionByThreadId.value = omitKey(loadedVersionByThreadId.value, threadId)
+    hasMoreOlderMessagesByThreadId.value = omitKey(hasMoreOlderMessagesByThreadId.value, threadId)
+    loadingOlderMessagesByThreadId.value = omitKey(loadingOlderMessagesByThreadId.value, threadId)
+    resumedThreadById.value = omitKey(resumedThreadById.value, threadId)
+    turnIndexByTurnIdByThreadId.value = omitKey(turnIndexByTurnIdByThreadId.value, threadId)
+    lastMessageLoadAtByThreadId.delete(threadId)
+    lastMessageLoadFailureAtByThreadId.delete(threadId)
+    loadMessagePromiseByThreadId.delete(threadId)
+    forcedMessageLoadPromiseByThreadId.delete(threadId)
+    threadHistoryModeProbeByThreadId.delete(threadId)
+    const reconciliationPrefix = `${threadId}\u0000`
+    for (const key of paginatedTurnReconcileByKey.keys()) {
+      if (key.startsWith(reconciliationPrefix)) paginatedTurnReconcileByKey.delete(key)
+    }
+    threadHistoryAccessOrderByThreadId.delete(threadId)
+  }
+
+  function enforceThreadHistoryCacheLimit(): void {
+    const cachedThreadIds = new Set([
+      ...Object.keys(threadHistoryStateById.value),
+      ...Object.keys(persistedMessagesByThreadId.value),
+      ...Object.keys(loadedMessagesByThreadId.value),
+    ])
+    if (cachedThreadIds.size <= MAX_CACHED_THREAD_HISTORIES) return
+
+    const protectedThreadIds = new Set<string>()
+    if (selectedThreadId.value) protectedThreadIds.add(selectedThreadId.value)
+    for (const [threadId, isRunning] of Object.entries(inProgressById.value)) {
+      if (isRunning) protectedThreadIds.add(threadId)
+    }
+    for (const threadId of cachedThreadIds) {
+      if (
+        loadMessagePromiseByThreadId.has(threadId)
+        || threadHistoryModeProbeByThreadId.has(threadId)
+        || hasPaginatedTurnReconciliation(threadId)
+      ) {
+        protectedThreadIds.add(threadId)
+      }
+    }
+
+    const evictionCandidates = [...cachedThreadIds]
+      .filter((threadId) => !protectedThreadIds.has(threadId))
+      .sort((first, second) => (
+        (threadHistoryAccessOrderByThreadId.get(first) ?? 0)
+        - (threadHistoryAccessOrderByThreadId.get(second) ?? 0)
+      ))
+    let remainingCount = cachedThreadIds.size
+    for (const threadId of evictionCandidates) {
+      if (remainingCount <= MAX_CACHED_THREAD_HISTORIES) break
+      evictThreadHistoryCache(threadId)
+      remainingCount -= 1
+    }
+  }
+
+  function touchThreadHistoryCache(threadId: string): void {
+    threadHistoryAccessSequence += 1
+    threadHistoryAccessOrderByThreadId.set(threadId, threadHistoryAccessSequence)
+    enforceThreadHistoryCacheLimit()
+  }
+
+  function pruneRecentPaginatedTurnReconciliations(now = Date.now()): void {
+    for (const [key, entry] of paginatedTurnReconcileByKey) {
+      if (entry.settled && now - entry.createdAt >= RECENT_THREAD_MESSAGE_LOAD_REUSE_MS) {
+        paginatedTurnReconcileByKey.delete(key)
+      }
+    }
+    if (paginatedTurnReconcileByKey.size < MAX_RECENT_PAGINATED_RECONCILIATIONS) return
+    const settledEntries = [...paginatedTurnReconcileByKey.entries()]
+      .filter(([, entry]) => entry.settled)
+      .sort(([, first], [, second]) => first.createdAt - second.createdAt)
+    for (const [key] of settledEntries) {
+      if (paginatedTurnReconcileByKey.size < MAX_RECENT_PAGINATED_RECONCILIATIONS) break
+      paginatedTurnReconcileByKey.delete(key)
+    }
+  }
+
+  function rememberThreadHistoryMode(threadId: string, mode: ThreadHistoryMode): void {
+    const cached = threadHistoryStateById.value[threadId]
+    if (cached?.mode === mode) return
+    if (cached) invalidateThreadHistoryCache(threadId, mode)
+    threadHistoryStateById.value = {
+      ...threadHistoryStateById.value,
+      [threadId]: {
+        mode,
+        initialized: false,
+        materialized: false,
+        olderCursor: null,
+        hasMoreOlder: false,
+        loadedTurnIds: [],
+      },
+    }
+    touchThreadHistoryCache(threadId)
+  }
+
+  function resolveThreadHistoryMode(threadId: string): Promise<ThreadHistoryMode> {
+    const knownMode = knownThreadHistoryMode(threadId)
+    if (knownMode) return Promise.resolve(knownMode)
+
+    const existing = threadHistoryModeProbeByThreadId.get(threadId)
+    if (existing) return existing
+
+    const probeGeneration = messageLoadGeneration
+    const promise = getThreadSummary(threadId).then((summary) => {
+      const listedMode = listedThreadHistoryMode(threadId)
+      const mode = listedMode ?? (summary?.historyMode === 'paginated' ? 'paginated' : 'legacy')
+      if (probeGeneration === messageLoadGeneration) rememberThreadHistoryMode(threadId, mode)
+      return mode
+    })
+    threadHistoryModeProbeByThreadId.set(threadId, promise)
+    void promise.finally(() => {
+      if (threadHistoryModeProbeByThreadId.get(threadId) === promise) {
+        threadHistoryModeProbeByThreadId.delete(threadId)
+      }
+    }).catch(() => undefined)
+    return promise
   }
 
   function setThreadTerminalOpen(threadId: string, isOpen: boolean): void {
@@ -3272,21 +3514,25 @@ export function useDesktopState() {
     agentTextMaxBytes: LIVE_AGENT_TEXT_MAX_BYTES,
     commandOutputMaxBytes: LIVE_COMMAND_OUTPUT_MAX_BYTES,
     reasoningTextMaxBytes: LIVE_REASONING_TEXT_MAX_BYTES,
-    getAgentText: (threadId, itemId) => (
-      (liveAgentMessagesByThreadId.value[threadId] ?? [])
-        .find((message) => message.id === itemId)?.text ?? ''
-    ),
+    getAgentText: (threadId, itemId) => {
+      const turnId = activeTurnIdByThreadId.value[threadId] ?? ''
+      return (liveAgentMessagesByThreadId.value[threadId] ?? [])
+        .find((message) => message.id === itemId && (!turnId || message.turnId === turnId))?.text ?? ''
+    },
     setAgentText: (threadId, itemId, text) => {
+      const turnId = activeTurnIdByThreadId.value[threadId] ?? ''
       upsertLiveAgentMessage(threadId, {
         id: itemId,
         role: 'assistant',
         text,
         messageType: 'agentMessage.live',
+        turnId: turnId || undefined,
       })
     },
     updateCommandOutput: (threadId, itemId, update) => {
+      const turnId = activeTurnIdByThreadId.value[threadId] ?? ''
       const current = (liveCommandsByThreadId.value[threadId] ?? [])
-        .find((message) => message.id === itemId)
+        .find((message) => message.id === itemId && (!turnId || message.turnId === turnId))
       if (!current?.commandExecution) return
       upsertLiveCommand(threadId, {
         ...current,
@@ -4527,8 +4773,8 @@ export function useDesktopState() {
   function removeLiveCommandsPersistedIn(threadId: string, persistedMessages: UiMessage[]): void {
     const current = liveCommandsByThreadId.value[threadId]
     if (!current || current.length === 0) return
-    const persistedIds = new Set(persistedMessages.map((m) => m.id))
-    const next = current.filter((m) => !persistedIds.has(m.id))
+    const persistedIds = new Set(persistedMessages.map(messageIdentityKey))
+    const next = current.filter((message) => !persistedIds.has(messageIdentityKey(message)))
     if (next.length === current.length) return
     if (next.length === 0) {
       liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
@@ -4540,7 +4786,7 @@ export function useDesktopState() {
   function removeLiveFileChangesPersistedIn(threadId: string, persistedMessages: UiMessage[]): void {
     const current = liveFileChangeMessagesByThreadId.value[threadId]
     if (!current || current.length === 0) return
-    const persistedIds = new Set(persistedMessages.map((message) => message.id))
+    const persistedIds = new Set(persistedMessages.map(messageIdentityKey))
     const persistedTurnIds = new Set(
       persistedMessages
         .filter((message) => message.messageType === 'fileChange' && typeof message.turnId === 'string' && message.turnId.length > 0)
@@ -4552,7 +4798,7 @@ export function useDesktopState() {
         .map((message) => message.turnIndex as number),
     )
     const next = current.filter((message) => (
-      !persistedIds.has(message.id)
+      !persistedIds.has(messageIdentityKey(message))
       && !(message.turnId && persistedTurnIds.has(message.turnId))
       && !(typeof message.turnIndex === 'number' && persistedTurnIndices.has(message.turnIndex))
     ))
@@ -4620,6 +4866,15 @@ export function useDesktopState() {
     }
 
     const notificationThreadId = extractThreadIdFromNotification(notification)
+    const notificationParams = asRecord(notification.params)
+    const notificationTurnId =
+      readString(notificationParams?.turnId)
+      || readString(notificationParams?.turn_id)
+      || readString(asRecord(notificationParams?.turn)?.id)
+      || (notificationThreadId ? activeTurnIdByThreadId.value[notificationThreadId] ?? '' : '')
+    const bindNotificationTurn = (message: UiMessage): UiMessage => (
+      notificationTurnId && !message.turnId ? { ...message, turnId: notificationTurnId } : message
+    )
     const notificationErrorState = readNotificationErrorState(notification)
     if (!notificationErrorState && notificationThreadId) {
       clearTransientTurnErrorForThread(notificationThreadId)
@@ -4635,7 +4890,9 @@ export function useDesktopState() {
       latestRuntimeStateByThreadId.delete(startedTurn.threadId)
       optimisticTurnStartedAtByThreadId.delete(startedTurn.threadId)
       pendingTurnStartsById.set(startedTurn.turnId, startedTurn)
-      setTurnIndexForThread(startedTurn.threadId, startedTurn.turnId, inferNextTurnIndex(startedTurn.threadId))
+      if (readThreadHistoryMode(startedTurn.threadId) === 'legacy') {
+        setTurnIndexForThread(startedTurn.threadId, startedTurn.turnId, inferNextTurnIndex(startedTurn.threadId))
+      }
       activeTurnIdByThreadId.value = {
         ...activeTurnIdByThreadId.value,
         [startedTurn.threadId]: startedTurn.turnId,
@@ -4784,16 +5041,17 @@ export function useDesktopState() {
 
     const planUpdate = readPlanUpdate(notification)
     if (planUpdate) {
-      upsertLivePlanMessage(planUpdate.threadId, planUpdate.message)
+      const planMessage = bindNotificationTurn(planUpdate.message)
+      upsertLivePlanMessage(planUpdate.threadId, planMessage)
       setTurnActivityForThread(planUpdate.threadId, {
         label: 'Planning',
-        details: planUpdate.message.plan?.steps.map((step) => step.step).slice(0, 2) ?? [],
+        details: planMessage.plan?.steps.map((step) => step.step).slice(0, 2) ?? [],
       })
     }
 
     const planDelta = readPlanDelta(notification)
     if (planDelta) {
-      upsertLivePlanMessage(planDelta.threadId, planDelta.message)
+      upsertLivePlanMessage(planDelta.threadId, bindNotificationTurn(planDelta.message))
       setTurnActivityForThread(planDelta.threadId, {
         label: 'Planning',
         details: [],
@@ -4819,12 +5077,12 @@ export function useDesktopState() {
     const completedAgentMessage = readAgentMessageCompleted(notification)
     if (completedAgentMessage) {
       liveDeltaBuffer.flush(notificationThreadId, completedAgentMessage.id)
-      upsertLiveAgentMessage(notificationThreadId, completedAgentMessage)
+      upsertLiveAgentMessage(notificationThreadId, bindNotificationTurn(completedAgentMessage))
     }
 
     const completedImageView = readCompletedImageView(notification)
     if (completedImageView) {
-      upsertLiveAgentMessage(notificationThreadId, completedImageView)
+      upsertLiveAgentMessage(notificationThreadId, bindNotificationTurn(completedImageView))
 
     }
 
@@ -4856,7 +5114,7 @@ export function useDesktopState() {
 
     const commandStarted = readCommandExecutionStarted(notification)
     if (commandStarted) {
-      upsertLiveCommand(notificationThreadId, commandStarted)
+      upsertLiveCommand(notificationThreadId, bindNotificationTurn(commandStarted))
       setTurnActivityForThread(notificationThreadId, { label: 'Running command', details: [commandStarted.commandExecution?.command ?? ''] })
     }
 
@@ -4872,12 +5130,12 @@ export function useDesktopState() {
     const commandCompleted = readCommandExecutionCompleted(notification)
     if (commandCompleted) {
       liveDeltaBuffer.flush(notificationThreadId, commandCompleted.id)
-      upsertLiveCommand(notificationThreadId, commandCompleted)
+      upsertLiveCommand(notificationThreadId, bindNotificationTurn(commandCompleted))
     }
 
     const completedFileChange = readCompletedFileChange(notification)
     if (completedFileChange) {
-      upsertLiveFileChangeMessage(notificationThreadId, completedFileChange)
+      upsertLiveFileChangeMessage(notificationThreadId, bindNotificationTurn(completedFileChange))
     }
 
     if (isAgentContentEvent(notification)) {
@@ -4925,7 +5183,14 @@ export function useDesktopState() {
 
     const threadId = extractThreadIdFromNotification(notification)
     if (threadId && shouldRefreshMessages) {
-      pendingThreadMessageRefresh.add(threadId)
+      const completedTurn = method === 'turn/completed' ? readTurnCompletedInfo(notification) : null
+      if (completedTurn && readThreadHistoryMode(threadId) === 'paginated') {
+        const pending = pendingCompletedTurnReconciliationByThreadId.get(threadId) ?? new Set<string>()
+        pending.add(completedTurn.turnId)
+        pendingCompletedTurnReconciliationByThreadId.set(threadId, pending)
+      } else {
+        pendingThreadMessageRefresh.add(threadId)
+      }
     }
 
     if (shouldRefreshThreads) {
@@ -5209,18 +5474,30 @@ export function useDesktopState() {
 
     const existingLoad = loadMessagePromiseByThreadId.get(threadId)
     if (existingLoad) {
+      const existingLoadIsForced = forcedMessageLoadPromiseByThreadId.get(threadId) === existingLoad
       await existingLoad
-      if (!options.force) return
+      if (!options.force || existingLoadIsForced) return
+      const newerLoad = loadMessagePromiseByThreadId.get(threadId)
+      if (newerLoad) {
+        await newerLoad
+        return
+      }
     }
 
-    const alreadyLoaded = loadedMessagesByThreadId.value[threadId] === true
-    const shouldShowLoading = options.silent !== true && !alreadyLoaded
+    const hadLoadedMessages = loadedMessagesByThreadId.value[threadId] === true
+    const shouldShowLoading = options.silent !== true && !hadLoadedMessages
     if (shouldShowLoading) {
+      visibleMessageLoadOwnerThreadId = threadId
       isLoadingMessages.value = true
     }
 
+    const loadGeneration = messageLoadGeneration
     const loadPromise = (async () => {
       try {
+      const historyMode = await resolveThreadHistoryMode(threadId)
+      if (loadGeneration !== messageLoadGeneration) return
+      invalidateThreadHistoryCache(threadId, historyMode)
+      const alreadyLoaded = loadedMessagesByThreadId.value[threadId] === true
       const version = currentThreadVersion(threadId)
       const loadedVersion = loadedVersionByThreadId.value[threadId] ?? ''
       const loadedRecently =
@@ -5237,17 +5514,54 @@ export function useDesktopState() {
         )
 
       if (canReuseLoadedMessages) {
+        touchThreadHistoryCache(threadId)
         markThreadAsRead(threadId)
         return
       }
 
-      const detail = await getThreadDetail(threadId)
+      const currentHistoryState = threadHistoryStateById.value[threadId]
+      const detail = historyMode === 'paginated' && currentHistoryState?.initialized === true
+        ? {
+            ...(await getOlderThreadHistoryPage(threadId, {
+              historyMode: 'paginated',
+              cursor: null,
+            })),
+            model: '',
+            modelProvider: '',
+            resumed: false,
+            materialized: currentHistoryState.materialized,
+          }
+        : await getThreadHistoryDetail(threadId, historyMode)
+
+      if (loadGeneration !== messageLoadGeneration) return
 
       if (detail.modelProvider) {
         setThreadModelProviderId(threadId, detail.modelProvider)
       }
       if (detail.model && !readThreadModelPreference(threadId) && !hasCachedThreadModelSelection(threadId)) {
         setThreadModelId(threadId, detail.model.trim())
+      }
+      const previousHistoryState = threadHistoryStateById.value[threadId]
+      const loadedTurnIds = mergeTurnIds(
+        previousHistoryState?.mode === detail.historyMode ? previousHistoryState.loadedTurnIds : [],
+        detail.turnIds,
+      )
+      threadHistoryStateById.value = {
+        ...threadHistoryStateById.value,
+        [threadId]: {
+          mode: detail.historyMode,
+          initialized: true,
+          materialized: detail.materialized || previousHistoryState?.materialized === true,
+          olderCursor: detail.olderCursor,
+          hasMoreOlder: detail.hasMoreOlder,
+          loadedTurnIds,
+        },
+      }
+      if (detail.materialized) {
+        resumedThreadById.value = {
+          ...resumedThreadById.value,
+          [threadId]: true,
+        }
       }
       const { messages: nextMessages, inProgress, activeTurnId, turnIndexByTurnId } = detail
       const knownRuntimeState = latestRuntimeStateByThreadId.get(threadId)
@@ -5270,7 +5584,10 @@ export function useDesktopState() {
       rebindLiveFileChangeTurnIndices(threadId)
       const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
       const mergedMessages = mergeMessages(previousPersisted, nextMessages, {
-        preserveMissing: options.silent === true || hasOptimisticUserMessages(previousPersisted),
+        preserveMissing:
+          detail.historyMode === 'paginated'
+          || options.silent === true
+          || hasOptimisticUserMessages(previousPersisted),
       })
       setPersistedMessagesForThread(threadId, mergedMessages)
 
@@ -5297,6 +5614,7 @@ export function useDesktopState() {
           [threadId]: version,
         }
       }
+      touchThreadHistoryCache(threadId)
       setThreadInProgress(threadId, resolvedInProgress)
       clearTransientTurnErrorForThread(threadId)
       if (resolvedActiveTurnId) {
@@ -5315,6 +5633,7 @@ export function useDesktopState() {
         void loadAgentProgressSnapshot(threadId)
       }
       } catch (unknownError) {
+        if (loadGeneration !== messageLoadGeneration) return
         const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
         if (selectedThreadId.value === threadId) {
           setTurnErrorForThread(threadId, message, { transient: true })
@@ -5322,15 +5641,25 @@ export function useDesktopState() {
         lastMessageLoadFailureAtByThreadId.set(threadId, Date.now())
         throw unknownError
       } finally {
-      if (shouldShowLoading) {
+      if (shouldShowLoading && visibleMessageLoadOwnerThreadId === threadId) {
+        visibleMessageLoadOwnerThreadId = ''
         isLoadingMessages.value = false
       }
       }
     })().finally(() => {
-      loadMessagePromiseByThreadId.delete(threadId)
+      if (loadMessagePromiseByThreadId.get(threadId) === loadPromise) {
+        loadMessagePromiseByThreadId.delete(threadId)
+      }
+      if (forcedMessageLoadPromiseByThreadId.get(threadId) === loadPromise) {
+        forcedMessageLoadPromiseByThreadId.delete(threadId)
+      }
+      enforceThreadHistoryCacheLimit()
     })
 
     loadMessagePromiseByThreadId.set(threadId, loadPromise)
+    if (options.force === true) {
+      forcedMessageLoadPromiseByThreadId.set(threadId, loadPromise)
+    }
     await loadPromise
   }
 
@@ -5339,8 +5668,11 @@ export function useDesktopState() {
     if (loadingOlderMessagesByThreadId.value[threadId] === true) return
     if (hasMoreOlderMessagesByThreadId.value[threadId] !== true) return
 
-    const beforeTurnId = getFirstPersistedTurnId(threadId)
-    if (!beforeTurnId) {
+    const historyMode = readThreadHistoryMode(threadId)
+    const historyState = threadHistoryStateById.value[threadId]
+    const beforeTurnId = historyMode === 'legacy' ? getFirstPersistedTurnId(threadId) : ''
+    const cursor = historyMode === 'paginated' ? historyState?.olderCursor ?? null : null
+    if ((historyMode === 'legacy' && !beforeTurnId) || (historyMode === 'paginated' && !cursor)) {
       hasMoreOlderMessagesByThreadId.value = {
         ...hasMoreOlderMessagesByThreadId.value,
         [threadId]: false,
@@ -5353,8 +5685,14 @@ export function useDesktopState() {
       [threadId]: true,
     }
 
+    const loadGeneration = messageLoadGeneration
     try {
-      const page = await getOlderThreadMessages(threadId, beforeTurnId)
+      const page = await getOlderThreadHistoryPage(threadId, {
+        historyMode,
+        cursor,
+        beforeTurnId,
+      })
+      if (loadGeneration !== messageLoadGeneration || readThreadHistoryMode(threadId) !== page.historyMode) return
       const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
       const mergedMessages = mergeMessages(page.messages, previousPersisted, { preserveMissing: true })
       setPersistedMessagesForThread(threadId, mergedMessages)
@@ -5367,15 +5705,156 @@ export function useDesktopState() {
         ...hasMoreOlderMessagesByThreadId.value,
         [threadId]: page.hasMoreOlder,
       }
+      const previousHistoryState = threadHistoryStateById.value[threadId]
+      threadHistoryStateById.value = {
+        ...threadHistoryStateById.value,
+        [threadId]: {
+          mode: page.historyMode,
+          initialized: true,
+          materialized: previousHistoryState?.materialized === true,
+          olderCursor: page.olderCursor,
+          hasMoreOlder: page.hasMoreOlder,
+          loadedTurnIds: mergeTurnIds(page.turnIds, previousHistoryState?.loadedTurnIds ?? []),
+        },
+      }
+      touchThreadHistoryCache(threadId)
     } catch (loadError) {
+      if (loadGeneration !== messageLoadGeneration) return
       error.value = loadError instanceof Error ? loadError.message : 'Failed to load earlier messages'
       throw loadError
     } finally {
-      loadingOlderMessagesByThreadId.value = {
-        ...loadingOlderMessagesByThreadId.value,
-        [threadId]: false,
+      if (loadGeneration === messageLoadGeneration) {
+        loadingOlderMessagesByThreadId.value = {
+          ...loadingOlderMessagesByThreadId.value,
+          [threadId]: false,
+        }
       }
     }
+  }
+
+  async function reconcilePaginatedTurnItemsNow(threadId: string, turnId: string): Promise<boolean> {
+    if (!threadId || !turnId || readThreadHistoryMode(threadId) !== 'paginated') return false
+
+    const loadGeneration = messageLoadGeneration
+    const collectedMessages: UiMessage[] = []
+    const seenCursors = new Set<string>()
+    let cursor: string | null = null
+    let fullyLoaded = false
+
+    for (let pageIndex = 0; pageIndex < 4; pageIndex += 1) {
+      const page = await getThreadTurnItemsPage(threadId, turnId, cursor)
+      if (loadGeneration !== messageLoadGeneration || readThreadHistoryMode(threadId) !== 'paginated') {
+        return false
+      }
+      if (!page) return false
+      const mergedPage = mergeMessages(collectedMessages, page.messages, { preserveMissing: true })
+      collectedMessages.splice(0, collectedMessages.length, ...mergedPage)
+      if (!page.nextCursor) {
+        fullyLoaded = true
+        break
+      }
+      if (seenCursors.has(page.nextCursor)) break
+      seenCursors.add(page.nextCursor)
+      cursor = page.nextCursor
+    }
+
+    if (!fullyLoaded) return false
+
+    const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
+    let nextPersisted: UiMessage[]
+    if (fullyLoaded) {
+      const firstTurnMessageIndex = previousPersisted.findIndex((message) => message.turnId === turnId)
+      const collectedIdentities = new Set(collectedMessages.map(messageIdentityKey))
+      const preservedTurnMetadata = previousPersisted.filter((message) => (
+        message.turnId === turnId
+        && isNonItemTurnMetadataMessage(message)
+        && !collectedIdentities.has(messageIdentityKey(message))
+      ))
+      const replacementMessages = [...collectedMessages, ...preservedTurnMetadata]
+      const withoutTurn = previousPersisted.filter((message) => message.turnId !== turnId)
+      const insertAt = firstTurnMessageIndex >= 0
+        ? Math.min(firstTurnMessageIndex, withoutTurn.length)
+        : withoutTurn.length
+      nextPersisted = [
+        ...withoutTurn.slice(0, insertAt),
+        ...replacementMessages,
+        ...withoutTurn.slice(insertAt),
+      ]
+      nextPersisted = nextPersisted.filter((message) => (
+        !isOptimisticUserMessage(message) || !hasEquivalentUserMessage(message, nextPersisted)
+      ))
+    } else {
+      nextPersisted = mergeMessages(previousPersisted, collectedMessages, { preserveMissing: true })
+    }
+
+    markThreadMessagesPersisted(threadId, collectedMessages)
+    setPersistedMessagesForThread(threadId, nextPersisted)
+    const previousLiveAgent = liveAgentMessagesByThreadId.value[threadId] ?? []
+    setLiveAgentMessagesForThread(threadId, removeRedundantLiveAgentMessages(previousLiveAgent, collectedMessages))
+    const previousLivePlans = livePlanMessagesByThreadId.value[threadId] ?? []
+    setLivePlanMessagesForThread(
+      threadId,
+      previousLivePlans.filter((message) => message.turnId !== turnId),
+    )
+    removeLiveCommandsPersistedIn(threadId, collectedMessages)
+    removeLiveFileChangesPersistedIn(threadId, collectedMessages)
+    loadedMessagesByThreadId.value = {
+      ...loadedMessagesByThreadId.value,
+      [threadId]: true,
+    }
+    lastMessageLoadAtByThreadId.set(threadId, Date.now())
+    touchThreadHistoryCache(threadId)
+    return refreshLoadedThreadVersionAfterReconciliation(threadId, true)
+  }
+
+  function refreshLoadedThreadVersionAfterReconciliation(threadId: string, reconciled: boolean): boolean {
+    if (!reconciled) return false
+    const version = currentThreadVersion(threadId)
+    if (version) {
+      loadedVersionByThreadId.value = {
+        ...loadedVersionByThreadId.value,
+        [threadId]: version,
+      }
+    }
+    return true
+  }
+
+  function reconcilePaginatedTurnItems(threadId: string, turnId: string): Promise<boolean> {
+    const key = `${threadId}\u0000${turnId}`
+    const now = Date.now()
+    pruneRecentPaginatedTurnReconciliations(now)
+    const existing = paginatedTurnReconcileByKey.get(key)
+    if (existing && (!existing.settled || now - existing.createdAt < RECENT_THREAD_MESSAGE_LOAD_REUSE_MS)) {
+      return existing.promise.then((reconciled) => (
+        refreshLoadedThreadVersionAfterReconciliation(threadId, reconciled)
+      ))
+    }
+
+    const promise = reconcilePaginatedTurnItemsNow(threadId, turnId)
+    const entry = { promise, createdAt: now, settled: false }
+    paginatedTurnReconcileByKey.set(key, entry)
+    void promise.then(
+      () => {
+        entry.settled = true
+        pruneRecentPaginatedTurnReconciliations()
+        if (typeof window !== 'undefined') {
+          window.setTimeout(() => {
+            if (paginatedTurnReconcileByKey.get(key) === entry) {
+              paginatedTurnReconcileByKey.delete(key)
+              enforceThreadHistoryCacheLimit()
+            }
+          }, RECENT_THREAD_MESSAGE_LOAD_REUSE_MS)
+        }
+      },
+      () => {
+        if (paginatedTurnReconcileByKey.get(key)?.promise === promise) {
+          paginatedTurnReconcileByKey.delete(key)
+        }
+      },
+    )
+    return promise.then((reconciled) => (
+      refreshLoadedThreadVersionAfterReconciliation(threadId, reconciled)
+    ))
   }
 
   async function ensureThreadMessagesLoaded(threadId: string, options: { silent?: boolean } = {}): Promise<void> {
@@ -5496,6 +5975,9 @@ export function useDesktopState() {
       void refreshSkills()
       return 'ok'
     } catch (unknownError) {
+      if (selectedThreadId.value !== threadId) {
+        return 'ok'
+      }
       const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
       error.value = message
       const result = isThreadNotFoundError(unknownError) ? 'not-found' : 'error'
@@ -5573,6 +6055,10 @@ export function useDesktopState() {
   async function forkThreadById(threadId: string): Promise<string> {
     const sourceThreadId = threadId.trim()
     if (!sourceThreadId) return ''
+    if (readThreadHistoryMode(sourceThreadId) === 'paginated') {
+      error.value = 'Codex does not support forking paginated threads yet.'
+      return ''
+    }
 
     const sourceThread = flattenThreads(sourceGroups.value).find((row) => row.id === sourceThreadId)
     const sourceCwd = sourceThread?.cwd?.trim() ?? ''
@@ -5613,6 +6099,10 @@ export function useDesktopState() {
   async function forkThreadFromTurn(threadId: string, turnIndex: number): Promise<string> {
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId || !Number.isInteger(turnIndex) || turnIndex < 0) return ''
+    if (readThreadHistoryMode(normalizedThreadId) === 'paginated') {
+      error.value = 'Codex does not support forking paginated threads yet.'
+      return ''
+    }
 
     if (inProgressById.value[normalizedThreadId] === true) {
       error.value = 'Finish the current turn before forking from a response.'
@@ -5779,6 +6269,7 @@ export function useDesktopState() {
       return
     }
 
+    visibleMessageLoadOwnerThreadId = ''
     isLoadingMessages.value = false
     appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments)
 
@@ -6042,6 +6533,14 @@ export function useDesktopState() {
     })
 
     try {
+      const pendingMessageLoad = loadMessagePromiseByThreadId.get(threadId)
+      if (pendingMessageLoad) {
+        try {
+          await pendingMessageLoad
+        } catch {
+          // A failed history read does not prevent the explicit resume below.
+        }
+      }
       if (resumedThreadById.value[threadId] !== true) {
         const resumedThread = await resumeThread(threadId)
         if (resumedThread.model && !readThreadModelPreference(threadId) && !hasCachedThreadModelSelection(threadId)) {
@@ -6146,9 +6645,40 @@ export function useDesktopState() {
     if (interruptBlockedUntilPersistedByThreadId.value[threadId] === true) return
     let turnId = activeTurnIdByThreadId.value[threadId]
     if (!turnId) {
+      const pendingMessageLoad = loadMessagePromiseByThreadId.get(threadId)
+      if (pendingMessageLoad) {
+        try {
+          await pendingMessageLoad
+        } catch {
+          // The mode-safe lookup below remains available after a failed load.
+        }
+        turnId = activeTurnIdByThreadId.value[threadId]
+      }
+    }
+    if (!turnId) {
       try {
-        const { activeTurnId } = await getThreadDetail(threadId)
-        turnId = activeTurnId
+        const historyMode = await resolveThreadHistoryMode(threadId)
+        if (historyMode === 'paginated') {
+          const previousHistoryState = threadHistoryStateById.value[threadId]
+          const page = previousHistoryState?.initialized === true
+            ? await getOlderThreadHistoryPage(threadId, { historyMode: 'paginated', cursor: null })
+            : await getThreadHistoryDetail(threadId, 'paginated')
+          turnId = page.activeTurnId
+          threadHistoryStateById.value = {
+            ...threadHistoryStateById.value,
+            [threadId]: {
+              mode: 'paginated',
+              initialized: true,
+              materialized: previousHistoryState?.materialized === true || ('materialized' in page && page.materialized === true),
+              olderCursor: page.olderCursor,
+              hasMoreOlder: page.hasMoreOlder,
+              loadedTurnIds: mergeTurnIds(previousHistoryState?.loadedTurnIds ?? [], page.turnIds),
+            },
+          }
+        } else {
+          const detail = await getThreadDetail(threadId)
+          turnId = detail.activeTurnId
+        }
         if (turnId) {
           activeTurnIdByThreadId.value = {
             ...activeTurnIdByThreadId.value,
@@ -6217,6 +6747,10 @@ export function useDesktopState() {
     if (!threadId) return
     if (isRollingBack.value) return
     if (!turnId.trim()) return
+    if (readThreadHistoryMode(threadId) === 'paginated') {
+      error.value = 'Codex does not support editing or rolling back messages in paginated threads yet.'
+      return
+    }
 
     const persisted = persistedMessagesByThreadId.value[threadId] ?? []
     const matchedMessage = persisted.find((message) => message.turnId === turnId)
@@ -6519,13 +7053,21 @@ export function useDesktopState() {
     terminalRuntimeRefreshThreadIds.add(threadId)
     void (async () => {
       try {
-        await loadMessages(threadId, { silent: true, force: true })
+        const reconciledPaginatedTurn = state.turnId && readThreadHistoryMode(threadId) === 'paginated'
+          ? await reconcilePaginatedTurnItems(threadId, state.turnId)
+          : false
+        if (!reconciledPaginatedTurn) {
+          await loadMessages(threadId, { silent: true, force: true })
+        }
         if (terminalRuntimeRefreshWasSuperseded(state)) return
         if (!shouldIgnoreOlderTerminalRuntimeState(state)) {
           setThreadInProgress(threadId, false)
           clearCompletedTurnLiveState(threadId)
         }
         await loadThreads({ force: true })
+        if (reconciledPaginatedTurn) {
+          refreshLoadedThreadVersionAfterReconciliation(threadId, true)
+        }
         if (terminalRuntimeRefreshWasSuperseded(state)) return
         if (!shouldIgnoreOlderTerminalRuntimeState(state)) {
           setThreadInProgress(threadId, false)
@@ -6784,6 +7326,7 @@ export function useDesktopState() {
   }
 
   async function syncFromNotifications(): Promise<void> {
+    pruneRecentPaginatedTurnReconciliations()
     if (isPolling.value) {
       if (typeof window !== 'undefined' && eventSyncTimer === null) {
         eventSyncTimer = window.setTimeout(() => {
@@ -6798,14 +7341,26 @@ export function useDesktopState() {
     const shouldRefreshThreads = pendingThreadsRefresh
     const shouldForceThreadRefresh = pendingThreadsRefreshForce
     const threadIdsToRefresh = new Set(pendingThreadMessageRefresh)
+    const completedTurnsToReconcile = new Map<string, Set<string>>()
+    for (const [threadId, turnIds] of pendingCompletedTurnReconciliationByThreadId) {
+      completedTurnsToReconcile.set(threadId, new Set(turnIds))
+    }
     pendingThreadsRefresh = false
     pendingThreadsRefreshForce = false
     pendingThreadMessageRefresh.clear()
+    pendingCompletedTurnReconciliationByThreadId.clear()
     let syncFailed = false
 
     try {
       if (shouldRefreshThreads) {
         await loadThreads({ force: shouldForceThreadRefresh })
+      }
+
+      for (const [threadId, turnIds] of completedTurnsToReconcile) {
+        for (const turnId of turnIds) {
+          const reconciled = await reconcilePaginatedTurnItems(threadId, turnId)
+          if (!reconciled) threadIdsToRefresh.add(threadId)
+        }
       }
 
       const activeThreadId = selectedThreadId.value
@@ -6814,13 +7369,13 @@ export function useDesktopState() {
         const currentVersion = currentThreadVersion(activeThreadId)
         const loadedVersion = loadedVersionByThreadId.value[activeThreadId] ?? ''
         const hasVersionChange = currentVersion.length > 0 && currentVersion !== loadedVersion
-        if (hasVersionChange || isInProgress || loadedMessagesByThreadId.value[activeThreadId] !== true) {
+        const hasPendingMessageLoad = loadMessagePromiseByThreadId.has(activeThreadId)
+        if (
+          (hasVersionChange || isInProgress || loadedMessagesByThreadId.value[activeThreadId] !== true)
+          && (shouldForceThreadRefresh || !hasPendingMessageLoad)
+        ) {
           threadIdsToRefresh.add(activeThreadId)
         }
-      }
-
-      for (const thread of allThreads.value) {
-        if (inProgressById.value[thread.id] === true) threadIdsToRefresh.add(thread.id)
       }
 
       for (const threadId of threadIdsToRefresh) {
@@ -6831,10 +7386,19 @@ export function useDesktopState() {
       if (shouldRefreshThreads) pendingThreadsRefresh = true
       if (shouldForceThreadRefresh) pendingThreadsRefreshForce = true
       for (const threadId of threadIdsToRefresh) pendingThreadMessageRefresh.add(threadId)
+      for (const [threadId, turnIds] of completedTurnsToReconcile) {
+        const pending = pendingCompletedTurnReconciliationByThreadId.get(threadId) ?? new Set<string>()
+        for (const turnId of turnIds) pending.add(turnId)
+        pendingCompletedTurnReconciliationByThreadId.set(threadId, pending)
+      }
     } finally {
       isPolling.value = false
       if (
-        (pendingThreadsRefresh || pendingThreadMessageRefresh.size > 0) &&
+        (
+          pendingThreadsRefresh
+          || pendingThreadMessageRefresh.size > 0
+          || pendingCompletedTurnReconciliationByThreadId.size > 0
+        ) &&
         typeof window !== 'undefined' &&
         eventSyncTimer === null
       ) {
@@ -6850,9 +7414,29 @@ export function useDesktopState() {
     await loadPendingServerRequestsFromBridge()
     pendingThreadsRefresh = forceRefresh || !hasLoadedThreads.value
     pendingThreadsRefreshForce = forceRefresh
-    if (selectedThreadId.value) pendingThreadMessageRefresh.add(selectedThreadId.value)
-    for (const thread of allThreads.value) {
-      if (inProgressById.value[thread.id] === true) pendingThreadMessageRefresh.add(thread.id)
+    const selectedThread = selectedThreadId.value
+    if (
+      selectedThread
+      && (
+        forceRefresh
+        || (
+          loadedMessagesByThreadId.value[selectedThread] !== true
+          && !loadMessagePromiseByThreadId.has(selectedThread)
+        )
+      )
+    ) {
+      pendingThreadMessageRefresh.add(selectedThread)
+    }
+    if (forceRefresh) {
+      for (const thread of allThreads.value) {
+        if (
+          thread.id !== selectedThread
+          && inProgressById.value[thread.id] === true
+          && loadedMessagesByThreadId.value[thread.id] === true
+        ) {
+          pendingThreadMessageRefresh.add(thread.id)
+        }
+      }
     }
     const selectedProgressRefresh = selectedThreadId.value
       ? loadAgentProgressSnapshot(selectedThreadId.value, { force: forceRefresh })
@@ -6934,6 +7518,9 @@ export function useDesktopState() {
       stopNotificationStream = null
     }
     hasReceivedNotificationReady = false
+    messageLoadGeneration += 1
+    visibleMessageLoadOwnerThreadId = ''
+    isLoadingMessages.value = false
 
     terminalRuntimeRefreshThreadIds.clear()
     latestRuntimeStateByThreadId.clear()
@@ -6944,6 +7531,7 @@ export function useDesktopState() {
 
     pendingThreadsRefresh = false
     pendingThreadMessageRefresh.clear()
+    pendingCompletedTurnReconciliationByThreadId.clear()
     pendingTurnStartsById.clear()
     if (eventSyncTimer !== null && typeof window !== 'undefined') {
       window.clearTimeout(eventSyncTimer)
@@ -6960,6 +7548,14 @@ export function useDesktopState() {
       }
     }
     delayedTurnSyncTimerByThreadId.clear()
+    loadMessagePromiseByThreadId.clear()
+    forcedMessageLoadPromiseByThreadId.clear()
+    threadHistoryModeProbeByThreadId.clear()
+    paginatedTurnReconcileByKey.clear()
+    threadHistoryAccessOrderByThreadId.clear()
+    threadHistoryAccessSequence = 0
+    lastMessageLoadAtByThreadId.clear()
+    lastMessageLoadFailureAtByThreadId.clear()
     liveDeltaBuffer.reset()
     agentProgressLoadPromiseByThreadId.clear()
     lastAgentProgressLoadAtByThreadId.clear()
@@ -6968,6 +7564,12 @@ export function useDesktopState() {
     activeReasoningItemIdByThreadId.clear()
     shouldAutoScrollOnNextAgentEvent = false
     persistedMessagesByThreadId.value = {}
+    loadedMessagesByThreadId.value = {}
+    loadedVersionByThreadId.value = {}
+    threadHistoryStateById.value = {}
+    hasMoreOlderMessagesByThreadId.value = {}
+    loadingOlderMessagesByThreadId.value = {}
+    resumedThreadById.value = {}
     livePlanMessagesByThreadId.value = {}
     liveAgentMessagesByThreadId.value = {}
     liveReasoningTextByThreadId.value = {}

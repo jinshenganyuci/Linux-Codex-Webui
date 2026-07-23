@@ -19,9 +19,9 @@
       @touchstart.passive="onConversationUserScrollIntent"
       @wheel.passive="onConversationUserScrollIntent"
     >
-      <template v-for="message in visibleMessages" :key="message.id">
+      <template v-for="message in visibleMessages" :key="messageIdentityKey(message)">
       <li
-        v-if="!hiddenGroupedCommandIds.has(message.id) && !hiddenFileChangeMessageIds.has(message.id)"
+        v-if="!hiddenGroupedCommandIds.has(messageIdentityKey(message)) && !hiddenFileChangeMessageIds.has(messageIdentityKey(message))"
         class="conversation-item"
         :data-role="message.role"
         :data-message-type="message.messageType || ''"
@@ -47,13 +47,13 @@
               <div class="cmd-group-inner">
                 <div
                   v-for="cmd in getCommandBlockForLatest(message)"
-                  :key="`grouped-cmd-${cmd.id}`"
+                  :key="`grouped-cmd-${messageIdentityKey(cmd)}`"
                   class="worked-cmd-item"
                 >
                   <CommandExecutionBlock
-                    :instance-id="`timeline-group:${message.id}:${cmd.id}`"
+                    :instance-id="`timeline-group:${messageIdentityKey(message)}:${messageIdentityKey(cmd)}`"
                     :command="cmd.commandExecution?.command || ''"
-                    :output="cmd.commandExecution?.aggregatedOutput || ''"
+                    :output="displayCommandOutput(cmd)"
                     :status-label="commandStatusLabel(cmd)"
                     :status-class="commandStatusClass(cmd)"
                     :expanded="isCommandGroupExpanded(message) && isCommandExpanded(cmd)"
@@ -68,9 +68,9 @@
             </div>
             <template v-else>
               <CommandExecutionBlock
-                :instance-id="`timeline:${message.id}`"
+                :instance-id="`timeline:${messageIdentityKey(message)}`"
                 :command="message.commandExecution?.command || ''"
-                :output="message.commandExecution?.aggregatedOutput || ''"
+                :output="displayCommandOutput(message)"
                 :status-label="commandStatusLabel(message)"
                 :status-class="commandStatusClass(message)"
                 :expanded="isCommandExpanded(message)"
@@ -106,7 +106,7 @@
                   <span class="file-change-summary-status">
                     <span
                       v-for="part in fileChangeSummaryStatusParts(readStandaloneFileChangeSummary(message))"
-                      :key="`summary-status:${message.id}:${part.tone}:${part.label}`"
+                      :key="`summary-status:${messageIdentityKey(message)}:${part.tone}:${part.label}`"
                       class="file-change-signed-count"
                       :data-tone="part.tone"
                     >
@@ -119,7 +119,7 @@
                     <ul class="file-change-list">
                       <li
                         v-for="change in readStandaloneFileChangeSummary(message)?.changes ?? []"
-                        :key="`file-change:${message.id}:${change.path}:${change.movedToPath || ''}`"
+                        :key="`file-change:${messageIdentityKey(message)}:${change.path}:${change.movedToPath || ''}`"
                         class="file-change-item"
                       >
                         <span class="file-change-badge" :data-operation="fileChangeOperationTone(change)">
@@ -146,7 +146,7 @@
                         <span v-if="change.addedLineCount > 0 || change.removedLineCount > 0" class="file-change-delta">
                           <span
                             v-for="part in fileChangeDeltaParts(change)"
-                            :key="`change-delta:${message.id}:${change.path}:${part.tone}:${part.label}`"
+                            :key="`change-delta:${messageIdentityKey(message)}:${change.path}:${part.tone}:${part.label}`"
                             class="file-change-signed-count"
                             :data-tone="part.tone"
                           >
@@ -209,7 +209,7 @@
               </ul>
 
               <div v-if="message.fileAttachments && message.fileAttachments.length > 0" class="message-file-attachments">
-                <span v-for="att in message.fileAttachments" :key="`${message.id}:${att.path}`" class="message-file-chip">
+                <span v-for="att in message.fileAttachments" :key="`${messageIdentityKey(message)}:${att.path}`" class="message-file-chip">
                   <span class="message-file-chip-icon">📄</span>
                   <a
                     class="message-file-link message-file-chip-name"
@@ -226,7 +226,7 @@
               <div v-if="message.skills && message.skills.length > 0" class="message-skill-attachments">
                 <a
                   v-for="skill in message.skills"
-                  :key="`${message.id}:${skill.path}`"
+                  :key="`${messageIdentityKey(message)}:${skill.path}`"
                   class="message-skill-chip"
                   :href="toBrowseUrl(skill.path)"
                   :title="skill.path"
@@ -251,13 +251,13 @@
                   <div v-if="isWorkedExpanded(message)" class="worked-details">
                     <div
                       v-for="cmd in getCommandsForWorked(messages, messages.indexOf(message))"
-                      :key="`worked-cmd-${cmd.id}`"
+                      :key="`worked-cmd-${messageIdentityKey(cmd)}`"
                       class="worked-cmd-item"
                     >
                       <CommandExecutionBlock
-                        :instance-id="`worked:${message.id}:${cmd.id}`"
+                        :instance-id="`worked:${messageIdentityKey(message)}:${messageIdentityKey(cmd)}`"
                         :command="cmd.commandExecution?.command || ''"
-                        :output="cmd.commandExecution?.aggregatedOutput || ''"
+                        :output="displayCommandOutput(cmd)"
                         :status-label="commandStatusLabel(cmd)"
                         :status-class="commandStatusClass(cmd)"
                         :expanded="isCommandExpanded(cmd)"
@@ -283,7 +283,7 @@
                   <ol v-if="readPlanSteps(message).length > 0" class="plan-step-list">
                     <li
                       v-for="(step, stepIndex) in readPlanSteps(message)"
-                      :key="`${message.id}:plan-step:${stepIndex}`"
+                      :key="`${messageIdentityKey(message)}:plan-step:${stepIndex}`"
                       class="plan-step-item"
                       :data-status="step.status"
                     >
@@ -305,7 +305,7 @@
                 <div
                   v-else
                   class="message-text-flow"
-                  v-memo="[message.id, message.text, props.cwd, highlightCacheVersion, markdownImageFailureVersion]"
+                  v-memo="[messageIdentityKey(message), message.text, props.cwd, highlightCacheVersion, markdownImageFailureVersion]"
                 >
                   <template v-for="(block, blockIndex) in getMessageBlocks(message)" :key="`block-${blockIndex}`">
                     <p v-if="block.kind === 'paragraph'" class="message-text">
@@ -553,7 +553,7 @@
                       <pre class="message-code-pre"><code class="hljs" v-html="renderCachedHighlightedCodeAsHtml(block.language, block.value)"></code></pre>
                     </div>
                     <hr v-else-if="block.kind === 'thematicBreak'" class="message-divider" />
-                    <p v-else-if="isMarkdownImageFailed(message.id, blockIndex)" class="message-text">{{ block.markdown }}</p>
+                    <p v-else-if="isMarkdownImageFailed(message, blockIndex)" class="message-text">{{ block.markdown }}</p>
                     <button
                       v-else
                       class="message-image-button"
@@ -566,7 +566,7 @@
                         :src="block.url"
                         :alt="block.alt || t('Embedded message image')"
                         loading="lazy"
-                        @error="onMarkdownImageError(message.id, blockIndex)"
+                        @error="onMarkdownImageError(message, blockIndex)"
                       />
                     </button>
                   </template>
@@ -595,7 +595,7 @@
                   <span class="file-change-summary-status">
                     <span
                       v-for="part in fileChangeSummaryStatusParts(readAnchoredFileChangeSummary(message))"
-                      :key="`summary-status:${message.id}:${part.tone}:${part.label}`"
+                      :key="`summary-status:${messageIdentityKey(message)}:${part.tone}:${part.label}`"
                       class="file-change-signed-count"
                       :data-tone="part.tone"
                     >
@@ -608,7 +608,7 @@
                     <ul class="file-change-list">
                       <li
                         v-for="change in readAnchoredFileChangeSummary(message)?.changes ?? []"
-                        :key="`file-change:inline:${message.id}:${change.path}:${change.movedToPath || ''}`"
+                        :key="`file-change:inline:${messageIdentityKey(message)}:${change.path}:${change.movedToPath || ''}`"
                         class="file-change-item"
                       >
                         <span class="file-change-badge" :data-operation="fileChangeOperationTone(change)">
@@ -635,7 +635,7 @@
                         <span v-if="change.addedLineCount > 0 || change.removedLineCount > 0" class="file-change-delta">
                           <span
                             v-for="part in fileChangeDeltaParts(change)"
-                            :key="`change-delta:inline:${message.id}:${change.path}:${part.tone}:${part.label}`"
+                            :key="`change-delta:inline:${messageIdentityKey(message)}:${change.path}:${part.tone}:${part.label}`"
                             class="file-change-signed-count"
                             :data-tone="part.tone"
                           >
@@ -678,7 +678,7 @@
                   class="message-edit-button"
                   :aria-label="t('Edit this message')"
                   :title="t('Edit this message')"
-                  @click="editMessage(message.id)"
+                  @click="editMessage(messageIdentityKey(message))"
                 >
                   <IconTablerFilePencil class="icon-svg message-edit-icon" />
                   <span class="message-edit-label">{{ t('Edit message') }}</span>
@@ -689,7 +689,7 @@
                   class="message-fork-button"
                   :aria-label="t('Fork thread from this response')"
                   :title="t('Fork thread from this response')"
-                  @click="forkResponse(message.id)"
+                  @click="forkResponse(messageIdentityKey(message))"
                 >
                   <IconTablerGitFork class="icon-svg message-fork-icon" />
                   <span class="message-fork-label">{{ t('Fork') }}</span>
@@ -698,13 +698,13 @@
                   v-if="showCopyResponseButton(message)"
                   type="button"
                   class="message-copy-button"
-                  :data-copied="copiedResponseAnchorId === message.id"
-                  :aria-label="copiedResponseAnchorId === message.id ? t('Response copied') : t('Copy response')"
-                  :title="copiedResponseAnchorId === message.id ? t('Response copied') : t('Copy response')"
-                  @click="copyResponse(message.id)"
+                  :data-copied="copiedResponseAnchorId === messageIdentityKey(message)"
+                  :aria-label="copiedResponseAnchorId === messageIdentityKey(message) ? t('Response copied') : t('Copy response')"
+                  :title="copiedResponseAnchorId === messageIdentityKey(message) ? t('Response copied') : t('Copy response')"
+                  @click="copyResponse(messageIdentityKey(message))"
                 >
                   <IconTablerCopy class="icon-svg message-copy-icon" />
-                  <span class="message-copy-label">{{ copiedResponseAnchorId === message.id ? t('Copied') : t('Copy') }}</span>
+                  <span class="message-copy-label">{{ copiedResponseAnchorId === messageIdentityKey(message) ? t('Copied') : t('Copy') }}</span>
                 </button>
               </div>
             </article>
@@ -888,10 +888,107 @@
   </section>
 </template>
 
+<script lang="ts">
+import type { UiMessage as ThreadConversationMessage } from '../../types/codex'
+
+export type ThreadCommandOutputLoadStatus = 'idle' | 'loading' | 'loaded' | 'failed'
+
+export type ThreadCommandOutputCache = {
+  clear: () => void
+  getStatus: (message: ThreadConversationMessage) => ThreadCommandOutputLoadStatus
+  load: (threadId: string, message: ThreadConversationMessage) => Promise<void>
+  readOutput: (message: ThreadConversationMessage) => string
+}
+
+const MAX_CACHED_FULL_COMMAND_OUTPUTS = 8
+
+export function createThreadCommandOutputCache(
+  loadFullOutput: (threadId: string, turnId: string, itemId: string) => Promise<string>,
+): ThreadCommandOutputCache {
+  const outputByIdentity = new Map<string, string>()
+  const statusByIdentity = new Map<string, Exclude<ThreadCommandOutputLoadStatus, 'idle'>>()
+  const promiseByIdentity = new Map<string, Promise<void>>()
+  let generation = 0
+
+  function identity(message: ThreadConversationMessage): string {
+    const turnId = message.turnId?.trim() ?? ''
+    return turnId ? `${turnId}\u0000${message.id}` : message.id
+  }
+
+  function getStatus(message: ThreadConversationMessage): ThreadCommandOutputLoadStatus {
+    return statusByIdentity.get(identity(message)) ?? 'idle'
+  }
+
+  function readOutput(message: ThreadConversationMessage): string {
+    const messageIdentity = identity(message)
+    return statusByIdentity.get(messageIdentity) === 'loaded'
+      ? outputByIdentity.get(messageIdentity) ?? ''
+      : message.commandExecution?.aggregatedOutput ?? ''
+  }
+
+  function load(threadId: string, message: ThreadConversationMessage): Promise<void> {
+    const normalizedThreadId = threadId.trim()
+    const normalizedTurnId = message.turnId?.trim() ?? ''
+    const normalizedItemId = message.id.trim()
+    if (
+      message.commandExecution?.aggregatedOutputTruncated !== true
+      || !normalizedThreadId
+      || !normalizedTurnId
+      || !normalizedItemId
+    ) {
+      return Promise.resolve()
+    }
+
+    const messageIdentity = identity(message)
+    const currentStatus = statusByIdentity.get(messageIdentity)
+    if (currentStatus === 'loaded' || currentStatus === 'failed') return Promise.resolve()
+    const existing = promiseByIdentity.get(messageIdentity)
+    if (existing) return existing
+
+    const requestGeneration = generation
+    statusByIdentity.set(messageIdentity, 'loading')
+    const promise = loadFullOutput(normalizedThreadId, normalizedTurnId, normalizedItemId)
+      .then((output) => {
+        if (generation !== requestGeneration) return
+        outputByIdentity.set(messageIdentity, output)
+        statusByIdentity.set(messageIdentity, 'loaded')
+        while (outputByIdentity.size > MAX_CACHED_FULL_COMMAND_OUTPUTS) {
+          const oldestIdentity = outputByIdentity.keys().next().value as string | undefined
+          if (oldestIdentity === undefined) break
+          outputByIdentity.delete(oldestIdentity)
+          if (statusByIdentity.get(oldestIdentity) === 'loaded') {
+            statusByIdentity.delete(oldestIdentity)
+          }
+        }
+      })
+      .catch(() => {
+        if (generation !== requestGeneration) return
+        statusByIdentity.set(messageIdentity, 'failed')
+      })
+      .finally(() => {
+        if (promiseByIdentity.get(messageIdentity) === promise) {
+          promiseByIdentity.delete(messageIdentity)
+        }
+      })
+    promiseByIdentity.set(messageIdentity, promise)
+    return promise
+  }
+
+  function clear(): void {
+    generation += 1
+    outputByIdentity.clear()
+    statusByIdentity.clear()
+    promiseByIdentity.clear()
+  }
+
+  return { clear, getStatus, load, readOutput }
+}
+</script>
+
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
-import { updateThreadFileChanges } from '../../api/codexGateway'
+import { getFullThreadCommandOutput, updateThreadFileChanges } from '../../api/codexGateway'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
 import { useMobile } from '../../composables/useMobile'
 import { useUiLanguage } from '../../composables/useUiLanguage'
@@ -1062,11 +1159,11 @@ function isCopyableAssistantMessage(message: UiMessage): boolean {
     && !(message.messageType ?? '').endsWith('.live')
 }
 
-const activeCommandMessageId = computed(() => {
+const activeCommandMessageIdentity = computed(() => {
   for (let index = props.messages.length - 1; index >= 0; index -= 1) {
     const message = props.messages[index]
     if (message.messageType === 'commandExecution' && message.commandExecution?.status === 'inProgress') {
-      return message.id
+      return messageIdentityKey(message)
     }
   }
   return ''
@@ -1081,10 +1178,10 @@ const hasLiveAssistantText = computed(() =>
 )
 
 const isLiveTurnRuntime = computed(() =>
-  Boolean(props.liveOverlay) || activeCommandMessageId.value.length > 0 || hasLiveAssistantText.value,
+  Boolean(props.liveOverlay) || activeCommandMessageIdentity.value.length > 0 || hasLiveAssistantText.value,
 )
 
-const groupedCommandsByLatestId = computed<Record<string, UiMessage[]>>(() => {
+const groupedCommandsByLatestIdentity = computed<Record<string, UiMessage[]>>(() => {
   const next: Record<string, UiMessage[]> = {}
   for (let index = 0; index < props.messages.length;) {
     const message = props.messages[index]
@@ -1093,24 +1190,29 @@ const groupedCommandsByLatestId = computed<Record<string, UiMessage[]>>(() => {
       continue
     }
 
-    const block: UiMessage[] = []
-    while (index < props.messages.length && isCommandMessage(props.messages[index])) {
+    const block: UiMessage[] = [message]
+    index += 1
+    while (
+      index < props.messages.length
+      && isCommandMessage(props.messages[index])
+      && areMessagesInSameTurn(message, props.messages[index])
+    ) {
       block.push(props.messages[index])
       index += 1
     }
 
     if (block.length <= 1) continue
     const latest = block[block.length - 1]
-    next[latest.id] = block.slice(0, -1)
+    next[messageIdentityKey(latest)] = block.slice(0, -1)
   }
   return next
 })
 
 const hiddenGroupedCommandIds = computed(() => {
   const next = new Set<string>()
-  for (const commands of Object.values(groupedCommandsByLatestId.value)) {
+  for (const commands of Object.values(groupedCommandsByLatestIdentity.value)) {
     for (const command of commands) {
-      next.add(command.id)
+      next.add(messageIdentityKey(command))
     }
   }
   return next
@@ -1136,13 +1238,14 @@ function planStepStatusIcon(status: UiPlanStep['status']): string {
 }
 
 function isCommandAutoExpanded(message: UiMessage): boolean {
-  return !hasLiveAssistantText.value && message.id === activeCommandMessageId.value
+  return !hasLiveAssistantText.value && messageIdentityKey(message) === activeCommandMessageIdentity.value
 }
 
 function isCommandExpanded(message: UiMessage): boolean {
   if (!isCommandMessage(message)) return false
-  return expandedCommandIds.value.has(message.id)
-    || (!collapsedAutoCommandIds.value.has(message.id) && isCommandAutoExpanded(message))
+  const messageIdentity = messageIdentityKey(message)
+  return expandedCommandIds.value.has(messageIdentity)
+    || (!collapsedAutoCommandIds.value.has(messageIdentity) && isCommandAutoExpanded(message))
 }
 
 function isCommandCompact(message: UiMessage): boolean {
@@ -1158,25 +1261,29 @@ function toggleCommandExpand(message: UiMessage): void {
 
   const nextExpanded = new Set(expandedCommandIds.value)
   const nextCollapsedAuto = new Set(collapsedAutoCommandIds.value)
+  const messageIdentity = messageIdentityKey(message)
   const isAutoExpanded = isCommandAutoExpanded(message)
-  const isManuallyExpanded = nextExpanded.has(message.id)
+  const isManuallyExpanded = nextExpanded.has(messageIdentity)
+  let isOpening = false
 
   if (isManuallyExpanded) {
-    nextExpanded.delete(message.id)
-    if (isAutoExpanded) nextCollapsedAuto.add(message.id)
-  } else if (isAutoExpanded && !nextCollapsedAuto.has(message.id)) {
-    nextCollapsedAuto.add(message.id)
+    nextExpanded.delete(messageIdentity)
+    if (isAutoExpanded) nextCollapsedAuto.add(messageIdentity)
+  } else if (isAutoExpanded && !nextCollapsedAuto.has(messageIdentity)) {
+    nextCollapsedAuto.add(messageIdentity)
   } else {
-    nextExpanded.add(message.id)
-    nextCollapsedAuto.delete(message.id)
+    nextExpanded.add(messageIdentity)
+    nextCollapsedAuto.delete(messageIdentity)
+    isOpening = true
   }
 
   expandedCommandIds.value = nextExpanded
   collapsedAutoCommandIds.value = nextCollapsedAuto
+  if (isOpening) ensureFullCommandOutput(message)
 }
 
 function getGroupedCommandsForLatest(message: UiMessage): UiMessage[] {
-  return groupedCommandsByLatestId.value[message.id] ?? []
+  return groupedCommandsByLatestIdentity.value[messageIdentityKey(message)] ?? []
 }
 
 function getCommandBlockForLatest(message: UiMessage): UiMessage[] {
@@ -1188,13 +1295,20 @@ function toggleCommandGroup(message: UiMessage): void {
   const groupedCommands = getGroupedCommandsForLatest(message)
   if (groupedCommands.length === 0) return
   const next = new Set(expandedCommandGroupIds.value)
-  if (next.has(message.id)) next.delete(message.id)
-  else next.add(message.id)
+  const messageIdentity = messageIdentityKey(message)
+  const isOpening = !next.has(messageIdentity)
+  if (isOpening) next.add(messageIdentity)
+  else next.delete(messageIdentity)
   expandedCommandGroupIds.value = next
+  if (isOpening) {
+    for (const command of getCommandBlockForLatest(message)) {
+      if (isCommandExpanded(command)) ensureFullCommandOutput(command)
+    }
+  }
 }
 
 function isCommandGroupExpanded(message: UiMessage): boolean {
-  return expandedCommandGroupIds.value.has(message.id)
+  return expandedCommandGroupIds.value.has(messageIdentityKey(message))
 }
 
 function commandGroupSummaryLabel(message: UiMessage): string {
@@ -1211,24 +1325,33 @@ function commandGroupSummaryStatus(message: UiMessage): string {
 
 function toggleWorkedExpand(message: UiMessage): void {
   const next = new Set(expandedWorkedIds.value)
-  if (next.has(message.id)) next.delete(message.id)
-  else next.add(message.id)
+  const messageIdentity = messageIdentityKey(message)
+  const isOpening = !next.has(messageIdentity)
+  if (isOpening) next.add(messageIdentity)
+  else next.delete(messageIdentity)
   expandedWorkedIds.value = next
+  if (isOpening) {
+    const workedIndex = props.messages.indexOf(message)
+    for (const command of getCommandsForWorked(props.messages, workedIndex)) {
+      if (isCommandExpanded(command)) ensureFullCommandOutput(command)
+    }
+  }
 }
 
 function isWorkedExpanded(message: UiMessage): boolean {
-  return expandedWorkedIds.value.has(message.id)
+  return expandedWorkedIds.value.has(messageIdentityKey(message))
 }
 
 function toggleFileChangeSummary(message: UiMessage): void {
   const next = new Set(expandedFileChangeSummaryIds.value)
-  if (next.has(message.id)) next.delete(message.id)
-  else next.add(message.id)
+  const messageIdentity = messageIdentityKey(message)
+  if (next.has(messageIdentity)) next.delete(messageIdentity)
+  else next.add(messageIdentity)
   expandedFileChangeSummaryIds.value = next
 }
 
 function isFileChangeSummaryExpanded(message: UiMessage): boolean {
-  return expandedFileChangeSummaryIds.value.has(message.id)
+  return expandedFileChangeSummaryIds.value.has(messageIdentityKey(message))
 }
 
 function fileChangeKey(change: UiFileChange): string {
@@ -1295,9 +1418,12 @@ function pruneCommandIdSet(source: Set<string>, validIds: Set<string>): Set<stri
 
 function getCommandsForWorked(messages: UiMessage[], workedIndex: number): UiMessage[] {
   const result: UiMessage[] = []
+  const workedMessage = messages[workedIndex]
+  if (!workedMessage) return result
   for (let i = workedIndex - 1; i >= 0; i--) {
     const m = messages[i]
-    if (m.messageType === 'commandExecution') result.unshift(m)
+    if (m.messageType === 'commandExecution' && areMessagesInSameTurn(workedMessage, m)) result.unshift(m)
+    else if (m.messageType === 'commandExecution') break
     else if (m.role === 'user' || m.messageType === 'worked') break
   }
   return result
@@ -1322,6 +1448,22 @@ const emit = defineEmits<{
   implementPlan: [payload: { turnId: string }]
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
 }>()
+
+const commandOutputRenderVersion = ref(0)
+const commandOutputCache = createThreadCommandOutputCache(getFullThreadCommandOutput)
+
+function displayCommandOutput(message: UiMessage): string {
+  void commandOutputRenderVersion.value
+  return commandOutputCache.readOutput(message)
+}
+
+function ensureFullCommandOutput(message: UiMessage): void {
+  if (message.commandExecution?.aggregatedOutputTruncated !== true) return
+  if (commandOutputCache.getStatus(message) !== 'idle') return
+  void commandOutputCache.load(props.activeThreadId, message).finally(() => {
+    commandOutputRenderVersion.value += 1
+  })
+}
 
 const conversationListRef = ref<HTMLElement | null>(null)
 const bottomAnchorRef = ref<HTMLElement | null>(null)
@@ -1437,7 +1579,7 @@ type McpElicitationField = {
 }
 type TurnFileChangeSummary = {
   changes: UiFileChange[]
-  sourceMessageIds: string[]
+  sourceMessageIdentities: string[]
   source: 'assistant' | 'metadata'
   turnId: string
 }
@@ -1536,8 +1678,8 @@ function buildCopyableMessageContent(message: UiMessage): string {
   return sections.join('\n\n').trim()
 }
 
-const copyableResponseContentByAnchorId = computed<Record<string, string>>(() => {
-  const groupedResponses = new Map<string, { anchorMessageId: string; parts: string[] }>()
+const copyableResponseContentByAnchorIdentity = computed<Record<string, string>>(() => {
+  const groupedResponses = new Map<string, { anchorMessageIdentity: string; parts: string[] }>()
 
   for (const message of props.messages) {
     if (!isCopyableAssistantMessage(message)) continue
@@ -1545,18 +1687,16 @@ const copyableResponseContentByAnchorId = computed<Record<string, string>>(() =>
     const content = buildCopyableMessageContent(message)
     if (!content) continue
 
-    const responseKey = typeof message.turnIndex === 'number'
-      ? `turn:${message.turnIndex}`
-      : `message:${message.id}`
+    const responseKey = messageTurnKey(message)
     const existing = groupedResponses.get(responseKey)
     if (existing) {
-      existing.anchorMessageId = message.id
+      existing.anchorMessageIdentity = messageIdentityKey(message)
       existing.parts.push(content)
       continue
     }
 
     groupedResponses.set(responseKey, {
-      anchorMessageId: message.id,
+      anchorMessageIdentity: messageIdentityKey(message),
       parts: [content],
     })
   }
@@ -1565,52 +1705,79 @@ const copyableResponseContentByAnchorId = computed<Record<string, string>>(() =>
   for (const response of groupedResponses.values()) {
     const content = response.parts.join('\n\n').trim()
     if (!content) continue
-    next[response.anchorMessageId] = content
+    next[response.anchorMessageIdentity] = content
   }
 
-  for (const [anchorMessageId, summary] of Object.entries(anchoredFileChangeSummaryByAnchorId.value)) {
+  for (const [anchorMessageIdentity, summary] of Object.entries(anchoredFileChangeSummaryByAnchorIdentity.value)) {
     if (summary.source !== 'metadata') continue
     const fileChangeCopy = buildFileChangeCopyText(summary)
     if (!fileChangeCopy) continue
-    const existing = next[anchorMessageId]?.trim()
-    next[anchorMessageId] = existing ? `${existing}\n\n${fileChangeCopy}` : fileChangeCopy
+    const existing = next[anchorMessageIdentity]?.trim()
+    next[anchorMessageIdentity] = existing ? `${existing}\n\n${fileChangeCopy}` : fileChangeCopy
   }
   return next
 })
 
-const forkableTurnIndexByAnchorId = computed<Record<string, number>>(() => {
-  const groupedTurns = new Map<string, { anchorMessageId: string; turnIndex: number }>()
+const forkableTurnIndexByAnchorIdentity = computed<Record<string, number>>(() => {
+  const groupedTurns = new Map<string, { anchorMessageIdentity: string; turnIndex: number }>()
 
   for (const message of props.messages) {
     if (!isCopyableAssistantMessage(message) || typeof message.turnIndex !== 'number') continue
 
-    const responseKey = `turn:${message.turnIndex}`
+    const responseKey = messageTurnKey(message)
     const existing = groupedTurns.get(responseKey)
     if (existing) {
-      existing.anchorMessageId = message.id
+      existing.anchorMessageIdentity = messageIdentityKey(message)
       existing.turnIndex = message.turnIndex
       continue
     }
 
     groupedTurns.set(responseKey, {
-      anchorMessageId: message.id,
+      anchorMessageIdentity: messageIdentityKey(message),
       turnIndex: message.turnIndex,
     })
   }
 
   const next: Record<string, number> = {}
   for (const groupedTurn of groupedTurns.values()) {
-    next[groupedTurn.anchorMessageId] = groupedTurn.turnIndex
+    next[groupedTurn.anchorMessageIdentity] = groupedTurn.turnIndex
   }
   return next
 })
 
 function showCopyResponseButton(message: UiMessage): boolean {
-  return typeof copyableResponseContentByAnchorId.value[message.id] === 'string'
+  return typeof copyableResponseContentByAnchorIdentity.value[messageIdentityKey(message)] === 'string'
 }
 
 function showForkResponseButton(message: UiMessage): boolean {
-  return typeof forkableTurnIndexByAnchorId.value[message.id] === 'number'
+  return typeof forkableTurnIndexByAnchorIdentity.value[messageIdentityKey(message)] === 'number'
+}
+
+function messageIdentityKey(message: UiMessage): string {
+  const turnId = message.turnId?.trim() ?? ''
+  return turnId ? `${turnId}\u0000${message.id}` : message.id
+}
+
+function messageTurnKey(message: UiMessage): string {
+  const turnId = message.turnId?.trim() ?? ''
+  if (turnId) return `turn-id:${turnId}`
+  if (typeof message.turnIndex === 'number') return `turn-index:${message.turnIndex}`
+  return `message:${message.id}`
+}
+
+function areMessagesInSameTurn(first: UiMessage, second: UiMessage): boolean {
+  const firstTurnId = first.turnId?.trim() ?? ''
+  const secondTurnId = second.turnId?.trim() ?? ''
+  if (firstTurnId || secondTurnId) return Boolean(firstTurnId) && firstTurnId === secondTurnId
+
+  const firstTurnIndex = first.turnIndex
+  const secondTurnIndex = second.turnIndex
+  if (typeof firstTurnIndex === 'number' || typeof secondTurnIndex === 'number') {
+    return typeof firstTurnIndex === 'number' && firstTurnIndex === secondTurnIndex
+  }
+
+  // Old legacy payloads may have neither field; preserve their contiguous grouping behavior.
+  return true
 }
 
 function mergeFileChangeDiff(first: string, second: string): string {
@@ -1654,18 +1821,19 @@ function aggregateFileChanges(changes: UiFileChange[]): UiFileChange[] {
   return Array.from(byPath.values()).sort(compareFileChanges)
 }
 
-const anchoredFileChangeSummaryByAnchorId = computed<Record<string, TurnFileChangeSummary>>(() => {
-  const assistantAnchorIdByTurnKey = new Map<string, string>()
-  const assistantSummaryByAnchorId = new Map<string, TurnFileChangeSummary>()
+const anchoredFileChangeSummaryByAnchorIdentity = computed<Record<string, TurnFileChangeSummary>>(() => {
+  const assistantAnchorIdentityByTurnKey = new Map<string, string>()
+  const assistantSummaryByAnchorIdentity = new Map<string, TurnFileChangeSummary>()
   const fileChangeMessagesByTurnKey = new Map<string, UiMessage[]>()
 
   for (const message of props.messages) {
-    if (isCopyableAssistantMessage(message) && typeof message.turnIndex === 'number') {
-      assistantAnchorIdByTurnKey.set(`turn:${message.turnIndex}`, message.id)
+    if (isCopyableAssistantMessage(message)) {
+      const messageIdentity = messageIdentityKey(message)
+      assistantAnchorIdentityByTurnKey.set(messageTurnKey(message), messageIdentity)
       if (Array.isArray(message.fileChanges) && message.fileChanges.length > 0) {
-        assistantSummaryByAnchorId.set(message.id, {
+        assistantSummaryByAnchorIdentity.set(messageIdentity, {
           changes: aggregateFileChanges(message.fileChanges),
-          sourceMessageIds: [],
+          sourceMessageIdentities: [],
           source: 'assistant',
           turnId: message.turnId ?? '',
         })
@@ -1673,7 +1841,7 @@ const anchoredFileChangeSummaryByAnchorId = computed<Record<string, TurnFileChan
     }
 
     if (!isFileChangeMessage(message)) continue
-    const turnKey = typeof message.turnIndex === 'number' ? `turn:${message.turnIndex}` : `message:${message.id}`
+    const turnKey = messageTurnKey(message)
     const current = fileChangeMessagesByTurnKey.get(turnKey)
     if (current) current.push(message)
     else fileChangeMessagesByTurnKey.set(turnKey, [message])
@@ -1681,37 +1849,37 @@ const anchoredFileChangeSummaryByAnchorId = computed<Record<string, TurnFileChan
 
   const summaries: Record<string, TurnFileChangeSummary> = {}
   for (const [turnKey, messages] of fileChangeMessagesByTurnKey.entries()) {
-    const anchorId = assistantAnchorIdByTurnKey.get(turnKey)
-    if (!anchorId) continue
-    const assistantTurnId = assistantSummaryByAnchorId.get(anchorId)?.turnId ?? ''
-    summaries[anchorId] = {
+    const anchorIdentity = assistantAnchorIdentityByTurnKey.get(turnKey)
+    if (!anchorIdentity) continue
+    const assistantTurnId = assistantSummaryByAnchorIdentity.get(anchorIdentity)?.turnId ?? ''
+    summaries[anchorIdentity] = {
       changes: aggregateFileChanges(messages.flatMap((message) => message.fileChanges ?? [])),
-      sourceMessageIds: messages.map((message) => message.id),
+      sourceMessageIdentities: messages.map(messageIdentityKey),
       source: 'metadata',
       turnId: messages.find((message) => typeof message.turnId === 'string' && message.turnId.length > 0)?.turnId ?? assistantTurnId,
     }
   }
 
-  for (const [anchorId, summary] of assistantSummaryByAnchorId.entries()) {
-    if (!summaries[anchorId]) {
-      summaries[anchorId] = summary
+  for (const [anchorIdentity, summary] of assistantSummaryByAnchorIdentity.entries()) {
+    if (!summaries[anchorIdentity]) {
+      summaries[anchorIdentity] = summary
     }
   }
 
   return summaries
 })
 
-const standaloneFileChangeSummaryByMessageId = computed<Record<string, TurnFileChangeSummary>>(() => {
-  const assistantAnchorIdByTurnKey = new Map<string, string>()
+const standaloneFileChangeSummaryByMessageIdentity = computed<Record<string, TurnFileChangeSummary>>(() => {
+  const assistantAnchorIdentityByTurnKey = new Map<string, string>()
   const fileChangeMessagesByTurnKey = new Map<string, UiMessage[]>()
 
   for (const message of props.messages) {
-    if (isCopyableAssistantMessage(message) && typeof message.turnIndex === 'number') {
-      assistantAnchorIdByTurnKey.set(`turn:${message.turnIndex}`, message.id)
+    if (isCopyableAssistantMessage(message)) {
+      assistantAnchorIdentityByTurnKey.set(messageTurnKey(message), messageIdentityKey(message))
     }
 
     if (!isFileChangeMessage(message)) continue
-    const turnKey = typeof message.turnIndex === 'number' ? `turn:${message.turnIndex}` : `message:${message.id}`
+    const turnKey = messageTurnKey(message)
     const current = fileChangeMessagesByTurnKey.get(turnKey)
     if (current) current.push(message)
     else fileChangeMessagesByTurnKey.set(turnKey, [message])
@@ -1719,12 +1887,12 @@ const standaloneFileChangeSummaryByMessageId = computed<Record<string, TurnFileC
 
   const summaries: Record<string, TurnFileChangeSummary> = {}
   for (const [turnKey, messages] of fileChangeMessagesByTurnKey.entries()) {
-    if (assistantAnchorIdByTurnKey.has(turnKey)) continue
+    if (assistantAnchorIdentityByTurnKey.has(turnKey)) continue
     const visibleMessage = messages[messages.length - 1]
     if (!visibleMessage) continue
-    summaries[visibleMessage.id] = {
+    summaries[messageIdentityKey(visibleMessage)] = {
       changes: aggregateFileChanges(messages.flatMap((message) => message.fileChanges ?? [])),
-      sourceMessageIds: messages.map((message) => message.id),
+      sourceMessageIdentities: messages.map(messageIdentityKey),
       source: 'metadata',
       turnId: visibleMessage.turnId ?? messages.find((message) => typeof message.turnId === 'string' && message.turnId.length > 0)?.turnId ?? '',
     }
@@ -1735,15 +1903,15 @@ const standaloneFileChangeSummaryByMessageId = computed<Record<string, TurnFileC
 
 const hiddenFileChangeMessageIds = computed(() => {
   const next = new Set<string>()
-  for (const summary of Object.values(anchoredFileChangeSummaryByAnchorId.value)) {
-    for (const messageId of summary.sourceMessageIds) {
-      next.add(messageId)
+  for (const summary of Object.values(anchoredFileChangeSummaryByAnchorIdentity.value)) {
+    for (const messageIdentity of summary.sourceMessageIdentities) {
+      next.add(messageIdentity)
     }
   }
-  for (const [messageId, summary] of Object.entries(standaloneFileChangeSummaryByMessageId.value)) {
-    for (const sourceMessageId of summary.sourceMessageIds) {
-      if (sourceMessageId !== messageId) {
-        next.add(sourceMessageId)
+  for (const [messageIdentity, summary] of Object.entries(standaloneFileChangeSummaryByMessageIdentity.value)) {
+    for (const sourceMessageIdentity of summary.sourceMessageIdentities) {
+      if (sourceMessageIdentity !== messageIdentity) {
+        next.add(sourceMessageIdentity)
       }
     }
   }
@@ -1751,11 +1919,11 @@ const hiddenFileChangeMessageIds = computed(() => {
 })
 
 function readAnchoredFileChangeSummary(message: UiMessage): TurnFileChangeSummary | null {
-  return anchoredFileChangeSummaryByAnchorId.value[message.id] ?? null
+  return anchoredFileChangeSummaryByAnchorIdentity.value[messageIdentityKey(message)] ?? null
 }
 
 function readStandaloneFileChangeSummary(message: UiMessage): TurnFileChangeSummary | null {
-  return standaloneFileChangeSummaryByMessageId.value[message.id] ?? null
+  return standaloneFileChangeSummaryByMessageIdentity.value[messageIdentityKey(message)] ?? null
 }
 
 function fileChangeActionKey(summary: TurnFileChangeSummary | null): string {
@@ -2079,8 +2247,8 @@ function diffViewerMarker(line: DiffViewerLine): string {
   return ''
 }
 
-async function copyResponse(anchorMessageId: string): Promise<void> {
-  const content = copyableResponseContentByAnchorId.value[anchorMessageId] ?? ''
+async function copyResponse(anchorMessageIdentity: string): Promise<void> {
+  const content = copyableResponseContentByAnchorIdentity.value[anchorMessageIdentity] ?? ''
   if (!content) return
 
   let copied = false
@@ -2097,12 +2265,12 @@ async function copyResponse(anchorMessageId: string): Promise<void> {
 
   if (!copied) return
 
-  copiedResponseAnchorId.value = anchorMessageId
+  copiedResponseAnchorId.value = anchorMessageIdentity
   if (copiedMessageResetTimer) {
     clearTimeout(copiedMessageResetTimer)
   }
   copiedMessageResetTimer = setTimeout(() => {
-    if (copiedResponseAnchorId.value === anchorMessageId) {
+    if (copiedResponseAnchorId.value === anchorMessageIdentity) {
       copiedResponseAnchorId.value = ''
     }
     copiedMessageResetTimer = null
@@ -2160,8 +2328,8 @@ function onCodeBlockCopyClick(value: string, event: MouseEvent): void {
   void copyCodeBlock(value, button)
 }
 
-function forkResponse(anchorMessageId: string): void {
-  const turnIndex = forkableTurnIndexByAnchorId.value[anchorMessageId]
+function forkResponse(anchorMessageIdentity: string): void {
+  const turnIndex = forkableTurnIndexByAnchorIdentity.value[anchorMessageIdentity]
   if (typeof turnIndex !== 'number') return
   if (!props.activeThreadId) return
   emit('forkThread', {
@@ -2170,23 +2338,23 @@ function forkResponse(anchorMessageId: string): void {
   })
 }
 
-const editableTurnIdByMessageId = computed<Record<string, string>>(() => {
+const editableTurnIdByMessageIdentity = computed<Record<string, string>>(() => {
   const next: Record<string, string> = {}
   for (const message of props.messages) {
     if (message.role !== 'user' || typeof message.turnIndex !== 'number') continue
     const turnId = typeof message.turnId === 'string' && message.turnId.length > 0 ? message.turnId : ''
     if (!turnId || message.text.trim().length === 0) continue
-    next[message.id] = turnId
+    next[messageIdentityKey(message)] = turnId
   }
   return next
 })
 
 function showEditMessageButton(message: UiMessage): boolean {
-  return typeof editableTurnIdByMessageId.value[message.id] === 'string'
+  return typeof editableTurnIdByMessageIdentity.value[messageIdentityKey(message)] === 'string'
 }
 
-function editMessage(messageId: string): void {
-  const turnId = editableTurnIdByMessageId.value[messageId]
+function editMessage(messageIdentity: string): void {
+  const turnId = editableTurnIdByMessageIdentity.value[messageIdentity]
   if (!turnId) return
   emit('rollback', { turnId })
 }
@@ -2316,16 +2484,17 @@ function onWindowKeydownForFileLinkContextMenu(event: KeyboardEvent): void {
 }
 
 function getMessageBlocks(message: UiMessage): MessageBlock[] {
-  const cached = messageBlockCache.get(message.id)
+  const messageIdentity = messageIdentityKey(message)
+  const cached = messageBlockCache.get(messageIdentity)
   if (cached && cached.text === message.text && cached.cwd === props.cwd) {
-    messageBlockCache.delete(message.id)
-    messageBlockCache.set(message.id, cached)
+    messageBlockCache.delete(messageIdentity)
+    messageBlockCache.set(messageIdentity, cached)
     return cached.blocks
   }
   const blocks = parseMessageBlocks(message.text)
   return setBoundedCacheEntry(
     messageBlockCache,
-    message.id,
+    messageIdentity,
     { text: message.text, cwd: props.cwd, blocks },
     MESSAGE_BLOCK_CACHE_LIMIT,
   ).blocks
@@ -2977,19 +3146,19 @@ watch(
     const commandIds = new Set(
       next
         .filter((message) => message.messageType === 'commandExecution' && message.commandExecution)
-        .map((message) => message.id),
+        .map(messageIdentityKey),
     )
     expandedCommandIds.value = pruneCommandIdSet(expandedCommandIds.value, commandIds)
     collapsedAutoCommandIds.value = pruneCommandIdSet(collapsedAutoCommandIds.value, commandIds)
     expandedCommandGroupIds.value = pruneCommandIdSet(
       expandedCommandGroupIds.value,
-      new Set(Object.keys(groupedCommandsByLatestId.value)),
+      new Set(Object.keys(groupedCommandsByLatestIdentity.value)),
     )
     expandedFileChangeSummaryIds.value = pruneCommandIdSet(
       expandedFileChangeSummaryIds.value,
       new Set([
-        ...Object.keys(anchoredFileChangeSummaryByAnchorId.value),
-        ...Object.keys(standaloneFileChangeSummaryByMessageId.value),
+        ...Object.keys(anchoredFileChangeSummaryByAnchorIdentity.value),
+        ...Object.keys(standaloneFileChangeSummaryByMessageIdentity.value),
       ]),
     )
 
@@ -3018,7 +3187,7 @@ watch(
 )
 
 watch(
-  activeCommandMessageId,
+  activeCommandMessageIdentity,
   (nextId, prevId) => {
     if (!prevId || prevId === nextId) return
     if (!collapsedAutoCommandIds.value.has(prevId)) return
@@ -3061,6 +3230,8 @@ watch(
 watch(
   () => props.activeThreadId,
   async () => {
+    commandOutputCache.clear()
+    commandOutputRenderVersion.value += 1
     autoFollowOutput.value = true
     modalImageUrl.value = ''
     isLoadingMore.value = false
@@ -3095,17 +3266,17 @@ function onConversationScroll(): void {
 
 const failedMarkdownImages = ref(new Set<string>())
 
-function markdownImageKey(messageId: string, blockIndex: number): string {
-  return `${messageId}:${blockIndex}`
+function markdownImageKey(message: UiMessage, blockIndex: number): string {
+  return `${messageIdentityKey(message)}:${blockIndex}`
 }
 
-function isMarkdownImageFailed(messageId: string, blockIndex: number): boolean {
-  return failedMarkdownImages.value.has(markdownImageKey(messageId, blockIndex))
+function isMarkdownImageFailed(message: UiMessage, blockIndex: number): boolean {
+  return failedMarkdownImages.value.has(markdownImageKey(message, blockIndex))
 }
 
-function onMarkdownImageError(messageId: string, blockIndex: number): void {
+function onMarkdownImageError(message: UiMessage, blockIndex: number): void {
   const next = new Set(failedMarkdownImages.value)
-  next.add(markdownImageKey(messageId, blockIndex))
+  next.add(markdownImageKey(message, blockIndex))
   failedMarkdownImages.value = next
   markdownImageFailureVersion.value += 1
 }

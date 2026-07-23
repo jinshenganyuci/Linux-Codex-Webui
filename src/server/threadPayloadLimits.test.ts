@@ -3,6 +3,7 @@ import {
   limitCommandOutputsInTurns,
   limitThreadCommandOutputs,
   THREAD_COMMAND_OUTPUT_MAX_BYTES,
+  THREAD_COMMAND_OUTPUT_TOTAL_MAX_BYTES,
   THREAD_COMMAND_OUTPUT_TRUNCATION_MARKER,
   THREAD_RESPONSE_TURN_LIMIT,
   trimAndLimitThreadCommandOutputs,
@@ -205,6 +206,197 @@ describe('thread command output payload limits', () => {
     expect(readItems(returnedTurns[0]!)[0]?.aggregatedOutputTruncated).toBe(true)
     expect(returnedTurns.slice(1).every((returnedTurn, index) => returnedTurn === pageTurns[index + 1])).toBe(true)
     expect('threadTurnStartIndex' in (limitedPage as Record<string, unknown>)).toBe(false)
+  })
+
+  it('caps thread/turns/list pages without trimming data or changing cursors', () => {
+    const pageTurns = Array.from({ length: THREAD_RESPONSE_TURN_LIMIT + 2 }, (_, index) => turn(
+      `native-turn-${index}`,
+      [index === 0
+        ? commandItem('native-command', `native-old\n${'n'.repeat(THREAD_COMMAND_OUTPUT_MAX_BYTES + 1)}\nnative-latest`)
+        : { id: `native-message-${index}`, type: 'agentMessage', text: 'kept' }],
+    ))
+    const source = {
+      data: pageTurns,
+      nextCursor: 'older-cursor',
+      backwardsCursor: 'newer-cursor',
+      pageMetadata: { untouched: true },
+    }
+
+    const limited = trimAndLimitThreadCommandOutputs('thread/turns/list', source) as {
+      data: Array<Record<string, unknown>>
+      nextCursor: string
+      backwardsCursor: string
+      pageMetadata: { untouched: boolean }
+    }
+
+    expect(limited).not.toBe(source)
+    expect(limited.data).toHaveLength(THREAD_RESPONSE_TURN_LIMIT + 2)
+    expect(limited.nextCursor).toBe('older-cursor')
+    expect(limited.backwardsCursor).toBe('newer-cursor')
+    expect(limited.pageMetadata).toBe(source.pageMetadata)
+    expect(readItems(limited.data[0]!)[0]?.aggregatedOutputTruncated).toBe(true)
+    expect((readItems(limited.data[0]!)[0]?.aggregatedOutput as string).endsWith('\nnative-latest')).toBe(true)
+    expect(limited.data.slice(1).every((returnedTurn, index) => returnedTurn === pageTurns[index + 1])).toBe(true)
+    expect(source.data).toHaveLength(THREAD_RESPONSE_TURN_LIMIT + 2)
+    expect(readItems(source.data[0]!)[0]?.aggregatedOutputTruncated).toBeUndefined()
+    expect('threadTurnStartIndex' in limited).toBe(false)
+  })
+
+  it('caps command items in thread/items/list while preserving entry and page envelopes', () => {
+    const oversizedCommand = commandItem(
+      'native-item-command',
+      `discarded\n${'i'.repeat(THREAD_COMMAND_OUTPUT_MAX_BYTES + 1)}\nitem-latest`,
+    )
+    const untouchedEntry = {
+      turnId: 'turn-2',
+      item: { id: 'message-2', type: 'agentMessage', text: 'same reference' },
+    }
+    const source = {
+      data: [
+        { turnId: 'turn-1', item: oversizedCommand, entryMetadata: 'preserved' },
+        untouchedEntry,
+      ],
+      nextCursor: 'next-item-cursor',
+      backwardsCursor: 'backwards-item-cursor',
+    }
+
+    const limited = trimAndLimitThreadCommandOutputs('thread/items/list', source) as {
+      data: Array<{ turnId: string; item: Record<string, unknown>; entryMetadata?: string }>
+      nextCursor: string
+      backwardsCursor: string
+    }
+
+    expect(limited.data).toHaveLength(2)
+    expect(limited.nextCursor).toBe('next-item-cursor')
+    expect(limited.backwardsCursor).toBe('backwards-item-cursor')
+    expect(limited.data[0]).not.toBe(source.data[0])
+    expect(limited.data[0]?.entryMetadata).toBe('preserved')
+    expect(limited.data[0]?.item.aggregatedOutputTruncated).toBe(true)
+    expect((limited.data[0]?.item.aggregatedOutput as string).endsWith('\nitem-latest')).toBe(true)
+    expect(limited.data[1]).toBe(untouchedEntry)
+    expect(oversizedCommand.aggregatedOutputTruncated).toBeUndefined()
+  })
+
+  it('honors descending item-page order when assigning the shared response budget', () => {
+    const source = {
+      data: ['newest', 'middle', 'oldest'].map((id) => ({
+        turnId: `turn-${id}`,
+        item: commandItem(id, `${id}-prefix\n${id[0]!.repeat(THREAD_COMMAND_OUTPUT_MAX_BYTES + 32)}\n${id}-tail`),
+      })),
+      nextCursor: 'older-page',
+    }
+
+    const limited = trimAndLimitThreadCommandOutputs(
+      'thread/items/list',
+      source,
+      { sortDirection: 'desc' },
+    ) as { data: Array<{ item: Record<string, unknown> }> }
+    const retainedOutputs = limited.data.map((entry) => entry.item.aggregatedOutput as string)
+
+    expect(retainedOutputs[0]).toContain('newest-tail')
+    expect(retainedOutputs[1]).toContain('middle-tail')
+    expect(retainedOutputs[2]).toBe('')
+    expect(retainedOutputs.reduce((total, output) => total + Buffer.byteLength(output, 'utf8'), 0)).toBe(
+      THREAD_COMMAND_OUTPUT_TOTAL_MAX_BYTES,
+    )
+  })
+
+  it('shares one 512 KiB budget across a response and keeps the newest commands first', () => {
+    const source = resultWithTurns(['oldest', 'middle', 'newest'].map((id) => turn(
+      `turn-${id}`,
+      [commandItem(id, `${id}-prefix\n${id[0]!.repeat(THREAD_COMMAND_OUTPUT_MAX_BYTES + 32)}\n${id}-tail`)],
+    )))
+
+    const limited = trimAndLimitThreadCommandOutputs('thread/read', source)
+    const outputs = readTurns(limited).map((limitedTurn) => (
+      readItems(limitedTurn)[0]!.aggregatedOutput as string
+    ))
+
+    expect(outputs[0]).toBe('')
+    expect(outputs[1]).toContain('middle-tail')
+    expect(outputs[2]).toContain('newest-tail')
+    expect(outputs.reduce((total, output) => total + Buffer.byteLength(output, 'utf8'), 0)).toBe(
+      THREAD_COMMAND_OUTPUT_TOTAL_MAX_BYTES,
+    )
+  })
+
+  it('caps thread/resume initialTurnsPage without applying the legacy ten-turn window to that page', () => {
+    const legacyTurns = Array.from(
+      { length: THREAD_RESPONSE_TURN_LIMIT + 1 },
+      (_, index) => turn(`legacy-resume-${index}`, [{ id: `legacy-message-${index}`, type: 'agentMessage' }]),
+    )
+    const initialTurnsPageCommandIndex = 2
+    const initialPageTurns = Array.from({ length: THREAD_RESPONSE_TURN_LIMIT + 3 }, (_, index) => turn(
+      `initial-page-turn-${index}`,
+      [index === initialTurnsPageCommandIndex
+        ? commandItem('initial-page-command', 'r'.repeat(THREAD_COMMAND_OUTPUT_MAX_BYTES + 1))
+        : { id: `initial-page-message-${index}`, type: 'agentMessage' }],
+    ))
+    const source = {
+      thread: { id: 'resume-thread', turns: legacyTurns },
+      initialTurnsPage: {
+        data: initialPageTurns,
+        nextCursor: 'initial-older-cursor',
+        backwardsCursor: 'initial-newer-cursor',
+      },
+      turnsBackwardsCursor: 'head-cursor',
+    }
+
+    const limited = trimAndLimitThreadCommandOutputs('thread/resume', source) as {
+      threadTurnStartIndex: number
+      thread: { turns: unknown[] }
+      initialTurnsPage: {
+        data: Array<Record<string, unknown>>
+        nextCursor: string
+        backwardsCursor: string
+      }
+      turnsBackwardsCursor: string
+    }
+
+    expect(limited.thread.turns).toHaveLength(THREAD_RESPONSE_TURN_LIMIT)
+    expect(limited.threadTurnStartIndex).toBe(1)
+    expect(limited.initialTurnsPage.data).toHaveLength(THREAD_RESPONSE_TURN_LIMIT + 3)
+    expect(limited.initialTurnsPage.nextCursor).toBe('initial-older-cursor')
+    expect(limited.initialTurnsPage.backwardsCursor).toBe('initial-newer-cursor')
+    expect(limited.turnsBackwardsCursor).toBe('head-cursor')
+    expect(readItems(limited.initialTurnsPage.data[initialTurnsPageCommandIndex]!)[0]?.aggregatedOutputTruncated).toBe(true)
+  })
+
+  it('reserves the shared resume budget for the native initial page before compatibility turns', () => {
+    const source = {
+      thread: {
+        id: 'resume-shared-budget',
+        turns: [turn('compatibility-turn', [commandItem(
+          'compatibility-command',
+          `compatibility\n${'c'.repeat(THREAD_COMMAND_OUTPUT_MAX_BYTES + 32)}\ncompatibility-tail`,
+        )])],
+      },
+      initialTurnsPage: {
+        data: ['newest-page', 'older-page'].map((id) => turn(
+          `turn-${id}`,
+          [commandItem(id, `${id}\n${id[0]!.repeat(THREAD_COMMAND_OUTPUT_MAX_BYTES + 32)}\n${id}-tail`)],
+        )),
+        nextCursor: null,
+      },
+    }
+
+    const limited = trimAndLimitThreadCommandOutputs('thread/resume', source, {
+      initialTurnsPage: { sortDirection: 'desc' },
+    }) as {
+      thread: { turns: Array<Record<string, unknown>> }
+      initialTurnsPage: { data: Array<Record<string, unknown>> }
+    }
+    const initialOutputs = limited.initialTurnsPage.data.map((limitedTurn) => (
+      readItems(limitedTurn)[0]!.aggregatedOutput as string
+    ))
+    const compatibilityOutput = readItems(limited.thread.turns[0]!)[0]!.aggregatedOutput as string
+
+    expect(initialOutputs[0]).toContain('newest-page-tail')
+    expect(initialOutputs[1]).toContain('older-page-tail')
+    expect(initialOutputs.reduce((total, output) => total + Buffer.byteLength(output, 'utf8'), 0)).toBe(
+      THREAD_COMMAND_OUTPUT_TOTAL_MAX_BYTES,
+    )
+    expect(compatibilityOutput).toBe('')
   })
 
   it('caps session-recovered and snapshot-merged commands after the final live-state merge without trimming history', () => {

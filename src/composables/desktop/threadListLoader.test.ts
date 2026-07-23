@@ -23,6 +23,7 @@ function thread(id: string, projectName: string, updatedAtIso: string): UiThread
     preview: '',
     unread: false,
     inProgress: false,
+    historyMode: 'legacy',
   }
 }
 

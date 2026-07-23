@@ -45,6 +45,9 @@ export type {
 } from './projectGateway'
 import {
   readActiveTurnIdFromResponse,
+  normalizePaginatedThreadItemsV2,
+  normalizePaginatedThreadTurnsV2,
+  normalizeThreadHistoryMode,
   normalizeThreadGroupsV2,
   normalizeThreadMessagesV2,
   normalizeThreadSummaryV2,
@@ -84,8 +87,19 @@ import type {
   UiAgentProgressPhase,
   UiAgentProgressStatus,
   UiTurnProgress,
+  ThreadHistoryDetail,
+  ThreadHistoryMode,
+  ThreadHistoryPage,
+  ThreadTurnItemsPage,
 } from '../types/codex'
 import { normalizePathForUi } from '../pathUtils.js'
+
+export type {
+  ThreadHistoryDetail,
+  ThreadHistoryMode,
+  ThreadHistoryPage,
+  ThreadTurnItemsPage,
+} from '../types/codex'
 
 type CurrentModelConfig = {
   model: string
@@ -562,6 +576,8 @@ export function pickCodexRateLimitSnapshot(payload: unknown): UiRateLimitSnapsho
 const LONG_RPC_METHODS = new Set([
   'thread/read',
   'thread/resume',
+  'thread/turns/list',
+  'thread/items/list',
   'thread/start',
   'thread/fork',
   'turn/start',
@@ -638,6 +654,19 @@ function buildTurnIndexByTurnId(payload: ThreadReadResponse, baseTurnIndex = 0):
   }
 
   return lookup
+}
+
+function readThreadTurnIds(payload: ThreadReadResponse): string[] {
+  const turns = Array.isArray(payload.thread.turns) ? payload.thread.turns : []
+  const seen = new Set<string>()
+  const turnIds: string[] = []
+  for (const turn of turns) {
+    const turnId = typeof turn?.id === 'string' ? turn.id.trim() : ''
+    if (!turnId || seen.has(turnId)) continue
+    seen.add(turnId)
+    turnIds.push(turnId)
+  }
+  return turnIds
 }
 
 function readThreadTurnStartIndex(payload: ThreadReadResponse): number {
@@ -757,11 +786,50 @@ export type ArchivedThreadsPage = {
 
 export type ThreadTurnPage = {
   messages: UiMessage[]
+  turnIds: string[]
   inProgress: boolean
   activeTurnId: string
   hasMoreOlder: boolean
   startTurnIndex: number
   turnIndexByTurnId: ThreadTurnIndexById
+}
+
+export type OlderThreadHistoryPageOptions = {
+  historyMode: ThreadHistoryMode
+  cursor: string | null
+  beforeTurnId?: string
+  limit?: number
+}
+
+type NativeTurnsPage = {
+  data: unknown[]
+  nextCursor?: string | null
+  backwardsCursor?: string | null
+}
+
+type NativeThreadResumeResponse = ThreadResumeResponse & {
+  initialTurnsPage?: NativeTurnsPage | null
+  turnsBackwardsCursor?: string | null
+  itemsBackwardsCursor?: string | null
+}
+
+type NativeItemsPage = {
+  data: unknown[]
+  nextCursor?: string | null
+  backwardsCursor?: string | null
+}
+
+export type ThreadItemsListOptions = {
+  turnId?: string | null
+  cursor?: string | null
+  limit?: number
+  sortDirection?: 'asc' | 'desc'
+}
+
+export type ThreadItemsListPage = {
+  data: Array<{ turnId: string; item: unknown }>
+  nextCursor: string | null
+  backwardsCursor: string | null
 }
 
 export type ThreadRuntimeState = {
@@ -997,9 +1065,11 @@ async function getThreadDetailV2(threadId: string): Promise<{
   model: string
   modelProvider: string
   messages: UiMessage[]
+  turnIds: string[]
   inProgress: boolean
   activeTurnId: string
   hasMoreOlder: boolean
+  startTurnIndex: number
   turnIndexByTurnId: ThreadTurnIndexById
 }> {
   const payload = await callRpc<ThreadReadResponse>('thread/read', {
@@ -1012,9 +1082,11 @@ async function getThreadDetailV2(threadId: string): Promise<{
     model: normalizeThreadModelFromPayload(payload),
     modelProvider: normalizeThreadModelProviderFromPayload(payload),
     messages: normalized,
+    turnIds: readThreadTurnIds(payload),
     inProgress: readThreadInProgressFromResponse(payload),
     activeTurnId: readActiveTurnIdFromResponse(payload),
     hasMoreOlder: startTurnIndex > 0,
+    startTurnIndex,
     turnIndexByTurnId: buildTurnIndexByTurnId(payload, startTurnIndex),
   }
 }
@@ -1044,6 +1116,7 @@ async function getOlderThreadMessagesV2(threadId: string, beforeTurnId: string, 
 
   return {
     messages: normalizeThreadMessagesV2(payload.result, startTurnIndex),
+    turnIds: readThreadTurnIds(payload.result),
     inProgress: readThreadInProgressFromResponse(payload.result),
     activeTurnId: readActiveTurnIdFromResponse(payload.result),
     hasMoreOlder: payload.hasMoreOlder === true,
@@ -1119,28 +1192,376 @@ export async function getThreadSummary(threadId: string): Promise<UiThread> {
   }
 }
 
-export async function getThreadDetail(threadId: string): Promise<{
-  model: string
-  modelProvider: string
-  messages: UiMessage[]
-  inProgress: boolean
-  activeTurnId: string
-  hasMoreOlder: boolean
-  turnIndexByTurnId: ThreadTurnIndexById
-}> {
-  try {
-    return await getThreadDetailV2(threadId)
-  } catch (error) {
-    throw normalizeCodexApiError(error, `Failed to load thread ${threadId}`, 'thread/read')
+export async function getThreadDetail(
+  threadId: string,
+  historyMode: ThreadHistoryMode = 'legacy',
+): Promise<ThreadHistoryDetail> {
+  return getThreadHistoryDetail(threadId, historyMode)
+}
+
+function readNativeCursor(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function dedupeNativeDescendingTurns(turns: unknown[]): unknown[] {
+  const order: string[] = []
+  const turnById = new Map<string, unknown>()
+  const anonymousTurns: unknown[] = []
+
+  for (const turnValue of turns) {
+    const turn = asRecord(turnValue)
+    const turnId = readString(turn?.id)?.trim() ?? ''
+    if (!turnId) {
+      anonymousTurns.push(turnValue)
+      continue
+    }
+    if (!turnById.has(turnId)) order.push(turnId)
+    const current = asRecord(turnById.get(turnId))
+    const currentItemsView = readString(current?.itemsView)
+    const nextItemsView = readString(turn?.itemsView)
+    if (!current || currentItemsView !== 'full' || nextItemsView === 'full') {
+      turnById.set(turnId, turnValue)
+    }
+  }
+
+  return [...order.map((turnId) => turnById.get(turnId)), ...anonymousTurns]
+    .filter((turn): turn is unknown => turn !== undefined)
+}
+
+function normalizeNativeTurnsHistoryPage(payload: NativeTurnsPage): ThreadHistoryPage {
+  const descendingTurns = Array.isArray(payload.data) ? payload.data : []
+  const normalized = normalizePaginatedThreadTurnsV2(dedupeNativeDescendingTurns(descendingTurns).reverse())
+  const olderCursor = readNativeCursor(payload.nextCursor)
+  return {
+    historyMode: 'paginated',
+    messages: normalized.messages,
+    turnIds: normalized.turnIds,
+    inProgress: normalized.inProgress,
+    activeTurnId: normalized.activeTurnId,
+    hasMoreOlder: olderCursor !== null,
+    olderCursor,
+    startTurnIndex: null,
+    turnIndexByTurnId: {},
   }
 }
 
-export async function getOlderThreadMessages(threadId: string, beforeTurnId: string, limit?: number): Promise<ThreadTurnPage> {
-  try {
-    return await getOlderThreadMessagesV2(threadId, beforeTurnId, limit)
-  } catch (error) {
-    throw normalizeCodexApiError(error, `Failed to load earlier messages for thread ${threadId}`, 'thread/read')
+function asNativeTurnsPage(value: unknown): NativeTurnsPage | null {
+  const record = asRecord(value)
+  if (!record || !Array.isArray(record.data)) return null
+  return {
+    data: record.data,
+    nextCursor: readNativeCursor(record.nextCursor),
+    backwardsCursor: readNativeCursor(record.backwardsCursor),
   }
+}
+
+async function loadPaginatedThreadHistoryDetail(threadId: string): Promise<ThreadHistoryDetail> {
+  const payload = await callRpc<NativeThreadResumeResponse>('thread/resume', {
+    threadId,
+    excludeTurns: true,
+    initialTurnsPage: {
+      limit: 10,
+      sortDirection: 'desc',
+      itemsView: 'full',
+    },
+  })
+  let page = asNativeTurnsPage(payload.initialTurnsPage)
+
+  if (!page) {
+    // 0.145 defines this as an inclusive head cursor for a descending turns page.
+    const fallbackCursor = readNativeCursor(payload.turnsBackwardsCursor)
+    if (fallbackCursor) {
+      page = await callRpc<NativeTurnsPage>('thread/turns/list', {
+        threadId,
+        cursor: fallbackCursor,
+        limit: 10,
+        sortDirection: 'desc',
+        itemsView: 'full',
+      })
+    }
+  }
+
+  const normalizedPage = normalizeNativeTurnsHistoryPage(page ?? { data: [] })
+  const responseInProgress = readThreadInProgressFromResponse(payload)
+  const responseActiveTurnId = readActiveTurnIdFromResponse(payload)
+  return {
+    ...normalizedPage,
+    model: normalizeThreadModelFromPayload(payload),
+    modelProvider: normalizeThreadModelProviderFromPayload(payload),
+    inProgress: normalizedPage.inProgress || responseInProgress,
+    activeTurnId: normalizedPage.activeTurnId || responseActiveTurnId,
+    resumed: true,
+    materialized: true,
+  }
+}
+
+const paginatedHistoryDetailByThreadId = new Map<string, Promise<ThreadHistoryDetail>>()
+
+function getPaginatedThreadHistoryDetail(threadId: string): Promise<ThreadHistoryDetail> {
+  const existing = paginatedHistoryDetailByThreadId.get(threadId)
+  if (existing) return existing
+
+  const promise = loadPaginatedThreadHistoryDetail(threadId)
+  paginatedHistoryDetailByThreadId.set(threadId, promise)
+  void promise.finally(() => {
+    if (paginatedHistoryDetailByThreadId.get(threadId) === promise) {
+      paginatedHistoryDetailByThreadId.delete(threadId)
+    }
+  }).catch(() => undefined)
+  return promise
+}
+
+export async function getThreadHistoryDetail(
+  threadId: string,
+  historyMode: ThreadHistoryMode,
+): Promise<ThreadHistoryDetail> {
+  const normalizedMode = normalizeThreadHistoryMode(historyMode)
+  try {
+    if (normalizedMode === 'paginated') {
+      return await getPaginatedThreadHistoryDetail(threadId)
+    }
+
+    const detail = await getThreadDetailV2(threadId)
+    return {
+      historyMode: 'legacy',
+      model: detail.model,
+      modelProvider: detail.modelProvider,
+      messages: detail.messages,
+      turnIds: detail.turnIds,
+      inProgress: detail.inProgress,
+      activeTurnId: detail.activeTurnId,
+      hasMoreOlder: detail.hasMoreOlder,
+      olderCursor: detail.hasMoreOlder ? detail.turnIds[0] ?? null : null,
+      startTurnIndex: detail.startTurnIndex,
+      turnIndexByTurnId: detail.turnIndexByTurnId,
+      resumed: false,
+      materialized: false,
+    }
+  } catch (error) {
+    const method = normalizedMode === 'paginated' ? 'thread/resume' : 'thread/read'
+    throw normalizeCodexApiError(error, `Failed to load thread ${threadId}`, method)
+  }
+}
+
+const olderThreadHistoryPageByKey = new Map<string, Promise<ThreadHistoryPage>>()
+const threadTurnItemsPageByKey = new Map<string, Promise<ThreadTurnItemsPage | null>>()
+const fullThreadCommandOutputByKey = new Map<string, Promise<string>>()
+
+function coalesceHistoryRequest<T>(
+  inflight: Map<string, Promise<T>>,
+  key: string,
+  load: () => Promise<T>,
+): Promise<T> {
+  const existing = inflight.get(key)
+  if (existing) return existing
+  const promise = load()
+  inflight.set(key, promise)
+  void promise.finally(() => {
+    if (inflight.get(key) === promise) inflight.delete(key)
+  }).catch(() => undefined)
+  return promise
+}
+
+export function getFullThreadCommandOutput(
+  threadId: string,
+  turnId: string,
+  itemId: string,
+): Promise<string> {
+  const normalizedThreadId = threadId.trim()
+  const normalizedTurnId = turnId.trim()
+  const normalizedItemId = itemId.trim()
+  if (!normalizedThreadId || !normalizedTurnId || !normalizedItemId) {
+    return Promise.reject(new Error('threadId, turnId, and itemId are required to load command output'))
+  }
+
+  const key = JSON.stringify([normalizedThreadId, normalizedTurnId, normalizedItemId])
+  return coalesceHistoryRequest(fullThreadCommandOutputByKey, key, async () => {
+    try {
+      const response = await fetchWithTimeout('/codex-api/thread-command-output', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          threadId: normalizedThreadId,
+          turnId: normalizedTurnId,
+          itemId: normalizedItemId,
+        }),
+      }, { timeout: 'long', operation: 'thread-command-output' })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(extractErrorMessage(payload, `Command output request failed with HTTP ${response.status}`))
+      }
+      const output = asRecord(asRecord(payload)?.data)?.output
+      if (typeof output !== 'string') {
+        throw new Error('Command output response did not include data.output')
+      }
+      return output
+    } catch (error) {
+      throw normalizeCodexApiError(error, 'Failed to load full command output', 'thread-command-output')
+    }
+  })
+}
+
+export function getOlderThreadHistoryPage(
+  threadId: string,
+  options: OlderThreadHistoryPageOptions,
+): Promise<ThreadHistoryPage> {
+  const historyMode = normalizeThreadHistoryMode(options.historyMode)
+  const limit = Math.min(100, Math.max(1, Math.floor(options.limit ?? 10)))
+  const cursor = readNativeCursor(options.cursor)
+  const beforeTurnId = typeof options.beforeTurnId === 'string' && options.beforeTurnId.trim().length > 0
+    ? options.beforeTurnId.trim()
+    : null
+  const key = JSON.stringify([threadId, historyMode, cursor, beforeTurnId, limit])
+
+  return coalesceHistoryRequest(olderThreadHistoryPageByKey, key, async () => {
+    try {
+      if (historyMode === 'legacy') {
+        const legacyBeforeTurnId = beforeTurnId ?? cursor
+        if (!legacyBeforeTurnId) {
+          throw new Error('Legacy thread history requires beforeTurnId')
+        }
+        const page = await getOlderThreadMessagesV2(threadId, legacyBeforeTurnId, limit)
+        return {
+          historyMode: 'legacy',
+          messages: page.messages,
+          turnIds: page.turnIds,
+          inProgress: page.inProgress,
+          activeTurnId: page.activeTurnId,
+          hasMoreOlder: page.hasMoreOlder,
+          olderCursor: page.hasMoreOlder ? page.turnIds[0] ?? null : null,
+          startTurnIndex: page.startTurnIndex,
+          turnIndexByTurnId: page.turnIndexByTurnId,
+        }
+      }
+
+      const payload = await callRpc<NativeTurnsPage>('thread/turns/list', {
+        threadId,
+        cursor,
+        limit,
+        sortDirection: 'desc',
+        itemsView: 'full',
+      })
+      return normalizeNativeTurnsHistoryPage(payload)
+    } catch (error) {
+      const method = historyMode === 'paginated' ? 'thread/turns/list' : 'thread/read'
+      throw normalizeCodexApiError(error, `Failed to load earlier messages for thread ${threadId}`, method)
+    }
+  })
+}
+
+const nativeThreadItemsPageByKey = new Map<string, Promise<ThreadItemsListPage | null>>()
+let nativeThreadItemsListUnsupported = false
+
+function isExplicitUnsupportedRpcError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /(?:\b-32601\b|method\s+not\s+found|thread\/items\/list[^\n]*not\s+supported|not\s+supported[^\n]*thread\/items\/list)/iu.test(message)
+}
+
+function normalizeNativeItemsListPage(payload: NativeItemsPage): ThreadItemsListPage {
+  const order: string[] = []
+  const entryByKey = new Map<string, { turnId: string; item: unknown }>()
+  const anonymousEntries: Array<{ turnId: string; item: unknown }> = []
+  const entries = Array.isArray(payload.data) ? payload.data : []
+
+  for (const entryValue of entries) {
+    const entry = asRecord(entryValue)
+    const turnId = readString(entry?.turnId)?.trim() ?? ''
+    const item = asRecord(entry?.item)
+    if (!turnId || !item) continue
+    const itemId = readString(item.id)
+    if (!itemId) {
+      anonymousEntries.push({ turnId, item: entry?.item })
+      continue
+    }
+    const key = `${turnId}\u0000${itemId}`
+    if (!entryByKey.has(key)) order.push(key)
+    entryByKey.set(key, { turnId, item: entry?.item })
+  }
+
+  return {
+    data: [
+      ...order.map((key) => entryByKey.get(key) as { turnId: string; item: unknown }),
+      ...anonymousEntries,
+    ],
+    nextCursor: readNativeCursor(payload.nextCursor),
+    backwardsCursor: readNativeCursor(payload.backwardsCursor),
+  }
+}
+
+export function listThreadItems(
+  threadId: string,
+  options: ThreadItemsListOptions = {},
+): Promise<ThreadItemsListPage | null> {
+  if (nativeThreadItemsListUnsupported) return Promise.resolve(null)
+
+  const turnId = typeof options.turnId === 'string' && options.turnId.trim().length > 0
+    ? options.turnId.trim()
+    : null
+  const cursor = readNativeCursor(options.cursor)
+  const limit = Math.min(100, Math.max(1, Math.floor(options.limit ?? 100)))
+  const sortDirection = options.sortDirection === 'desc' ? 'desc' : 'asc'
+  const key = JSON.stringify([threadId, turnId, cursor, limit, sortDirection])
+
+  return coalesceHistoryRequest(nativeThreadItemsPageByKey, key, async () => {
+    if (nativeThreadItemsListUnsupported) return null
+    try {
+      const payload = await callRpc<NativeItemsPage>('thread/items/list', {
+        threadId,
+        turnId,
+        cursor,
+        limit,
+        sortDirection,
+      })
+      return normalizeNativeItemsListPage(payload)
+    } catch (error) {
+      if (isExplicitUnsupportedRpcError(error)) {
+        nativeThreadItemsListUnsupported = true
+        return null
+      }
+      throw normalizeCodexApiError(error, `Failed to load items for thread ${threadId}`, 'thread/items/list')
+    }
+  })
+}
+
+/** `null` means the runtime does not support item pagination; an empty page remains a page object. */
+export function getThreadTurnItemsPage(
+  threadId: string,
+  turnId: string,
+  cursor: string | null = null,
+): Promise<ThreadTurnItemsPage | null> {
+  const normalizedCursor = readNativeCursor(cursor)
+  const key = JSON.stringify([threadId, turnId, normalizedCursor])
+  return coalesceHistoryRequest(threadTurnItemsPageByKey, key, async () => {
+    try {
+      const payload = await listThreadItems(threadId, {
+        turnId,
+        cursor: normalizedCursor,
+        limit: 100,
+        sortDirection: 'asc',
+      })
+      if (!payload) return null
+      return {
+        messages: normalizePaginatedThreadItemsV2(payload.data),
+        nextCursor: readNativeCursor(payload.nextCursor),
+      }
+    } catch (error) {
+      throw normalizeCodexApiError(error, `Failed to load items for turn ${turnId}`, 'thread/items/list')
+    }
+  })
+}
+
+export async function getOlderThreadMessages(
+  threadId: string,
+  beforeTurnId: string,
+  limit?: number,
+  historyMode: ThreadHistoryMode = 'legacy',
+): Promise<ThreadHistoryPage> {
+  return getOlderThreadHistoryPage(threadId, {
+    historyMode,
+    cursor: historyMode === 'paginated' ? beforeTurnId : null,
+    beforeTurnId: historyMode === 'legacy' ? beforeTurnId : undefined,
+    limit,
+  })
 }
 
 function normalizeReviewLine(value: unknown): UiReviewLine | null {
