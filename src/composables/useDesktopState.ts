@@ -5241,9 +5241,7 @@ export function useDesktopState() {
         return
       }
 
-      const needsResume = resumedThreadById.value[threadId] !== true
-      const resumedThread = needsResume ? await resumeThread(threadId) : null
-      const detail = resumedThread ?? await getThreadDetail(threadId)
+      const detail = await getThreadDetail(threadId)
 
       if (detail.modelProvider) {
         setThreadModelProviderId(threadId, detail.modelProvider)
@@ -5251,13 +5249,6 @@ export function useDesktopState() {
       if (detail.model && !readThreadModelPreference(threadId) && !hasCachedThreadModelSelection(threadId)) {
         setThreadModelId(threadId, detail.model.trim())
       }
-      if (resumedThread) {
-        resumedThreadById.value = {
-          ...resumedThreadById.value,
-          [threadId]: true,
-        }
-      }
-
       const { messages: nextMessages, inProgress, activeTurnId, turnIndexByTurnId } = detail
       const knownRuntimeState = latestRuntimeStateByThreadId.get(threadId)
       const hasOptimisticTurnStart = optimisticTurnStartedAtByThreadId.has(threadId)

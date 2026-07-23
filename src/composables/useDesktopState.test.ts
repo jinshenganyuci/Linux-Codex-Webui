@@ -169,6 +169,15 @@ beforeEach(() => {
   vi.clearAllMocks()
   gatewayMocks.archiveThread.mockResolvedValue(undefined)
   gatewayMocks.permanentlyDeleteThread.mockResolvedValue(undefined)
+  gatewayMocks.getThreadDetail.mockResolvedValue({
+    model: '',
+    modelProvider: '',
+    messages: [],
+    inProgress: false,
+    activeTurnId: '',
+    hasMoreOlder: false,
+    turnIndexByTurnId: {},
+  })
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
   gatewayMocks.getThreadModelPreferences.mockResolvedValue({})
   gatewayMocks.getThreadRuntimeStates.mockResolvedValue([])
@@ -533,6 +542,28 @@ describe('collaboration mode selection', () => {
 })
 
 describe('immediate sent-message rendering', () => {
+  it('reads a thread without resuming it and resumes only when the user sends', async () => {
+    installTestWindow()
+    gatewayMocks.resumeThread.mockResolvedValue({ model: 'gpt-5.5', modelProvider: 'openai' })
+    gatewayMocks.startThreadTurn.mockResolvedValue('turn-after-read')
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-read-only')
+
+    await state.loadMessages('thread-read-only')
+
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledWith('thread-read-only')
+    expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
+
+    await state.sendMessageToSelectedThread('start only now')
+
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledWith('thread-read-only')
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.resumeThread.mock.invocationCallOrder[0]).toBeLessThan(
+      gatewayMocks.startThreadTurn.mock.invocationCallOrder[0],
+    )
+  })
+
   it('shows an existing-thread user message and thinking state before start-turn resolves', async () => {
     installTestWindow()
     const startedTurn = deferred<string>()
@@ -564,7 +595,7 @@ describe('immediate sent-message rendering', () => {
 
   it('reveals an optimistic message immediately while the selected thread is still loading', async () => {
     installTestWindow()
-    const resumedThread = deferred<{
+    const threadDetail = deferred<{
       messages: Array<{ id: string; role: 'assistant'; text: string; messageType: string }>
       inProgress: boolean
       activeTurnId: string
@@ -573,7 +604,8 @@ describe('immediate sent-message rendering', () => {
       model: string
       modelProvider: string
     }>()
-    gatewayMocks.resumeThread.mockReturnValue(resumedThread.promise)
+    gatewayMocks.getThreadDetail.mockReturnValue(threadDetail.promise)
+    gatewayMocks.resumeThread.mockResolvedValue({ model: '', modelProvider: '' })
     gatewayMocks.startThreadTurn.mockResolvedValue('turn-after-load')
 
     const state = useDesktopState()
@@ -588,7 +620,7 @@ describe('immediate sent-message rendering', () => {
     expect(state.isLoadingMessages.value).toBe(false)
     expect(state.selectedLiveOverlay.value).toMatchObject({ activityLabel: 'Thinking activity' })
 
-    resumedThread.resolve({
+    threadDetail.resolve({
       messages: [{ id: 'assistant-old', role: 'assistant', text: 'Previous response', messageType: 'agentMessage' }],
       inProgress: false,
       activeTurnId: '',
@@ -604,7 +636,7 @@ describe('immediate sent-message rendering', () => {
   it('replaces stale completed progress with a fresh thinking state on send', async () => {
     installTestWindow()
     gatewayMocks.getPendingServerRequests.mockResolvedValue([])
-    gatewayMocks.resumeThread.mockResolvedValue({
+    gatewayMocks.getThreadDetail.mockResolvedValue({
       messages: [{ id: 'assistant-old', role: 'assistant', text: 'Previous response', messageType: 'agentMessage' }],
       inProgress: false,
       activeTurnId: '',
@@ -613,6 +645,7 @@ describe('immediate sent-message rendering', () => {
       model: 'gpt-5.5',
       modelProvider: 'openai',
     })
+    gatewayMocks.resumeThread.mockResolvedValue({ model: 'gpt-5.5', modelProvider: 'openai' })
     gatewayMocks.getAgentProgress.mockResolvedValue(progressSnapshot({
       threadId: 'thread-completed-progress',
       turnId: 'turn-completed',
@@ -1457,7 +1490,7 @@ describe('provider model selection', () => {
       },
       'gpt-5.5',
     ))
-    gatewayMocks.resumeThread.mockResolvedValue({
+    gatewayMocks.getThreadDetail.mockResolvedValue({
       model: 'gpt-5.5',
       modelProvider: 'openai',
       messages: [],
@@ -1509,7 +1542,7 @@ describe('provider model selection', () => {
       speedMode: 'standard',
     })
     gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities('gpt-5.5', 'gpt-5.6-sol'))
-    gatewayMocks.resumeThread.mockResolvedValue({
+    gatewayMocks.getThreadDetail.mockResolvedValue({
       model: 'gpt-5.5',
       modelProvider: 'openai',
       messages: [],
@@ -1552,7 +1585,7 @@ describe('provider model selection', () => {
       speedMode: 'standard',
     })
     gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities('gpt-5.5'))
-    gatewayMocks.resumeThread.mockResolvedValue({
+    gatewayMocks.getThreadDetail.mockResolvedValue({
       model: 'gpt-5.5',
       modelProvider: 'openai',
       messages: [],
@@ -1733,7 +1766,7 @@ describe('provider model selection', () => {
       }
       return modelCapabilities('gpt-5.5', 'gpt-5.4-mini')
     })
-    gatewayMocks.resumeThread.mockResolvedValue({
+    gatewayMocks.getThreadDetail.mockResolvedValue({
       model: 'proxy-default',
       modelProvider: 'myproxy',
       messages: [],
@@ -1789,7 +1822,7 @@ describe('provider model selection', () => {
       }
       return modelCapabilities('gpt-5.5', 'gpt-5.4-mini')
     })
-    gatewayMocks.resumeThread.mockResolvedValue({
+    gatewayMocks.getThreadDetail.mockResolvedValue({
       model: 'proxy-default',
       modelProvider: 'myproxy',
       messages: [],
@@ -2040,7 +2073,7 @@ describe('provider model selection', () => {
       speedMode: 'standard',
     })
     gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities('gpt-5.5', 'gpt-5.4-mini'))
-    gatewayMocks.resumeThread.mockRejectedValue(new Error('thread not found'))
+    gatewayMocks.getThreadDetail.mockRejectedValue(new Error('thread not found'))
 
     const state = useDesktopState()
     state.primeSelectedThread('missing-thread')
@@ -2055,7 +2088,8 @@ describe('provider model selection', () => {
 
     await state.ensureThreadMessagesLoaded('missing-thread', { silent: true })
     await state.loadMessages('missing-thread')
-    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
   })
 })
 
@@ -2746,7 +2780,7 @@ describe('authoritative thread runtime reconciliation', () => {
       return vi.fn()
     })
     gatewayMocks.getPendingServerRequests.mockResolvedValue([])
-    gatewayMocks.resumeThread.mockResolvedValue({
+    gatewayMocks.getThreadDetail.mockResolvedValue({
       messages: [],
       inProgress: true,
       activeTurnId: 'pending:local-turn',
