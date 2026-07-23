@@ -469,7 +469,6 @@ const zhCN: Record<string, string> = {
   'Enable plan mode': '开启规划模式',
   'Disable plan mode': '关闭规划模式',
   'No messages in this thread yet.': '此线程还没有消息。',
-  'Load earlier messages': '加载更早的消息',
   'Loading…': '加载中…',
   '(command)': '（命令）',
   '(no output)': '（无输出）',

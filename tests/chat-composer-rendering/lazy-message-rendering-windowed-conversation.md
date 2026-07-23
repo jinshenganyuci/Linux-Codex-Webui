@@ -12,7 +12,7 @@
 1. Open a thread with 60+ messages.
 2. Observe that the conversation list does **not** show all messages immediately — only the most recent ~50 are rendered.
 3. Verify the latest messages are visible and the chat is scrolled to the bottom.
-4. Confirm a "Load earlier messages" button appears at the top of the visible list.
+4. Confirm no persistent older-message button appears at the top of the visible list.
 
 #### Steps — scroll-triggered load
 
@@ -20,36 +20,30 @@
 6. When the scroll position reaches within ~200 px of the top, verify that the previous 30 messages appear automatically above the current ones.
 7. Confirm the viewport does **not** jump — the messages you were reading stay in view.
 8. Repeat scrolling up to verify additional chunks load on demand.
-9. Once all messages are loaded, verify the "Load earlier messages" button disappears.
-
-#### Steps — manual load button
-
-10. Reload the page and open the same long thread.
-11. Click "Load earlier messages" button without scrolling.
-12. Verify 30 older messages are prepended and scroll position is preserved.
+9. Once all messages are loaded, confirm reaching the top no longer prepends another batch.
 
 #### Steps — live session growth
 
-13. Start an active Codex session (or send many messages in quick succession).
-14. Let the conversation exceed 50 messages while staying scrolled to the bottom.
-15. Verify the rendered count stays bounded (top of the DOM list advances as new messages arrive).
-16. Scroll up and confirm "Load earlier messages" works to reveal trimmed messages.
+10. Start an active Codex session (or send many messages in quick succession).
+11. Let the conversation exceed 50 messages while staying scrolled to the bottom.
+12. Verify the rendered count stays bounded (top of the DOM list advances as new messages arrive).
+13. Scroll up to the top and confirm older trimmed messages load automatically.
 
 #### Steps — rollback / message shrink
 
-17. In a thread with a turn that can be rolled back, trigger a rollback.
-18. Verify the conversation does **not** go blank — messages still render after the list shrinks.
-19. Confirm `renderWindowStart` recovers gracefully and earlier messages remain accessible.
+14. In a thread with a turn that can be rolled back, trigger a rollback.
+15. Verify the conversation does **not** go blank — messages still render after the list shrinks.
+16. Confirm `renderWindowStart` recovers gracefully and earlier messages remain accessible.
 
 #### Steps — collapsed command output and historical payload limit
 
-20. Reload the thread, leave the known-output command collapsed, and select its `.command-execution-block` in the Elements panel.
-21. Confirm the block contains no `pre.cmd-output` element. As an exact console check, run `$0.querySelectorAll('pre.cmd-output').length` with the block selected and verify the result is `0`.
-22. Expand the known-output command and rerun the same check; verify the result is `1`, and verify the `<pre>` contains the complete first line, intermediate text, and final line without an omission marker.
-23. Collapse the command again and verify its `pre.cmd-output` is removed from the DOM, not merely hidden with CSS.
-24. Reload the oversized historical fixture while recording Network traffic. Inspect the relevant history response and locate the oversized `commandExecution` item.
-25. Verify that item has `aggregatedOutputTruncated: true`, `aggregatedOutputOriginalBytes` greater than `262144`, and `aggregatedOutput` beginning with `[较早输出已省略]\n` while retaining the fixture's unique final marker.
-26. Expand that command, select its `pre.cmd-output`, and run the following console expression:
+17. Reload the thread, leave the known-output command collapsed, and select its `.command-execution-block` in the Elements panel.
+18. Confirm the block contains no `pre.cmd-output` element. As an exact console check, run `$0.querySelectorAll('pre.cmd-output').length` with the block selected and verify the result is `0`.
+19. Expand the known-output command and rerun the same check; verify the result is `1`, and verify the `<pre>` contains the complete first line, intermediate text, and final line without an omission marker.
+20. Collapse the command again and verify its `pre.cmd-output` is removed from the DOM, not merely hidden with CSS.
+21. Reload the oversized historical fixture while recording Network traffic. Inspect the relevant history response and locate the oversized `commandExecution` item.
+22. Verify that item has `aggregatedOutputTruncated: true`, `aggregatedOutputOriginalBytes` greater than `262144`, and `aggregatedOutput` beginning with `[较早输出已省略]\n` while retaining the fixture's unique final marker.
+23. Expand that command, select its `pre.cmd-output`, and run the following console expression:
     ```js
     ({
       byteLength: new TextEncoder().encode($0.textContent ?? '').byteLength,
@@ -58,11 +52,11 @@
       earlyTextRemoved: !($0.textContent ?? '').includes('<unique-early-marker>'),
     })
     ```
-27. Verify `byteLength` is at most `262144` and all three Boolean checks are `true`. Collapse it and confirm the `<pre>` is removed again.
+24. Verify `byteLength` is at most `262144` and all three Boolean checks are `true`. Collapse it and confirm the `<pre>` is removed again.
 
 #### Expected Results
 - Only ≤50 messages are in the DOM on initial load.
-- Scrolling to the top (or clicking the button) appends older messages without a viewport jump.
+- Scrolling to the top appends older messages without a viewport jump; no persistent older-message button is shown.
 - During live output, the rendered window stays bounded; old messages are trimmed from the top while the user follows the bottom.
 - After a rollback the conversation remains visible; no blank screen.
 - A collapsed command mounts no output `<pre>` or output text; expansion mounts one accessible output region, and collapsing it unmounts the `<pre>` again.

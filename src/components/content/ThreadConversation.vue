@@ -19,16 +19,6 @@
       @touchstart.passive="onConversationUserScrollIntent"
       @wheel.passive="onConversationUserScrollIntent"
     >
-      <li v-if="hasMoreAbove" class="conversation-load-more">
-        <button
-          type="button"
-          class="load-more-button"
-          :disabled="isLoadingMore || isLoadingPersistedAbove"
-          @click="loadMoreAbove"
-        >
-          {{ isLoadingMore || isLoadingPersistedAbove ? t('Loading…') : t('Load earlier messages') }}
-        </button>
-      </li>
       <template v-for="message in visibleMessages" :key="message.id">
       <li
         v-if="!hiddenGroupedCommandIds.has(message.id) && !hiddenFileChangeMessageIds.has(message.id)"
@@ -3205,18 +3195,6 @@ onBeforeUnmount(() => {
 
 .conversation-list {
   @apply h-full min-h-0 list-none m-0 px-2 sm:px-6 py-0 overflow-y-auto overflow-x-visible flex flex-col gap-2 sm:gap-3;
-}
-
-.conversation-load-more {
-  @apply flex justify-center py-3 m-0;
-}
-
-.load-more-button {
-  @apply px-4 py-1.5 text-xs rounded-full border border-slate-300 dark:border-slate-600
-         text-slate-500 dark:text-slate-400 bg-transparent
-         hover:bg-slate-100 dark:hover:bg-slate-800
-         disabled:opacity-40 disabled:cursor-not-allowed
-         transition-colors cursor-pointer;
 }
 
 .conversation-item {
