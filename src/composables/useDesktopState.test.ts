@@ -4112,6 +4112,43 @@ describe('authoritative thread runtime reconciliation', () => {
     state.stopPolling()
   })
 
+  it('reconciles and retries once when the active turn changes during a stop request', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValueOnce([{
+      threadId: 'thread-a',
+      turnId: 'turn-b',
+      state: 'running',
+      isRunning: true,
+      source: 'external',
+      startedAtIso: new Date(1_700_000_003_000).toISOString(),
+      completedAtIso: null,
+      owner: null,
+    }])
+    gatewayMocks.interruptThreadTurn
+      .mockRejectedValueOnce(new Error('RPC turn/interrupt failed with HTTP 502: expected active turn id turn-a but found turn-b'))
+      .mockResolvedValueOnce(undefined)
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startPolling()
+    notificationHandler!({
+      method: 'turn/started',
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'inProgress' } },
+    })
+
+    await state.interruptSelectedThreadTurn()
+
+    expect(gatewayMocks.interruptThreadTurn).toHaveBeenNthCalledWith(1, 'thread-a', 'turn-a')
+    expect(gatewayMocks.interruptThreadTurn).toHaveBeenNthCalledWith(2, 'thread-a', 'turn-b')
+    expect(state.error.value).toBe('')
+    state.stopPolling()
+  })
+
   it('does not let a late successful interrupt clear a newer active turn', async () => {
     installTestWindow()
     let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined

@@ -169,6 +169,11 @@ function isNoActiveTurnError(error: unknown): boolean {
   return /no active turn|turn is not active|active turn not found|cannot interrupt.*(?:completed|inactive)/iu.test(message)
 }
 
+function isActiveTurnIdMismatchError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return /expected active turn id\b[\s\S]*\bfound\b/iu.test(message)
+}
+
 function loadReadStateMap(): Record<string, string> {
   if (typeof window === 'undefined') return {}
 
@@ -6702,15 +6707,31 @@ export function useDesktopState() {
     isInterruptingTurn.value = true
     error.value = ''
     try {
-      await interruptThreadTurn(threadId, turnId)
+      let interruptedTurnId = turnId
+      try {
+        await interruptThreadTurn(threadId, interruptedTurnId)
+      } catch (interruptError) {
+        if (!isActiveTurnIdMismatchError(interruptError)) throw interruptError
+
+        // A turn can still change in the short interval after the initial
+        // request. Reconcile once and retry only with a confirmed newer turn.
+        const refreshedRuntimeState = await reconcileThreadRuntimeState(threadId)
+        const refreshedTurnId = refreshedRuntimeState?.isRunning
+          ? refreshedRuntimeState.turnId.trim()
+          : ''
+        if (!refreshedTurnId || refreshedTurnId === interruptedTurnId) throw interruptError
+
+        interruptedTurnId = refreshedTurnId
+        await interruptThreadTurn(threadId, interruptedTurnId)
+      }
       const currentActiveTurnId = activeTurnIdByThreadId.value[threadId] ?? ''
-      if (!currentActiveTurnId || currentActiveTurnId === turnId) {
+      if (!currentActiveTurnId || currentActiveTurnId === interruptedTurnId) {
         const interruptedAtMs = Date.now()
         bumpRuntimeStateLifecycleEpoch(threadId)
         invalidateAgentProgressLoadForThread(threadId)
         latestRuntimeStateByThreadId.delete(threadId)
-        markTurnProgressInterrupted(threadId, turnId, interruptedAtMs)
-        recordTerminalTurn(threadId, turnId, interruptedAtMs)
+        markTurnProgressInterrupted(threadId, interruptedTurnId, interruptedAtMs)
+        recordTerminalTurn(threadId, interruptedTurnId, interruptedAtMs)
         optimisticTurnStartedAtByThreadId.delete(threadId)
         setThreadInProgress(threadId, false)
         setTurnActivityForThread(threadId, null)
@@ -6723,7 +6744,7 @@ export function useDesktopState() {
       pendingThreadsRefresh = true
       await syncFromNotifications()
     } catch (unknownError) {
-      if (isNoActiveTurnError(unknownError)) {
+      if (isNoActiveTurnError(unknownError) || isActiveTurnIdMismatchError(unknownError)) {
         const runtimeState = await reconcileThreadRuntimeState(threadId)
         if (runtimeState && !runtimeState.isRunning) {
           setThreadInProgress(threadId, false)

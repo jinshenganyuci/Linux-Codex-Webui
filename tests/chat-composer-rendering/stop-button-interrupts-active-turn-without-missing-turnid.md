@@ -9,10 +9,12 @@
 2. Immediately click the `Stop` button before the first assistant chunk fully completes.
 3. Confirm generation halts.
 4. Repeat with a resumed/existing in-progress thread (reload app while a turn is running, then click `Stop`).
+5. If the backend has advanced the thread to a newer active turn while the page still shows the previous one, click `Stop` once.
 
 #### Expected Results
 - No error appears saying `turn/interrupt requires turnId`.
 - Turn is interrupted successfully in both immediate-stop and resumed-thread scenarios.
+- If a cached turn ID is stale, the WebUI reconciles to the backend's active turn and retries once; no `expected active turn id ... but found ...` error is shown.
 - Thread state exits in-progress and the stop control returns to idle.
 
 #### Rollback/Cleanup
