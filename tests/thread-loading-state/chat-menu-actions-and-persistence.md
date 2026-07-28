@@ -21,6 +21,33 @@
 | Archive chat | Archive the disposable chat. | It leaves the active sidebar and appears in archived conversations. | Archive state remains after reload; an existing pin is explicitly removed. |
 | Delete permanently | Open the action directly below `Archive chat`, cancel once, then reopen and confirm. | Cancel keeps the chat. Confirm sends one `thread/delete` and no `thread/archive`; the chat leaves the active and pinned lists, and the current route moves to an adjacent chat when needed. | After reload, the chat is absent from both active and archived conversations. |
 
+## Mobile sidebar thread-menu touch regression
+
+### Feature/Change Name
+
+Thread-row three-dot menus remain touchable when the sidebar is open as a mobile drawer.
+
+### Prerequisites/Setup
+
+1. Run the current checkout and prepare at least one non-destructive test chat in the sidebar.
+2. Use a touch/mobile viewport with the sidebar drawer open.
+
+### Exact Actions
+
+1. Tap the three-dot button at the right end of a chat row.
+2. Verify the menu is visible above the drawer backdrop.
+3. Tap `Copy path` and verify the menu closes while the drawer remains open.
+
+### Expected Results
+
+- The three-dot trigger opens its menu on the first tap.
+- The fixed menu receives touch input instead of being covered by the mobile drawer backdrop.
+- The menu stays below modal dialogs, so an active modal remains the topmost interaction layer.
+
+### Rollback/Cleanup Notes
+
+- No data is changed by this check. Clear the clipboard if the copied path is not needed.
+
 ## Failure checks
 
 1. Make the automation, fork, pin, rename, or archive request fail.

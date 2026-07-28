@@ -3308,7 +3308,7 @@ onBeforeUnmount(() => {
 
 .thread-menu-panel-fixed {
   @apply fixed top-0 right-auto bottom-auto left-0 mt-0;
-  z-index: var(--ui-z-popover);
+  z-index: calc(var(--ui-z-drawer) + 1);
 }
 
 .thread-menu-panel:not(.thread-menu-panel-fixed)[data-open-direction='up'] {
