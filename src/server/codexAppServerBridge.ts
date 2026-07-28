@@ -247,6 +247,8 @@ const AGENT_MODEL_DETAILS_CACHE_LIMIT = 2_048
 const AGENT_PROGRESS_HISTORY_TURN_LIMIT = 10
 const AGENT_RESULT_HISTORY_ITEM_LIMIT = 50
 const QUEUED_TURN_STATUS_HISTORY_LIMIT = 1
+const QUEUED_TURN_RECOVERY_HISTORY_LIMIT = 10
+const QUEUED_TURN_CLAIM_TTL_MS = 30_000
 const THREAD_COMMAND_OUTPUT_ITEM_PAGE_LIMIT = 100
 const THREAD_COMMAND_OUTPUT_MAX_PAGES = 16
 const THREAD_METHODS_WITH_THREAD_SNAPSHOT = new Set([...THREAD_METHODS_WITH_TURNS, 'thread/start'])
@@ -5759,6 +5761,9 @@ type StoredQueuedMessage = {
   speedMode?: 'standard' | 'fast'
   model?: string
   reasoningEffort?: ReasoningEffort
+  deliveryState?: 'claimed'
+  claimedAtMs?: number
+  turnId?: string
 }
 
 type ThreadQueueState = Record<string, StoredQueuedMessage[]>
@@ -5778,6 +5783,16 @@ type ResolvedCollaborationModeSettings = {
   reasoningEffort: ReasoningEffort | null
 }
 
+function readQueuedTurnStatusType(turn: unknown): string {
+  const status = asRecord(turn)?.status
+  return (typeof status === 'string' ? status.trim() : readNonEmptyString(asRecord(status)?.type)).toLowerCase()
+}
+
+function isActiveQueuedTurn(turn: unknown): boolean {
+  const statusType = readQueuedTurnStatusType(turn)
+  return statusType === 'inprogress' || statusType === 'running' || statusType === 'active'
+}
+
 function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | null {
   const record = asRecord(value)
   if (!record) return null
@@ -5786,6 +5801,11 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
   if (!id) return null
   const model = readNonEmptyString(record.model)
   const reasoningEffort = normalizeReasoningEffort(record.reasoningEffort)
+  const deliveryState = record.deliveryState === 'claimed' ? 'claimed' : ''
+  const claimedAtMs = typeof record.claimedAtMs === 'number' && Number.isFinite(record.claimedAtMs)
+    ? Math.max(0, Math.round(record.claimedAtMs))
+    : 0
+  const turnId = readNonEmptyString(record.turnId)
 
   const normalizeNamedPathItems = (items: unknown): Array<{ name: string; path: string }> => {
     if (!Array.isArray(items)) return []
@@ -5820,6 +5840,9 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
     ...(record.speedMode === 'fast' || record.speedMode === 'standard' ? { speedMode: record.speedMode } : {}),
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(deliveryState ? { deliveryState } : {}),
+    ...(deliveryState && claimedAtMs > 0 ? { claimedAtMs } : {}),
+    ...(deliveryState && turnId ? { turnId } : {}),
   }
 }
 
@@ -5887,10 +5910,34 @@ async function withThreadQueueStateUpdate<T>(
 }
 
 async function writeThreadQueueState(nextState: ThreadQueueState): Promise<void> {
-  await withThreadQueueStateUpdate(() => ({
-    nextState: normalizeThreadQueueState(nextState),
-    result: undefined,
-  }))
+  await withThreadQueueStateUpdate((currentState) => {
+    return {
+      nextState: reconcileThreadQueueStateWrite(currentState, nextState),
+      result: undefined,
+    }
+  })
+}
+
+export function reconcileThreadQueueStateWrite(
+  currentState: ThreadQueueState,
+  nextState: ThreadQueueState,
+): ThreadQueueState {
+  const current = normalizeThreadQueueState(currentState)
+  const incoming = normalizeThreadQueueState(nextState)
+  const merged: ThreadQueueState = {}
+  const threadIds = new Set([...Object.keys(current), ...Object.keys(incoming)])
+
+  for (const threadId of threadIds) {
+    const currentClaims = (current[threadId] ?? []).filter((message) => message.deliveryState === 'claimed')
+    const claimedIds = new Set(currentClaims.map((message) => message.id))
+    const editableIncoming = (incoming[threadId] ?? []).filter((message) => (
+      message.deliveryState !== 'claimed' && !claimedIds.has(message.id)
+    ))
+    const nextQueue = [...currentClaims, ...editableIncoming]
+    if (nextQueue.length > 0) merged[threadId] = nextQueue
+  }
+
+  return merged
 }
 
 async function appendThreadQueuedMessage(threadId: string, message: StoredQueuedMessage): Promise<void> {
@@ -5990,6 +6037,14 @@ function extractThreadIdFromNotificationParams(params: unknown): string {
 
 function isTurnCompletedNotification(notification: { method: string; params: unknown }): boolean {
   return notification.method === 'turn/completed'
+}
+
+function extractTurnIdFromNotificationParams(params: unknown): string {
+  const record = asRecord(params)
+  if (!record) return ''
+  return readNonEmptyString(record.turnId)
+    || readNonEmptyString(record.turn_id)
+    || readNonEmptyString(asRecord(record.turn)?.id)
 }
 
 async function readFirstLaunchPluginsCardDismissed(): Promise<boolean> {
@@ -7458,6 +7513,10 @@ export class AppServerProcess {
     }
   }
 
+  emitLocalNotification(method: string, params: unknown): void {
+    this.emitNotification({ method, params })
+  }
+
   async respondToServerRequest(payload: unknown): Promise<void> {
     await this.ensureInitialized()
 
@@ -7536,16 +7595,46 @@ export class AppServerProcess {
 
 export class BackendQueueProcessor {
   private readonly processingThreadIds = new Set<string>()
+  private readonly rerunThreadIds = new Set<string>()
+  private readonly pendingQueueStartIdByThreadId = new Map<string, string>()
+  private readonly observedStartedTurnIdByThreadId = new Map<string, string>()
   private readonly queueDrainTimersByThreadId = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly queueDrainDueAtByThreadId = new Map<string, number>()
   private readonly unsubscribe: () => void
 
+  private publishQueueUpdate(
+    action: 'claimed' | 'confirmed' | 'restored' | 'finalized',
+    threadId: string,
+    message: StoredQueuedMessage,
+  ): void {
+    const publisher = (this.appServer as unknown as {
+      emitLocalNotification?: (method: string, params: unknown) => void
+    }).emitLocalNotification
+    if (!publisher) return
+    publisher.call(this.appServer, 'codex-ui/thread-queue-updated', {
+      action,
+      threadId,
+      queueId: message.id,
+      claimedAtMs: message.claimedAtMs ?? null,
+      turnId: message.turnId ?? null,
+    })
+  }
+
   constructor(private readonly appServer: AppServerProcess) {
     this.unsubscribe = appServer.onNotification((notification) => {
-      if (!isTurnCompletedNotification(notification)) return
       const threadId = extractThreadIdFromNotificationParams(notification.params)
-      if (!threadId) return
-      void this.processThreadQueue(threadId)
+      const turnId = extractTurnIdFromNotificationParams(notification.params)
+      if (!threadId || !turnId) return
+      if (notification.method === 'turn/started') {
+        if (this.pendingQueueStartIdByThreadId.has(threadId)) {
+          this.observedStartedTurnIdByThreadId.set(threadId, turnId)
+        }
+        return
+      }
+      if (!isTurnCompletedNotification(notification)) return
+      void this.finalizeClaimedTurn(threadId, turnId).finally(() => {
+        this.scheduleThreadQueueDrain(threadId, 0)
+      })
     })
     void this.scheduleAllQueuedThreads(1000)
   }
@@ -7558,6 +7647,9 @@ export class BackendQueueProcessor {
     this.queueDrainTimersByThreadId.clear()
     this.queueDrainDueAtByThreadId.clear()
     this.processingThreadIds.clear()
+    this.rerunThreadIds.clear()
+    this.pendingQueueStartIdByThreadId.clear()
+    this.observedStartedTurnIdByThreadId.clear()
   }
 
   async scheduleAllQueuedThreads(delayMs = 0): Promise<void> {
@@ -7594,7 +7686,10 @@ export class BackendQueueProcessor {
   }
 
   async processThreadQueue(threadId: string): Promise<void> {
-    if (this.processingThreadIds.has(threadId)) return
+    if (this.processingThreadIds.has(threadId)) {
+      this.rerunThreadIds.add(threadId)
+      return
+    }
     this.processingThreadIds.add(threadId)
     try {
       const canStart = await this.canStartQueuedTurn(threadId)
@@ -7604,22 +7699,78 @@ export class BackendQueueProcessor {
         }
         return
       }
-      const next = await this.popNextQueuedTurn(threadId)
+      let next = await this.claimNextQueuedTurn(threadId)
+      if (next) this.publishQueueUpdate('claimed', threadId, next.message)
+      if (!next) {
+        const claimed = await this.readCurrentClaimedTurn(threadId)
+        if (!claimed) return
+        const claimedAtMs = claimed.message.claimedAtMs ?? 0
+        if (claimed.message.turnId) {
+          const persistedStatus = await this.readPersistedClaimedTurnStatus(threadId, claimed.message.turnId)
+          if (persistedStatus === 'terminal') {
+            const removed = await this.removeClaimedTurn(claimed)
+            if (removed) this.publishQueueUpdate('finalized', threadId, removed)
+            next = await this.claimNextQueuedTurn(threadId)
+            if (next) this.publishQueueUpdate('claimed', threadId, next.message)
+          } else if (persistedStatus === 'missing' && Date.now() - claimedAtMs > QUEUED_TURN_CLAIM_TTL_MS) {
+            const restored = await this.restoreQueuedTurn(claimed)
+            if (restored) this.publishQueueUpdate('restored', threadId, restored)
+            next = await this.claimNextQueuedTurn(threadId)
+            if (next) this.publishQueueUpdate('claimed', threadId, next.message)
+          } else {
+            this.scheduleThreadQueueDrain(threadId)
+            return
+          }
+        } else if (Date.now() - claimedAtMs > QUEUED_TURN_CLAIM_TTL_MS) {
+          const restored = await this.restoreQueuedTurn(claimed)
+          if (restored) this.publishQueueUpdate('restored', threadId, restored)
+          next = await this.claimNextQueuedTurn(threadId)
+          if (next) this.publishQueueUpdate('claimed', threadId, next.message)
+        } else {
+          this.scheduleThreadQueueDrain(
+            threadId,
+            Math.max(100, QUEUED_TURN_CLAIM_TTL_MS - (Date.now() - claimedAtMs)),
+          )
+          return
+        }
+      }
       if (!next) return
+      this.pendingQueueStartIdByThreadId.set(threadId, next.message.id)
+      this.observedStartedTurnIdByThreadId.delete(threadId)
       try {
-        await this.startQueuedTurn(next)
+        const returnedTurnId = await this.startQueuedTurn(next)
+        const turnId = returnedTurnId || this.observedStartedTurnIdByThreadId.get(threadId) || ''
+        if (turnId) {
+          const confirmed = await this.confirmClaimedTurn(next, turnId)
+          if (confirmed) this.publishQueueUpdate('confirmed', threadId, confirmed.message)
+        }
         if (await this.hasQueuedTurns(threadId)) {
           this.scheduleThreadQueueDrain(threadId)
         }
       } catch {
-        await this.restoreQueuedTurn(next)
+        const observedTurnId = this.observedStartedTurnIdByThreadId.get(threadId) || ''
+        if (observedTurnId) {
+          const confirmed = await this.confirmClaimedTurn(next, observedTurnId)
+          if (confirmed) this.publishQueueUpdate('confirmed', threadId, confirmed.message)
+        } else {
+          const restored = await this.restoreQueuedTurn(next)
+          if (restored) this.publishQueueUpdate('restored', threadId, restored)
+        }
         this.scheduleThreadQueueDrain(threadId)
+      } finally {
+        if (this.pendingQueueStartIdByThreadId.get(threadId) === next.message.id) {
+          this.pendingQueueStartIdByThreadId.delete(threadId)
+          this.observedStartedTurnIdByThreadId.delete(threadId)
+        }
       }
     } catch {
       // Queue processing is best-effort. Keep the bridge alive if app-server is unavailable.
       this.scheduleThreadQueueDrain(threadId)
     } finally {
       this.processingThreadIds.delete(threadId)
+      if (this.rerunThreadIds.delete(threadId)) {
+        this.scheduleThreadQueueDrain(threadId, 0)
+      }
     }
   }
 
@@ -7647,11 +7798,7 @@ export class BackendQueueProcessor {
         'summary',
       )
       return !turns.some((turn) => {
-        const turnStatus = asRecord(turn)?.status
-        const type = typeof turnStatus === 'string'
-          ? turnStatus.trim().toLowerCase()
-          : readNonEmptyString(asRecord(turnStatus)?.type).toLowerCase()
-        return type === 'inprogress' || type === 'running' || type === 'active'
+        return isActiveQueuedTurn(turn)
       })
     }
 
@@ -7660,38 +7807,142 @@ export class BackendQueueProcessor {
     if (!thread) return false
 
     const turns = Array.isArray(thread.turns) ? thread.turns : []
-    return !turns.some((turn) => readNonEmptyString(asRecord(turn)?.status).toLowerCase() === 'inprogress')
+    return !turns.some((turn) => isActiveQueuedTurn(turn))
   }
 
-  private async popNextQueuedTurn(threadId: string): Promise<BackendQueuedTurn | null> {
+  private async claimNextQueuedTurn(threadId: string): Promise<BackendQueuedTurn | null> {
     return withThreadQueueStateUpdate((state) => {
       const queue = state[threadId]
       if (!queue || queue.length === 0) {
         return { nextState: state, result: null }
       }
-
       const [message, ...rest] = queue
-      const nextState = { ...state }
-      if (rest.length > 0) {
-        nextState[threadId] = rest
-      } else {
-        delete nextState[threadId]
+      if (message.deliveryState === 'claimed') {
+        return { nextState: state, result: null }
       }
-      return { nextState, result: { threadId, message } }
-    })
-  }
-
-  private async restoreQueuedTurn(turn: BackendQueuedTurn): Promise<void> {
-    await withThreadQueueStateUpdate((state) => {
-      const queue = state[turn.threadId] ?? []
+      const claimedMessage: StoredQueuedMessage = {
+        ...message,
+        deliveryState: 'claimed',
+        claimedAtMs: Date.now(),
+      }
       return {
         nextState: {
           ...state,
-          [turn.threadId]: [turn.message, ...queue],
+          [threadId]: [claimedMessage, ...rest],
         },
-        result: undefined,
+        result: { threadId, message: claimedMessage },
       }
     })
+  }
+
+  private async readCurrentClaimedTurn(threadId: string): Promise<BackendQueuedTurn | null> {
+    const state = await readThreadQueueState()
+    const message = state[threadId]?.[0]
+    return message?.deliveryState === 'claimed' ? { threadId, message } : null
+  }
+
+  private async confirmClaimedTurn(turn: BackendQueuedTurn, turnId: string): Promise<BackendQueuedTurn | null> {
+    const normalizedTurnId = turnId.trim()
+    if (!normalizedTurnId) return null
+    return withThreadQueueStateUpdate((state) => {
+      const queue = state[turn.threadId] ?? []
+      const index = queue.findIndex((message) => (
+        message.id === turn.message.id && message.deliveryState === 'claimed'
+      ))
+      if (index < 0) return { nextState: state, result: null }
+      if (queue[index]?.turnId === normalizedTurnId) return { nextState: state, result: null }
+      const nextQueue = [...queue]
+      const confirmedMessage = { ...nextQueue[index], turnId: normalizedTurnId }
+      nextQueue[index] = confirmedMessage
+      return {
+        nextState: { ...state, [turn.threadId]: nextQueue },
+        result: { threadId: turn.threadId, message: confirmedMessage },
+      }
+    })
+  }
+
+  private async finalizeClaimedTurn(threadId: string, turnId: string): Promise<void> {
+    const normalizedTurnId = turnId.trim()
+    if (!normalizedTurnId) return
+    const finalized = await withThreadQueueStateUpdate((state) => {
+      const queue = state[threadId] ?? []
+      const matched = queue.find((message) => (
+        message.deliveryState === 'claimed' && message.turnId === normalizedTurnId
+      ))
+      const nextQueue = queue.filter((message) => (
+        message.deliveryState !== 'claimed' || message.turnId !== normalizedTurnId
+      ))
+      if (!matched || nextQueue.length === queue.length) return { nextState: state, result: null }
+      const nextState = { ...state }
+      if (nextQueue.length > 0) nextState[threadId] = nextQueue
+      else delete nextState[threadId]
+      return { nextState, result: matched }
+    })
+    if (finalized) this.publishQueueUpdate('finalized', threadId, finalized)
+  }
+
+  private async removeClaimedTurn(turn: BackendQueuedTurn): Promise<StoredQueuedMessage | null> {
+    return withThreadQueueStateUpdate((state) => {
+      const queue = state[turn.threadId] ?? []
+      const matched = queue.find((message) => (
+        message.id === turn.message.id
+        && message.deliveryState === 'claimed'
+        && (!turn.message.turnId || message.turnId === turn.message.turnId)
+      ))
+      if (!matched) return { nextState: state, result: null }
+      const nextQueue = queue.filter((message) => message !== matched)
+      const nextState = { ...state }
+      if (nextQueue.length > 0) nextState[turn.threadId] = nextQueue
+      else delete nextState[turn.threadId]
+      return { nextState, result: matched }
+    })
+  }
+
+  private async restoreQueuedTurn(turn: BackendQueuedTurn): Promise<StoredQueuedMessage | null> {
+    return withThreadQueueStateUpdate((state) => {
+      const queue = state[turn.threadId] ?? []
+      const restoredMessage = { ...turn.message }
+      delete restoredMessage.deliveryState
+      delete restoredMessage.claimedAtMs
+      delete restoredMessage.turnId
+      const existingIndex = queue.findIndex((message) => message.id === turn.message.id)
+      const existing = existingIndex >= 0 ? queue[existingIndex] : undefined
+      if (existing?.deliveryState === 'claimed' && existing.turnId && existing.turnId !== turn.message.turnId) {
+        return { nextState: state, result: null }
+      }
+      const nextQueue = existingIndex >= 0 ? [...queue] : [restoredMessage, ...queue]
+      if (existingIndex >= 0) nextQueue[existingIndex] = restoredMessage
+      return {
+        nextState: {
+          ...state,
+          [turn.threadId]: nextQueue,
+        },
+        result: restoredMessage,
+      }
+    })
+  }
+
+  private async readPersistedClaimedTurnStatus(
+    threadId: string,
+    turnId: string,
+  ): Promise<'active' | 'terminal' | 'missing'> {
+    const summary = await readThreadSummary(this.appServer, threadId)
+    let turns: unknown[]
+    if (usesPaginatedThreadHistory(summary)) {
+      turns = await readBoundedPaginatedTurns(
+        this.appServer,
+        threadId,
+        QUEUED_TURN_RECOVERY_HISTORY_LIMIT,
+        'summary',
+      )
+    } else {
+      const response = asRecord(await this.appServer.rpc('thread/read', { threadId, includeTurns: true }))
+      const thread = asRecord(response?.thread)
+      turns = Array.isArray(thread?.turns) ? thread.turns : []
+    }
+    const matched = turns.find((turn) => readNonEmptyString(asRecord(turn)?.id) === turnId)
+    if (!matched) return 'missing'
+    return isActiveQueuedTurn(matched) ? 'active' : 'terminal'
   }
 
   private async resolveCollaborationModeSettings(turn: BackendQueuedTurn): Promise<ResolvedCollaborationModeSettings> {
@@ -7816,9 +8067,12 @@ export class BackendQueueProcessor {
     return params
   }
 
-  private async startQueuedTurn(turn: BackendQueuedTurn): Promise<void> {
+  private async startQueuedTurn(turn: BackendQueuedTurn): Promise<string> {
     await this.appServer.rpc('thread/resume', { threadId: turn.threadId })
-    await this.appServer.rpc('turn/start', await this.buildQueuedTurnParams(turn))
+    const result = asRecord(await this.appServer.rpc('turn/start', await this.buildQueuedTurnParams(turn)))
+    return readNonEmptyString(asRecord(result?.turn)?.id)
+      || readNonEmptyString(result?.turnId)
+      || readNonEmptyString(result?.turn_id)
   }
 }
 

@@ -282,6 +282,7 @@ const zhCN: Record<string, string> = {
   'Edit queued message': '编辑排队消息',
   'Send now without interrupting work': '立即发送且不中断当前工作',
   'Delete queued message': '删除排队消息',
+  'Sending...': '发送中...',
   'AppServer API': 'AppServer API',
   'Loading method catalog...': '加载方法目录中...',
   'Disabled': '已禁用',

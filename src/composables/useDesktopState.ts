@@ -1571,6 +1571,9 @@ export function useDesktopState() {
     speedMode?: SpeedMode
     model?: string
     reasoningEffort?: ReasoningEffort
+    deliveryState?: 'claimed'
+    claimedAtMs?: number
+    turnId?: string
   }
   type PendingTurnRequest = {
     text: string
@@ -1584,6 +1587,7 @@ export function useDesktopState() {
   }
   const queuedMessagesByThreadId = ref<Record<string, QueuedMessage[]>>({})
   const queueProcessingByThreadId = ref<Record<string, boolean>>({})
+  const queueRefreshTimerByThreadId = new Map<string, number>()
   let hasLoadedPersistedQueueState = false
   const eventUnreadByThreadId = ref<Record<string, boolean>>({})
   const availableModelIds = ref<string[]>([])
@@ -4831,10 +4835,52 @@ export function useDesktopState() {
     return false
   }
 
+  function applyQueueHandoffNotification(notification: RpcNotification): boolean {
+    if (notification.method !== 'codex-ui/thread-queue-updated') return false
+    const params = asRecord(notification.params)
+    const threadId = readString(params?.threadId)
+    const queueId = readString(params?.queueId)
+    const action = readString(params?.action)
+    if (!threadId || !queueId) return true
+
+    const queue = queuedMessagesByThreadId.value[threadId] ?? []
+    const index = queue.findIndex((message) => message.id === queueId)
+    if (index >= 0) {
+      const current = queue[index]
+      let nextMessage = current
+      if (action === 'claimed' || action === 'confirmed') {
+        const claimedAtMs = readNumber(params?.claimedAtMs)
+        const turnId = readString(params?.turnId)
+        nextMessage = {
+          ...current,
+          deliveryState: 'claimed',
+          ...(typeof claimedAtMs === 'number' && claimedAtMs > 0 ? { claimedAtMs } : {}),
+          ...(turnId ? { turnId } : {}),
+        }
+      } else if (action === 'restored') {
+        nextMessage = { ...current }
+        delete nextMessage.deliveryState
+        delete nextMessage.claimedAtMs
+        delete nextMessage.turnId
+      }
+      if (nextMessage !== current) {
+        const nextQueue = [...queue]
+        nextQueue[index] = nextMessage
+        queuedMessagesByThreadId.value = {
+          ...queuedMessagesByThreadId.value,
+          [threadId]: nextQueue,
+        }
+      }
+    }
+    scheduleQueueStateRefresh(threadId, { immediate: false })
+    return true
+  }
+
   function applyRealtimeUpdates(notification: RpcNotification): void {
     if (handleServerRequestNotification(notification)) {
       return
     }
+    if (applyQueueHandoffNotification(notification)) return
 
     if (notification.method === 'account/rateLimits/updated') {
       scheduleRateLimitRefresh()
@@ -5395,8 +5441,9 @@ export function useDesktopState() {
     const next: ThreadQueueState = {}
     for (const [threadId, queue] of Object.entries(state)) {
       const normalizedThreadId = threadId.trim()
-      if (!normalizedThreadId || queue.length === 0) continue
-      next[normalizedThreadId] = queue.map((message) => ({
+      const editableQueue = queue.filter((message) => message.deliveryState !== 'claimed')
+      if (!normalizedThreadId || editableQueue.length === 0) continue
+      next[normalizedThreadId] = editableQueue.map((message) => ({
         id: message.id,
         text: message.text,
         imageUrls: [...message.imageUrls],
@@ -6637,7 +6684,41 @@ export function useDesktopState() {
       [threadId]: true,
     }
     try {
-      queuedMessagesByThreadId.value = await getThreadQueueState()
+      const refreshedState = await getThreadQueueState()
+      const refreshedQueue = refreshedState[threadId] ?? []
+      const previousQueue = queuedMessagesByThreadId.value[threadId] ?? []
+      const refreshedIds = new Set(refreshedQueue.map((message) => message.id))
+      const persistedUserTurnIds = new Set(
+        (persistedMessagesByThreadId.value[threadId] ?? [])
+          .filter((message) => message.role === 'user' && message.turnId)
+          .map((message) => message.turnId as string),
+      )
+      const retainedClaims = previousQueue.filter((message) => (
+        message.deliveryState === 'claimed'
+        && !refreshedIds.has(message.id)
+        && (!message.turnId || !persistedUserTurnIds.has(message.turnId))
+      ))
+      const nextQueue = [...retainedClaims, ...refreshedQueue]
+      const unchanged = nextQueue.length === previousQueue.length && nextQueue.every((message, index) => {
+        const previous = previousQueue[index]
+        return previous?.id === message.id
+          && previous.text === message.text
+          && previous.deliveryState === message.deliveryState
+          && previous.claimedAtMs === message.claimedAtMs
+          && previous.turnId === message.turnId
+          && previous.collaborationMode === message.collaborationMode
+          && previous.speedMode === message.speedMode
+          && previous.model === message.model
+          && previous.reasoningEffort === message.reasoningEffort
+          && areStringArraysEqual(previous.imageUrls, message.imageUrls)
+          && areStringArraysEqual(previous.skills.map((skill) => `${skill.name}\u0000${skill.path}`), message.skills.map((skill) => `${skill.name}\u0000${skill.path}`))
+          && areStringArraysEqual(previous.fileAttachments.map((file) => `${file.label}\u0000${file.path}\u0000${file.fsPath}`), message.fileAttachments.map((file) => `${file.label}\u0000${file.path}\u0000${file.fsPath}`))
+      })
+      if (!unchanged) {
+        queuedMessagesByThreadId.value = nextQueue.length > 0
+          ? { ...queuedMessagesByThreadId.value, [threadId]: nextQueue }
+          : omitKey(queuedMessagesByThreadId.value, threadId)
+      }
     } catch {
       // Backend queue state is optional during transient bridge failures.
     } finally {
@@ -6645,12 +6726,15 @@ export function useDesktopState() {
     }
   }
 
-  function scheduleQueueStateRefresh(threadId: string): void {
-    void processQueuedMessages(threadId)
+  function scheduleQueueStateRefresh(threadId: string, options: { immediate?: boolean } = {}): void {
+    if (options.immediate !== false) void processQueuedMessages(threadId)
     if (typeof window === 'undefined') return
-    window.setTimeout(() => {
+    if (queueRefreshTimerByThreadId.has(threadId)) return
+    const timer = window.setTimeout(() => {
+      queueRefreshTimerByThreadId.delete(threadId)
       void processQueuedMessages(threadId)
     }, 650)
+    queueRefreshTimerByThreadId.set(threadId, timer)
   }
 
   async function interruptSelectedThreadTurn(): Promise<void> {
@@ -7626,6 +7710,10 @@ export function useDesktopState() {
     persistedUserMessageByThreadId.value = {}
     hasLoadedPersistedQueueState = false
     queueProcessingByThreadId.value = {}
+    if (typeof window !== 'undefined') {
+      for (const timer of queueRefreshTimerByThreadId.values()) window.clearTimeout(timer)
+    }
+    queueRefreshTimerByThreadId.clear()
     codexRateLimit.value = null
     threadTokenUsageByThreadId.value = {}
   }
@@ -7633,7 +7721,16 @@ export function useDesktopState() {
   const selectedThreadQueuedMessages = computed<QueuedMessage[]>(() => {
     const threadId = selectedThreadId.value
     if (!threadId) return []
-    return queuedMessagesByThreadId.value[threadId] ?? []
+    const persistedUserTurnIds = new Set(
+      (persistedMessagesByThreadId.value[threadId] ?? [])
+        .filter((message) => message.role === 'user' && message.turnId)
+        .map((message) => message.turnId as string),
+    )
+    return (queuedMessagesByThreadId.value[threadId] ?? []).filter((message) => (
+      message.deliveryState !== 'claimed'
+      || !message.turnId
+      || !persistedUserTurnIds.has(message.turnId)
+    ))
   })
 
   function removeQueuedMessage(messageId: string): void {
@@ -7641,6 +7738,7 @@ export function useDesktopState() {
     if (!threadId) return
     const queue = queuedMessagesByThreadId.value[threadId]
     if (!queue) return
+    if (queue.some((message) => message.id === messageId && message.deliveryState === 'claimed')) return
     const next = queue.filter((m) => m.id !== messageId)
     queuedMessagesByThreadId.value = next.length > 0
       ? { ...queuedMessagesByThreadId.value, [threadId]: next }
@@ -7657,6 +7755,7 @@ export function useDesktopState() {
     const fromIndex = queue.findIndex((m) => m.id === draggedId)
     const toIndex = queue.findIndex((m) => m.id === targetId)
     if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return
+    if (queue[fromIndex]?.deliveryState === 'claimed' || queue[toIndex]?.deliveryState === 'claimed') return
 
     const next = [...queue]
     const [moved] = next.splice(fromIndex, 1)
@@ -7674,7 +7773,7 @@ export function useDesktopState() {
     const queue = queuedMessagesByThreadId.value[threadId]
     if (!queue) return
     const msg = queue.find((m) => m.id === messageId)
-    if (!msg) return
+    if (!msg || msg.deliveryState === 'claimed') return
     removeQueuedMessage(messageId)
     setSelectedCollaborationMode(msg.collaborationMode)
     void sendMessageToSelectedThread(msg.text, msg.imageUrls, msg.skills, 'steer', msg.fileAttachments, undefined, msg.collaborationMode, msg.speedMode)

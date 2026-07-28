@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +8,7 @@ import {
   mergeSessionSkillInputsIntoHistoryResult,
   mergeSessionSkillInputsIntoTurns,
   parseAutomationToml,
+  reconcileThreadQueueStateWrite,
   sanitizeThreadTurnsInlinePayloads,
   toAutomationApiRecord,
 } from './codexAppServerBridge'
@@ -580,6 +581,336 @@ describe('thread session skill recovery', () => {
 })
 
 describe('backend queue scheduling', () => {
+  const queueMessage = (id: string, text: string) => ({
+    id,
+    text,
+    imageUrls: ['https://example.com/queued.png'],
+    skills: [{ name: 'queue-skill', path: '/skills/queue-skill/SKILL.md' }],
+    fileAttachments: [{ label: 'notes.txt', path: '/tmp/notes.txt', fsPath: '/tmp/notes.txt' }],
+    collaborationMode: 'default' as const,
+    speedMode: 'fast' as const,
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'xhigh' as const,
+  })
+
+  async function writeQueueState(codexHome: string, messages: unknown[]): Promise<void> {
+    await writeFile(join(codexHome, '.codex-global-state.json'), JSON.stringify({
+      'thread-queue-state': { 'thread-1': messages },
+    }), 'utf8')
+  }
+
+  async function readQueueState(codexHome: string): Promise<Array<Record<string, unknown>>> {
+    const raw = await readFile(join(codexHome, '.codex-global-state.json'), 'utf8')
+    const state = JSON.parse(raw) as { 'thread-queue-state'?: { 'thread-1'?: Array<Record<string, unknown>> } }
+    return state['thread-queue-state']?.['thread-1'] ?? []
+  }
+
+  it('keeps server-owned claims first and rejects stale claimed rows from client writes', () => {
+    const claimed = {
+      ...queueMessage('queue-1', 'server text'),
+      deliveryState: 'claimed' as const,
+      claimedAtMs: 1_700_000_000_000,
+      turnId: 'turn-1',
+    }
+    const nextState = reconcileThreadQueueStateWrite(
+      { 'thread-1': [claimed, queueMessage('queue-2', 'second')] },
+      {
+        'thread-1': [
+          queueMessage('queue-1', 'stale edited text'),
+          queueMessage('queue-2', 'second'),
+          { ...queueMessage('queue-stale', 'already finalized'), deliveryState: 'claimed' },
+          queueMessage('queue-3', 'new'),
+        ],
+      },
+    )
+
+    expect(nextState['thread-1']).toEqual([
+      claimed,
+      expect.objectContaining({ id: 'queue-2' }),
+      expect.objectContaining({ id: 'queue-3' }),
+    ])
+    expect(nextState['thread-1']?.some((message) => message.id === 'queue-stale')).toBe(false)
+    expect(nextState['thread-1']?.[0]?.text).toBe('server text')
+  })
+
+  it('keeps a claimed queue row until its exact turn is confirmed and completed', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-queue-claimed-'))
+    const previousCodexHome = process.env.CODEX_HOME
+    process.env.CODEX_HOME = codexHome
+    await writeQueueState(codexHome, [queueMessage('queue-1', 'same text')])
+    let notificationHandler: (notification: { method: string; params: unknown }) => void = () => undefined
+    let resolveStart!: (value: unknown) => void
+    const pendingStart = new Promise<unknown>((resolve) => {
+      resolveStart = resolve
+    })
+    const rpc = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'thread/read' && params.includeTurns === false) {
+        return { thread: { id: 'thread-1', historyMode: 'legacy', status: { type: 'idle' } } }
+      }
+      if (method === 'thread/read' && params.includeTurns === true) {
+        return { thread: { id: 'thread-1', turns: [] } }
+      }
+      if (method === 'thread/resume') return { thread: { id: 'thread-1' } }
+      if (method === 'turn/start') return pendingStart
+      throw new Error(`unexpected method ${method}`)
+    })
+    const processor = new BackendQueueProcessor({
+      onNotification: (handler: typeof notificationHandler) => {
+        notificationHandler = handler
+        return () => undefined
+      },
+      rpc,
+    } as never)
+
+    try {
+      const processing = processor.processThreadQueue('thread-1')
+      await vi.waitFor(async () => {
+        expect(await readQueueState(codexHome)).toEqual([
+          expect.objectContaining({
+            id: 'queue-1',
+            deliveryState: 'claimed',
+            skills: [{ name: 'queue-skill', path: '/skills/queue-skill/SKILL.md' }],
+            fileAttachments: [{ label: 'notes.txt', path: '/tmp/notes.txt', fsPath: '/tmp/notes.txt' }],
+          }),
+        ])
+      })
+
+      resolveStart({ turn: { id: 'turn-queue-1' } })
+      await processing
+      expect(await readQueueState(codexHome)).toEqual([
+        expect.objectContaining({ id: 'queue-1', deliveryState: 'claimed', turnId: 'turn-queue-1' }),
+      ])
+
+      notificationHandler({
+        method: 'turn/completed',
+        params: { threadId: 'thread-1', turn: { id: 'turn-queue-1', status: 'completed' } },
+      })
+      await vi.waitFor(async () => {
+        expect(await readQueueState(codexHome)).toEqual([])
+      })
+    } finally {
+      processor.dispose()
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = previousCodexHome
+      await rm(codexHome, { recursive: true, force: true })
+    }
+  })
+
+  it('restores the same queue item in place when turn/start fails', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-queue-restore-'))
+    const previousCodexHome = process.env.CODEX_HOME
+    process.env.CODEX_HOME = codexHome
+    await writeQueueState(codexHome, [
+      queueMessage('queue-1', 'first'),
+      queueMessage('queue-2', 'second'),
+    ])
+    const rpc = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'thread/read' && params.includeTurns === false) {
+        return { thread: { id: 'thread-1', historyMode: 'legacy', status: { type: 'idle' } } }
+      }
+      if (method === 'thread/read' && params.includeTurns === true) return { thread: { id: 'thread-1', turns: [] } }
+      if (method === 'thread/resume') return { thread: { id: 'thread-1' } }
+      if (method === 'turn/start') throw new Error('start failed')
+      throw new Error(`unexpected method ${method}`)
+    })
+    const processor = new BackendQueueProcessor({ onNotification: () => () => undefined, rpc } as never)
+
+    try {
+      await processor.processThreadQueue('thread-1')
+      expect(await readQueueState(codexHome)).toEqual([
+        expect.objectContaining({
+          id: 'queue-1',
+          text: 'first',
+          imageUrls: ['https://example.com/queued.png'],
+          skills: [{ name: 'queue-skill', path: '/skills/queue-skill/SKILL.md' }],
+          fileAttachments: [{ label: 'notes.txt', path: '/tmp/notes.txt', fsPath: '/tmp/notes.txt' }],
+          speedMode: 'fast',
+          model: 'gpt-5.6-sol',
+          reasoningEffort: 'xhigh',
+        }),
+        expect.objectContaining({ id: 'queue-2', text: 'second' }),
+      ])
+      expect((await readQueueState(codexHome))[0]).not.toHaveProperty('deliveryState')
+    } finally {
+      processor.dispose()
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = previousCodexHome
+      await rm(codexHome, { recursive: true, force: true })
+    }
+  })
+
+  it('recovers a completed claim after reconnect without deleting the next identical message', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-queue-reconnect-'))
+    const previousCodexHome = process.env.CODEX_HOME
+    process.env.CODEX_HOME = codexHome
+    await writeQueueState(codexHome, [
+      { ...queueMessage('queue-1', 'identical'), deliveryState: 'claimed', claimedAtMs: Date.now() - 5_000, turnId: 'turn-1' },
+      queueMessage('queue-2', 'identical'),
+    ])
+    const startedTexts: string[] = []
+    const rpc = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'thread/read' && params.includeTurns === false) {
+        return { thread: { id: 'thread-1', historyMode: 'legacy', status: { type: 'idle' } } }
+      }
+      if (method === 'thread/read' && params.includeTurns === true) {
+        return { thread: { id: 'thread-1', turns: [{ id: 'turn-1', status: 'completed' }] } }
+      }
+      if (method === 'thread/resume') return { thread: { id: 'thread-1' } }
+      if (method === 'turn/start') {
+        const input = params.input as Array<{ type: string; text?: string }>
+        startedTexts.push(input.find((item) => item.type === 'text')?.text ?? '')
+        return { turn: { id: 'turn-2' } }
+      }
+      throw new Error(`unexpected method ${method}`)
+    })
+    const processor = new BackendQueueProcessor({ onNotification: () => () => undefined, rpc } as never)
+
+    try {
+      await processor.processThreadQueue('thread-1')
+      expect(startedTexts).toHaveLength(1)
+      expect(startedTexts[0]).toContain('identical')
+      expect(await readQueueState(codexHome)).toEqual([
+        expect.objectContaining({ id: 'queue-2', deliveryState: 'claimed', turnId: 'turn-2' }),
+      ])
+    } finally {
+      processor.dispose()
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = previousCodexHome
+      await rm(codexHome, { recursive: true, force: true })
+    }
+  })
+
+  it('retries an expired claim whose returned turn was never persisted instead of dropping it', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-queue-expired-'))
+    const previousCodexHome = process.env.CODEX_HOME
+    process.env.CODEX_HOME = codexHome
+    await writeQueueState(codexHome, [
+      { ...queueMessage('queue-1', 'retry me'), deliveryState: 'claimed', claimedAtMs: Date.now() - 31_000, turnId: 'missing-turn' },
+      queueMessage('queue-2', 'second'),
+    ])
+    const startedTexts: string[] = []
+    const rpc = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'thread/read' && params.includeTurns === false) {
+        return { thread: { id: 'thread-1', historyMode: 'legacy', status: { type: 'idle' } } }
+      }
+      if (method === 'thread/read' && params.includeTurns === true) return { thread: { id: 'thread-1', turns: [] } }
+      if (method === 'thread/resume') return { thread: { id: 'thread-1' } }
+      if (method === 'turn/start') {
+        const input = params.input as Array<{ type: string; text?: string }>
+        startedTexts.push(input.find((item) => item.type === 'text')?.text ?? '')
+        return { turn: { id: 'retried-turn' } }
+      }
+      throw new Error(`unexpected method ${method}`)
+    })
+    const processor = new BackendQueueProcessor({ onNotification: () => () => undefined, rpc } as never)
+
+    try {
+      await processor.processThreadQueue('thread-1')
+      expect(startedTexts).toHaveLength(1)
+      expect(startedTexts[0]).toContain('retry me')
+      expect(await readQueueState(codexHome)).toEqual([
+        expect.objectContaining({ id: 'queue-1', deliveryState: 'claimed', turnId: 'retried-turn' }),
+        expect.objectContaining({ id: 'queue-2', text: 'second' }),
+      ])
+    } finally {
+      processor.dispose()
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = previousCodexHome
+      await rm(codexHome, { recursive: true, force: true })
+    }
+  })
+
+  it('recovers completed claims through native paginated history without a legacy full read', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-queue-paginated-'))
+    const previousCodexHome = process.env.CODEX_HOME
+    process.env.CODEX_HOME = codexHome
+    await writeQueueState(codexHome, [
+      { ...queueMessage('queue-1', 'completed'), deliveryState: 'claimed', claimedAtMs: Date.now() - 5_000, turnId: 'turn-1' },
+      queueMessage('queue-2', 'next'),
+    ])
+    const rpc = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'thread/read' && params.includeTurns === false) {
+        return { thread: { id: 'thread-1', historyMode: 'paginated', status: { type: 'idle' } } }
+      }
+      if (method === 'thread/turns/list') {
+        return { data: [{ id: 'turn-1', status: { type: 'completed' } }], nextCursor: null }
+      }
+      if (method === 'thread/resume') return { thread: { id: 'thread-1' } }
+      if (method === 'turn/start') return { turn: { id: 'turn-2' } }
+      throw new Error(`unexpected method ${method}`)
+    })
+    const processor = new BackendQueueProcessor({ onNotification: () => () => undefined, rpc } as never)
+
+    try {
+      await processor.processThreadQueue('thread-1')
+      expect(rpc).not.toHaveBeenCalledWith('thread/read', expect.objectContaining({ includeTurns: true }))
+      expect(rpc).toHaveBeenCalledWith('thread/turns/list', expect.objectContaining({ threadId: 'thread-1' }))
+      expect(await readQueueState(codexHome)).toEqual([
+        expect.objectContaining({ id: 'queue-2', deliveryState: 'claimed', turnId: 'turn-2' }),
+      ])
+    } finally {
+      processor.dispose()
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = previousCodexHome
+      await rm(codexHome, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps an observed started turn claimed when the RPC response disconnects', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-queue-observed-start-'))
+    const previousCodexHome = process.env.CODEX_HOME
+    process.env.CODEX_HOME = codexHome
+    await writeQueueState(codexHome, [queueMessage('queue-1', 'observe me')])
+    let notificationHandler: (notification: { method: string; params: unknown }) => void = () => undefined
+    let rejectStart!: (error: Error) => void
+    const pendingStart = new Promise<unknown>((_resolve, reject) => {
+      rejectStart = reject
+    })
+    const rpc = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'thread/read' && params.includeTurns === false) {
+        return { thread: { id: 'thread-1', historyMode: 'legacy', status: { type: 'idle' } } }
+      }
+      if (method === 'thread/read' && params.includeTurns === true) return { thread: { id: 'thread-1', turns: [] } }
+      if (method === 'thread/resume') return { thread: { id: 'thread-1' } }
+      if (method === 'turn/start') return pendingStart
+      throw new Error(`unexpected method ${method}`)
+    })
+    const processor = new BackendQueueProcessor({
+      onNotification: (handler: typeof notificationHandler) => {
+        notificationHandler = handler
+        return () => undefined
+      },
+      rpc,
+    } as never)
+
+    try {
+      const processing = processor.processThreadQueue('thread-1')
+      await vi.waitFor(async () => {
+        expect((await readQueueState(codexHome))[0]).toMatchObject({ id: 'queue-1', deliveryState: 'claimed' })
+      })
+      notificationHandler({
+        method: 'turn/started',
+        params: { threadId: 'thread-1', turn: { id: 'observed-turn' } },
+      })
+      rejectStart(new Error('response disconnected'))
+      await processing
+      expect(await readQueueState(codexHome)).toEqual([
+        expect.objectContaining({ id: 'queue-1', deliveryState: 'claimed', turnId: 'observed-turn' }),
+      ])
+
+      notificationHandler({
+        method: 'turn/completed',
+        params: { threadId: 'thread-1', turn: { id: 'observed-turn', status: 'completed' } },
+      })
+      await vi.waitFor(async () => expect(await readQueueState(codexHome)).toEqual([]))
+    } finally {
+      processor.dispose()
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = previousCodexHome
+      await rm(codexHome, { recursive: true, force: true })
+    }
+  })
+
   it('reschedules a pending drain when a run-now request needs an earlier drain', async () => {
     vi.useFakeTimers()
     const processor = new BackendQueueProcessor({

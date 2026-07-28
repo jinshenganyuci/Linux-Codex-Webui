@@ -764,6 +764,127 @@ describe('immediate sent-message rendering', () => {
     ])
   })
 
+  it('keeps one visible owner for a claimed queue message until its exact user turn is loaded', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-queue', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    const queued = {
+      id: 'queue-1',
+      text: 'identical queued text',
+      imageUrls: [],
+      skills: [],
+      fileAttachments: [],
+      collaborationMode: 'default' as const,
+    }
+    gatewayMocks.getThreadQueueState.mockResolvedValue({ 'thread-queue': [queued] })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-queue')
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    state.startPolling()
+    expect(state.selectedThreadQueuedMessages.value).toEqual([expect.objectContaining({ id: 'queue-1' })])
+
+    gatewayMocks.getThreadQueueState.mockResolvedValue({})
+    notificationHandler!({
+      method: 'codex-ui/thread-queue-updated',
+      params: {
+        action: 'confirmed',
+        threadId: 'thread-queue',
+        queueId: 'queue-1',
+        claimedAtMs: 1_700_000_001_000,
+        turnId: 'turn-queue-1',
+      },
+    })
+    await vi.waitFor(() => {
+      expect(state.selectedThreadQueuedMessages.value).toEqual([
+        expect.objectContaining({ id: 'queue-1', deliveryState: 'claimed', turnId: 'turn-queue-1' }),
+      ])
+    })
+    notificationHandler!({
+      method: 'turn/completed',
+      params: { threadId: 'thread-queue', turn: { id: 'turn-queue-1', status: 'completed' } },
+    })
+    await vi.waitFor(() => expect(gatewayMocks.getThreadQueueState).toHaveBeenCalledTimes(2))
+    const delayedQueueRefresh = vi.mocked(window.setTimeout).mock.calls.find(([, delay]) => delay === 650)?.[0]
+    expect(delayedQueueRefresh).toEqual(expect.any(Function))
+    ;(delayedQueueRefresh as () => void)()
+    await vi.waitFor(() => expect(gatewayMocks.getThreadQueueState).toHaveBeenCalledTimes(3))
+    expect(state.selectedThreadQueuedMessages.value).toEqual([
+      expect.objectContaining({ id: 'queue-1', deliveryState: 'claimed', turnId: 'turn-queue-1' }),
+    ])
+    expect(state.messages.value.some((message) => message.role === 'user' && message.turnId === 'turn-queue-1')).toBe(false)
+
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: 'gpt-5.6-sol',
+      modelProvider: 'openai',
+      messages: [{
+        id: 'user-turn-queue-1',
+        role: 'user',
+        text: 'identical queued text',
+        messageType: 'userMessage',
+        turnId: 'turn-queue-1',
+      }],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: { 'turn-queue-1': 0 },
+    })
+    await state.loadMessages('thread-queue', { force: true })
+
+    expect(state.selectedThreadQueuedMessages.value).toEqual([])
+    expect(state.messages.value).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'user', text: 'identical queued text', turnId: 'turn-queue-1' }),
+    ]))
+    expect(state.messages.value.filter((message) => message.role === 'user' && message.turnId === 'turn-queue-1')).toHaveLength(1)
+    state.stopPolling()
+  })
+
+  it('does not write a server-owned claimed row back when another message is queued', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-queue', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadQueueState.mockResolvedValue({
+      'thread-queue': [{
+        id: 'queue-claimed',
+        text: 'already sending',
+        imageUrls: [],
+        skills: [],
+        fileAttachments: [],
+        collaborationMode: 'default',
+        deliveryState: 'claimed',
+        claimedAtMs: 1_700_000_001_000,
+        turnId: 'turn-claimed',
+      }],
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-queue')
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    gatewayMocks.setThreadQueueState.mockClear()
+
+    await state.sendMessageToSelectedThread('new queued message', [], [], 'queue')
+
+    expect(state.selectedThreadQueuedMessages.value).toEqual([
+      expect.objectContaining({ id: 'queue-claimed', deliveryState: 'claimed' }),
+      expect.objectContaining({ text: 'new queued message' }),
+    ])
+    const persistedState = gatewayMocks.setThreadQueueState.mock.calls.at(-1)?.[0] as Record<string, Array<Record<string, unknown>>>
+    expect(persistedState['thread-queue']).toEqual([
+      expect.objectContaining({ text: 'new queued message' }),
+    ])
+    expect(persistedState['thread-queue']?.some((message) => message.id === 'queue-claimed')).toBe(false)
+  })
+
   it('shows a new-thread preview before thread creation resolves and transfers it once created', async () => {
     installTestWindow()
     const startedThread = deferred<{ threadId: string; model: string; modelProvider: string; turnId: string }>()

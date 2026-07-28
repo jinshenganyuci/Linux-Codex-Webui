@@ -336,6 +336,9 @@ export type StoredQueuedMessage = {
   speedMode?: SpeedMode
   model?: string
   reasoningEffort?: ReasoningEffort
+  deliveryState?: 'claimed'
+  claimedAtMs?: number
+  turnId?: string
 }
 
 export type ThreadQueueState = Record<string, StoredQueuedMessage[]>
@@ -3439,6 +3442,11 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
       : undefined
   const model = typeof record.model === 'string' ? record.model.trim() : ''
   const reasoningEffort = normalizeReasoningEffort(record.reasoningEffort)
+  const deliveryState = record.deliveryState === 'claimed' ? 'claimed' : ''
+  const claimedAtMs = typeof record.claimedAtMs === 'number' && Number.isFinite(record.claimedAtMs)
+    ? Math.max(0, Math.round(record.claimedAtMs))
+    : 0
+  const turnId = typeof record.turnId === 'string' ? record.turnId.trim() : ''
 
   return {
     id,
@@ -3450,6 +3458,9 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
     ...(speedMode ? { speedMode } : {}),
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(deliveryState ? { deliveryState } : {}),
+    ...(deliveryState && claimedAtMs > 0 ? { claimedAtMs } : {}),
+    ...(deliveryState && turnId ? { turnId } : {}),
   }
 }
 
