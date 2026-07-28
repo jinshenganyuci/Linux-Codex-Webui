@@ -764,7 +764,7 @@ describe('immediate sent-message rendering', () => {
     ])
   })
 
-  it('keeps one visible owner for a claimed queue message until its exact user turn is loaded', async () => {
+  it('keeps one visible owner for a claimed queue message through the user-message render commit', async () => {
     installTestWindow()
     let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
     gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
@@ -839,10 +839,35 @@ describe('immediate sent-message rendering', () => {
     })
     await state.loadMessages('thread-queue', { force: true })
 
-    expect(state.selectedThreadQueuedMessages.value).toEqual([])
+    expect(state.selectedThreadQueuedMessages.value).toEqual([
+      expect.objectContaining({ id: 'queue-1', deliveryState: 'claimed', turnId: 'turn-queue-1' }),
+    ])
     expect(state.messages.value).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: 'user', text: 'identical queued text', turnId: 'turn-queue-1' }),
     ]))
+    expect(state.messages.value.filter((message) => message.role === 'user' && message.turnId === 'turn-queue-1')).toHaveLength(1)
+
+    notificationHandler!({
+      method: 'codex-ui/thread-queue-updated',
+      params: {
+        action: 'finalized',
+        threadId: 'thread-queue',
+        queueId: 'queue-1',
+        turnId: 'turn-queue-1',
+      },
+    })
+    const pendingQueueRefresh = vi.mocked(window.setTimeout).mock.calls.filter(([, delay]) => delay === 650).at(-1)?.[0]
+    expect(pendingQueueRefresh).toEqual(expect.any(Function))
+    ;(pendingQueueRefresh as () => void)()
+    await vi.waitFor(() => expect(gatewayMocks.getThreadQueueState).toHaveBeenCalledTimes(4))
+    expect(state.selectedThreadQueuedMessages.value).toEqual([
+      expect.objectContaining({ id: 'queue-1', deliveryState: 'claimed', turnId: 'turn-queue-1' }),
+    ])
+
+    const releaseAfterRender = vi.mocked(window.setTimeout).mock.calls.filter(([, delay]) => delay === 0).at(-1)?.[0]
+    expect(releaseAfterRender).toEqual(expect.any(Function))
+    ;(releaseAfterRender as () => void)()
+    expect(state.selectedThreadQueuedMessages.value).toEqual([])
     expect(state.messages.value.filter((message) => message.role === 'user' && message.turnId === 'turn-queue-1')).toHaveLength(1)
     state.stopPolling()
   })

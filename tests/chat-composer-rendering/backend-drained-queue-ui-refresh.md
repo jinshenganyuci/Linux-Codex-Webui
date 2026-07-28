@@ -18,11 +18,13 @@ The queue panel refreshes when the backend starts and drains persisted queued me
 6. Switch to dark theme and repeat the visibility check after queue drain
 7. Throttle history loading, then watch the first queued item move from queued to sending and finally into the user-message history.
 8. Repeat with two identical prompts, attachments, and skills; fail one `turn/start`, reconnect, and retry.
+9. Drain 20 short queued messages back-to-back while sampling the queue row and matching user row every 20 ms.
 
 #### Expected Results
 - Queued messages execute in order after the active turn completes
 - The queue panel reflects backend queue state after `turn/started` and `turn/completed`
 - A claimed row remains visible and disabled as `Sending...` until the exact matching `turnId` exists as a persisted user message; there is no blank handoff frame.
+- The claimed row is released only after the matching user-message render commit; all 20 rapid handoffs record zero missing frames and zero missing milliseconds.
 - Queue ownership is correlated by queue ID and turn ID, so identical text cannot remove or hide the wrong row.
 - A failed start restores the same row at its original position, including attachments, skills, model, effort, and speed.
 - Reconnect recovery removes only a completed claimed row and preserves the next queued item.

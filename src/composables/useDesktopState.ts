@@ -1588,6 +1588,8 @@ export function useDesktopState() {
   const queuedMessagesByThreadId = ref<Record<string, QueuedMessage[]>>({})
   const queueProcessingByThreadId = ref<Record<string, boolean>>({})
   const queueRefreshTimerByThreadId = new Map<string, number>()
+  const queueHandoffReleaseIdsByThreadId = ref<Record<string, string[]>>({})
+  const queueHandoffReleaseTimerByThreadId = new Map<string, number>()
   let hasLoadedPersistedQueueState = false
   const eventUnreadByThreadId = ref<Record<string, boolean>>({})
   const availableModelIds = ref<string[]>([])
@@ -2848,6 +2850,15 @@ export function useDesktopState() {
     threadListedByServerById.value = pruneThreadStateMap(threadListedByServerById.value, activeThreadIds)
     persistedUserMessageByThreadId.value = pruneThreadStateMap(persistedUserMessageByThreadId.value, activeThreadIds)
     threadModelProviderByThreadId.value = pruneThreadStateMap(threadModelProviderByThreadId.value, activeThreadIds)
+    queueHandoffReleaseIdsByThreadId.value = pruneThreadStateMap(
+      queueHandoffReleaseIdsByThreadId.value,
+      activeThreadIds,
+    )
+    for (const [threadId, timer] of queueHandoffReleaseTimerByThreadId) {
+      if (activeThreadIds.has(threadId)) continue
+      if (typeof window !== 'undefined') window.clearTimeout(timer)
+      queueHandoffReleaseTimerByThreadId.delete(threadId)
+    }
     const nextQueuedMessages = pruneThreadStateMap(queuedMessagesByThreadId.value, activeThreadIds)
     if (nextQueuedMessages !== queuedMessagesByThreadId.value) {
       queuedMessagesByThreadId.value = nextQueuedMessages
@@ -3282,13 +3293,76 @@ export function useDesktopState() {
     setThreadTerminalOpen(threadId, !selectedThreadTerminalOpen.value)
   }
 
+  function queueHandoffIdsReadyForRelease(threadId: string): string[] {
+    const persistedUserTurnIds = new Set(
+      (persistedMessagesByThreadId.value[threadId] ?? [])
+        .filter((message) => message.role === 'user' && message.turnId)
+        .map((message) => message.turnId as string),
+    )
+    return (queuedMessagesByThreadId.value[threadId] ?? [])
+      .filter((message) => (
+        message.deliveryState === 'claimed'
+        && Boolean(message.turnId)
+        && persistedUserTurnIds.has(message.turnId as string)
+      ))
+      .map((message) => message.id)
+  }
+
+  function releaseRenderedQueueHandoffs(threadId: string): void {
+    const releasableIds = queueHandoffIdsReadyForRelease(threadId)
+    if (releasableIds.length === 0) return
+    const previous = queueHandoffReleaseIdsByThreadId.value[threadId] ?? []
+    const next = Array.from(new Set([...previous, ...releasableIds]))
+    if (areStringArraysEqual(previous, next)) return
+    queueHandoffReleaseIdsByThreadId.value = {
+      ...queueHandoffReleaseIdsByThreadId.value,
+      [threadId]: next,
+    }
+  }
+
+  function scheduleQueueHandoffReleaseAfterRender(threadId: string): void {
+    if (queueHandoffIdsReadyForRelease(threadId).length === 0) return
+    if (typeof window === 'undefined') {
+      releaseRenderedQueueHandoffs(threadId)
+      return
+    }
+    if (queueHandoffReleaseTimerByThreadId.has(threadId)) return
+    const timer = window.setTimeout(() => {
+      queueHandoffReleaseTimerByThreadId.delete(threadId)
+      releaseRenderedQueueHandoffs(threadId)
+    }, 0)
+    queueHandoffReleaseTimerByThreadId.set(threadId, timer)
+  }
+
+  function removeQueueHandoffReleaseId(threadId: string, queueId: string): void {
+    const previous = queueHandoffReleaseIdsByThreadId.value[threadId]
+    if (!previous?.includes(queueId)) return
+    const next = previous.filter((id) => id !== queueId)
+    queueHandoffReleaseIdsByThreadId.value = next.length > 0
+      ? { ...queueHandoffReleaseIdsByThreadId.value, [threadId]: next }
+      : omitKey(queueHandoffReleaseIdsByThreadId.value, threadId)
+  }
+
+  function pruneQueueHandoffReleaseIds(threadId: string, queue: QueuedMessage[]): void {
+    const previous = queueHandoffReleaseIdsByThreadId.value[threadId]
+    if (!previous) return
+    const queuedIds = new Set(queue.map((message) => message.id))
+    const next = previous.filter((id) => queuedIds.has(id))
+    if (areStringArraysEqual(previous, next)) return
+    queueHandoffReleaseIdsByThreadId.value = next.length > 0
+      ? { ...queueHandoffReleaseIdsByThreadId.value, [threadId]: next }
+      : omitKey(queueHandoffReleaseIdsByThreadId.value, threadId)
+  }
+
   function setPersistedMessagesForThread(threadId: string, nextMessages: UiMessage[]): void {
     const previous = persistedMessagesByThreadId.value[threadId] ?? []
-    if (areMessageArraysEqual(previous, nextMessages)) return
-    persistedMessagesByThreadId.value = {
-      ...persistedMessagesByThreadId.value,
-      [threadId]: nextMessages,
+    if (!areMessageArraysEqual(previous, nextMessages)) {
+      persistedMessagesByThreadId.value = {
+        ...persistedMessagesByThreadId.value,
+        [threadId]: nextMessages,
+      }
     }
+    scheduleQueueHandoffReleaseAfterRender(threadId)
   }
 
   function setAgentProgressSnapshot(
@@ -4862,6 +4936,7 @@ export function useDesktopState() {
         delete nextMessage.deliveryState
         delete nextMessage.claimedAtMs
         delete nextMessage.turnId
+        removeQueueHandoffReleaseId(threadId, queueId)
       }
       if (nextMessage !== current) {
         const nextQueue = [...queue]
@@ -4872,6 +4947,7 @@ export function useDesktopState() {
         }
       }
     }
+    scheduleQueueHandoffReleaseAfterRender(threadId)
     scheduleQueueStateRefresh(threadId, { immediate: false })
     return true
   }
@@ -6688,15 +6764,11 @@ export function useDesktopState() {
       const refreshedQueue = refreshedState[threadId] ?? []
       const previousQueue = queuedMessagesByThreadId.value[threadId] ?? []
       const refreshedIds = new Set(refreshedQueue.map((message) => message.id))
-      const persistedUserTurnIds = new Set(
-        (persistedMessagesByThreadId.value[threadId] ?? [])
-          .filter((message) => message.role === 'user' && message.turnId)
-          .map((message) => message.turnId as string),
-      )
+      const releasedQueueHandoffIds = new Set(queueHandoffReleaseIdsByThreadId.value[threadId] ?? [])
       const retainedClaims = previousQueue.filter((message) => (
         message.deliveryState === 'claimed'
         && !refreshedIds.has(message.id)
-        && (!message.turnId || !persistedUserTurnIds.has(message.turnId))
+        && !releasedQueueHandoffIds.has(message.id)
       ))
       const nextQueue = [...retainedClaims, ...refreshedQueue]
       const unchanged = nextQueue.length === previousQueue.length && nextQueue.every((message, index) => {
@@ -6719,6 +6791,7 @@ export function useDesktopState() {
           ? { ...queuedMessagesByThreadId.value, [threadId]: nextQueue }
           : omitKey(queuedMessagesByThreadId.value, threadId)
       }
+      pruneQueueHandoffReleaseIds(threadId, nextQueue)
     } catch {
       // Backend queue state is optional during transient bridge failures.
     } finally {
@@ -7712,8 +7785,11 @@ export function useDesktopState() {
     queueProcessingByThreadId.value = {}
     if (typeof window !== 'undefined') {
       for (const timer of queueRefreshTimerByThreadId.values()) window.clearTimeout(timer)
+      for (const timer of queueHandoffReleaseTimerByThreadId.values()) window.clearTimeout(timer)
     }
     queueRefreshTimerByThreadId.clear()
+    queueHandoffReleaseTimerByThreadId.clear()
+    queueHandoffReleaseIdsByThreadId.value = {}
     codexRateLimit.value = null
     threadTokenUsageByThreadId.value = {}
   }
@@ -7721,15 +7797,10 @@ export function useDesktopState() {
   const selectedThreadQueuedMessages = computed<QueuedMessage[]>(() => {
     const threadId = selectedThreadId.value
     if (!threadId) return []
-    const persistedUserTurnIds = new Set(
-      (persistedMessagesByThreadId.value[threadId] ?? [])
-        .filter((message) => message.role === 'user' && message.turnId)
-        .map((message) => message.turnId as string),
-    )
+    const releasedQueueHandoffIds = new Set(queueHandoffReleaseIdsByThreadId.value[threadId] ?? [])
     return (queuedMessagesByThreadId.value[threadId] ?? []).filter((message) => (
       message.deliveryState !== 'claimed'
-      || !message.turnId
-      || !persistedUserTurnIds.has(message.turnId)
+      || !releasedQueueHandoffIds.has(message.id)
     ))
   })
 
