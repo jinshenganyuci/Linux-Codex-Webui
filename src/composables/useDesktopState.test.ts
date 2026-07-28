@@ -5306,4 +5306,46 @@ describe('authoritative thread runtime reconciliation', () => {
       expect(state.error.value).toBe('')
     })
   })
+
+  it('treats thread-not-found interrupt errors as stale UI when runtime is terminal', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      messages: [{ id: 'final', role: 'assistant', text: 'done', messageType: 'agentMessage' }],
+      inProgress: false,
+      activeTurnId: 'turn-a',
+      turnIndexByTurnId: {},
+      hasMoreOlder: false,
+    })
+    gatewayMocks.resumeThread.mockResolvedValue(null)
+    gatewayMocks.interruptThreadTurn.mockRejectedValue(new Error(
+      'RPC turn/interrupt failed with HTTP 502: thread not found: thread-a',
+    ))
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'completed',
+      isRunning: false,
+      source: 'session',
+      startedAtIso: '2026-07-10T00:00:00.000Z',
+      completedAtIso: '2026-07-10T00:00:02.000Z',
+      owner: null,
+    }])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    await state.loadThreads()
+    await state.interruptSelectedThreadTurn()
+
+    await vi.waitFor(() => {
+      expect(state.projectGroups.value[0]?.threads[0]?.inProgress).toBe(false)
+      expect(state.selectedLiveOverlay.value?.errorText).toBeFalsy()
+      expect(state.error.value).toBe('')
+    })
+  })
 })

@@ -181,6 +181,57 @@ describe('resolveThreadRuntimeSnapshot', () => {
     expect(state.owner?.port).toBe(4175)
   })
 
+  it('rejects a long-lived external ghost lease that never gained session lifecycle evidence', () => {
+    const session = parseSessionRuntimeEvents([
+      sessionEvent('task_started', FIRST_TURN_ID, NOW_MS - 30_000),
+      sessionEvent('task_complete', FIRST_TURN_ID, NOW_MS - 1_000),
+    ].join('\n'))
+
+    const state = resolveThreadRuntimeSnapshot({
+      threadId: THREAD_ID,
+      session,
+      leases: [lease({
+        turnId: SECOND_TURN_ID,
+        startedAtMs: NOW_MS - 20_000,
+        heartbeatAtMs: NOW_MS,
+      })],
+      localInstanceId: 'observer-instance',
+      nowMs: NOW_MS,
+      provisionalTurnTtlMs: 15_000,
+    })
+
+    expect(state).toMatchObject({
+      turnId: FIRST_TURN_ID,
+      state: 'completed',
+      isRunning: false,
+      source: 'session',
+    })
+  })
+
+  it('allows a short grace window for an external lease before session lifecycle evidence arrives', () => {
+    const session = parseSessionRuntimeEvents(`${sessionEvent('task_started', FIRST_TURN_ID, NOW_MS - 30_000)}\n`)
+
+    const state = resolveThreadRuntimeSnapshot({
+      threadId: THREAD_ID,
+      session,
+      leases: [lease({
+        turnId: SECOND_TURN_ID,
+        startedAtMs: NOW_MS - 5_000,
+        heartbeatAtMs: NOW_MS,
+      })],
+      localInstanceId: 'observer-instance',
+      nowMs: NOW_MS,
+      provisionalTurnTtlMs: 15_000,
+    })
+
+    expect(state).toMatchObject({
+      turnId: SECOND_TURN_ID,
+      state: 'running',
+      isRunning: true,
+      source: 'external',
+    })
+  })
+
   it('expires a crashed owner lease instead of leaving an infinite running state', () => {
     const session = parseSessionRuntimeEvents(`${sessionEvent('task_started', FIRST_TURN_ID, NOW_MS - 20_000)}\n`)
 

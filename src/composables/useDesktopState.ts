@@ -6911,7 +6911,11 @@ export function useDesktopState() {
       pendingThreadsRefresh = true
       await syncFromNotifications()
     } catch (unknownError) {
-      if (isNoActiveTurnError(unknownError) || isActiveTurnIdMismatchError(unknownError)) {
+      if (
+        isNoActiveTurnError(unknownError)
+        || isActiveTurnIdMismatchError(unknownError)
+        || isThreadNotFoundError(unknownError)
+      ) {
         const runtimeState = await reconcileThreadRuntimeState(threadId)
         if (runtimeState && !runtimeState.isRunning) {
           setThreadInProgress(threadId, false)

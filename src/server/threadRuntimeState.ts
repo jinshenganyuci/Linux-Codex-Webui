@@ -361,12 +361,14 @@ export function resolveThreadRuntimeSnapshot(input: {
         lease.instanceId === input.localInstanceId
         && locallyInterruptedTurnIds.has(turn.turnId)
       ) continue
+      const lifecycleConfirmed = input.session === null || sessionRunningTurnIds.has(turn.turnId)
+      if (!lifecycleConfirmed && nowMs - turn.startedAtMs > provisionalTurnTtlMs) continue
       runningCandidates.push({
         turnId: turn.turnId,
         startedAtMs: turn.startedAtMs,
         source: lease.instanceId === input.localInstanceId ? 'local' : 'external',
         lease,
-        lifecycleConfirmed: true,
+        lifecycleConfirmed,
       })
     }
   }
