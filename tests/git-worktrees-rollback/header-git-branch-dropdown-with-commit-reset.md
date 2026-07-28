@@ -44,6 +44,7 @@ Thread header Git dropdown replaces the simple review action with a commits/bran
 31. Narrow the Review pane file list and confirm changed-file rows do not inherit folder-depth indentation, long names truncate on one line instead of wrapping vertically, and the `+`/`-` counts remain visible.
 32. At a mobile viewport around 375px wide, open the Review pane, scroll the diff content vertically, and confirm the `X` close button remains visible and tappable in the top-right corner.
 33. Switch to dark theme and repeat steps 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 21, 23, 24, 25, 26, 27, 28, 29, 30, 31, and 32.
+34. In a disposable repository, create both a branch named `dev` and a tracked file or directory named `dev`, open the Git dropdown, and select the `dev` branch row.
 
 #### Preserved Prior Coverage
 1. Click `Review Worktree Changes` and confirm the review pane opens; click it again and confirm the pane toggles.
@@ -97,6 +98,7 @@ Thread header Git dropdown replaces the simple review action with a commits/bran
 - The Review pane overlay, toolbar, file list, file sheet, and diff surfaces use dark backgrounds and borders in dark theme instead of showing light surfaces.
 - On mobile, branches, commits, and selected-commit file details stack vertically in that order and stay inside the viewport in both light theme and dark theme.
 - Loading and error messages remain visible in the dropdown without using browser alerts.
+- A branch commit list loads normally when a tracked path has the same name as the selected branch; missing repositories and refs return a specific error instead of repeated generic 500 responses.
 - Dropdown surfaces, text, badges, and errors are readable in both light theme and dark theme.
 
 #### Rollback/Cleanup
@@ -105,6 +107,7 @@ Thread header Git dropdown replaces the simple review action with a commits/bran
 - Revert or discard the tracked dirty-worktree file created for the blocked-switch validation.
 - Delete any untracked files created for untracked preservation validation.
 - Delete any tracked test commits/files created for whitespace-path commit-list validation.
+- Delete the disposable same-name branch/path repository used for branch-commit regression validation.
 - Inspect and remove test-only files under `.codex/untracked-backups/` after confirming backup behavior.
 - Clear any copied commit SHA from the clipboard if the test environment requires clipboard cleanup.
 

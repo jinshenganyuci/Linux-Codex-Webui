@@ -9630,8 +9630,29 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
         const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
         try {
-          const gitRoot = await runCommandCapture('git', ['rev-parse', '--show-toplevel'], { cwd })
+          const cwdInfo = await stat(cwd)
+          if (!cwdInfo.isDirectory()) {
+            setJson(res, 422, { error: 'cwd is not a directory' })
+            return
+          }
+        } catch {
+          setJson(res, 404, { error: 'cwd does not exist' })
+          return
+        }
+        let gitRoot = ''
+        try {
+          gitRoot = await runCommandCapture('git', ['rev-parse', '--show-toplevel'], { cwd })
+        } catch {
+          setJson(res, 422, { error: 'cwd is not inside a Git repository' })
+          return
+        }
+        try {
           await runCommandCapture('git', ['rev-parse', '--verify', `${branch}^{commit}`], { cwd: gitRoot })
+        } catch {
+          setJson(res, 404, { error: `Git branch or ref not found: ${branch}` })
+          return
+        }
+        try {
           let resetHistoryRefs: string[] = []
           if (includeResetHistory) {
             const resetHistoryRefPrefix = `refs/codex/header-git-reset-history/${branch}/`
@@ -9648,7 +9669,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }
           const output = await runCommandCapture(
             'git',
-            ['log', '-n', '50', '--date=short', '--format=%H%x09%h%x09%cd%x09%s', branch, ...resetHistoryRefs],
+            ['log', '-n', '50', '--date=short', '--format=%H%x09%h%x09%cd%x09%s', branch, ...resetHistoryRefs, '--'],
             { cwd: gitRoot },
           )
           const commits = output.split('\n').flatMap((line) => {
