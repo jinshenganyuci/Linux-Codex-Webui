@@ -44,6 +44,7 @@ export type RuntimeTurnEvidence = {
   startedAtMs: number
   completedAtMs: number | null
   status: 'running' | 'completed' | 'interrupted'
+  lifecycleConfirmed?: boolean
 }
 
 export type RuntimeLeaseTurn = {
@@ -84,6 +85,7 @@ type ThreadRuntimeStateOptions = {
   processStartedAtMs?: number
   heartbeatIntervalMs?: number
   leaseTtlMs?: number
+  provisionalTurnTtlMs?: number
   now?: () => number
   port?: () => number | null
 }
@@ -91,6 +93,7 @@ type ThreadRuntimeStateOptions = {
 const LEASE_VERSION = 1
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 2_000
 const DEFAULT_LEASE_TTL_MS = 10_000
+const DEFAULT_PROVISIONAL_TURN_TTL_MS = 15_000
 const LEASE_DIRECTORY_NAME = 'thread-runtime-leases'
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -269,6 +272,7 @@ type Candidate = {
 type RunningCandidate = Candidate & {
   source: 'local' | 'external'
   lease: RuntimeInstanceLease | null
+  lifecycleConfirmed: boolean
 }
 
 type TerminalCandidate = Candidate & {
@@ -303,12 +307,17 @@ export function resolveThreadRuntimeSnapshot(input: {
   localInstanceId?: string
   nowMs?: number
   leaseTtlMs?: number
+  provisionalTurnTtlMs?: number
 }): ThreadRuntimeStateSnapshot {
   const threadId = input.threadId.trim()
   const nowMs = input.nowMs ?? Date.now()
   const leaseTtlMs = input.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS
+  const provisionalTurnTtlMs = input.provisionalTurnTtlMs ?? DEFAULT_PROVISIONAL_TURN_TTL_MS
   const localTurns = (input.localTurns ?? []).filter((turn) => turn.threadId === threadId)
   const freshLeases = (input.leases ?? []).filter((lease) => isLeaseFresh(lease, nowMs, leaseTtlMs))
+  const sessionRunningTurnIds = new Set(
+    (input.session?.turns ?? []).filter((turn) => turn.status === 'running').map((turn) => turn.turnId),
+  )
   const runningTurnIds = new Set(localTurns.filter((turn) => turn.status === 'running').map((turn) => turn.turnId))
   for (const lease of freshLeases) {
     for (const turn of lease.turns) {
@@ -329,6 +338,8 @@ export function resolveThreadRuntimeSnapshot(input: {
   const runningCandidates: RunningCandidate[] = []
   for (const turn of localTurns) {
     if (turn.status === 'running' && !completedRunningTurnIds.has(turn.turnId)) {
+      const lifecycleConfirmed = turn.lifecycleConfirmed !== false || sessionRunningTurnIds.has(turn.turnId)
+      if (!lifecycleConfirmed && nowMs - turn.startedAtMs > provisionalTurnTtlMs) continue
       const localLease = freshLeases.find((lease) => (
         lease.instanceId === input.localInstanceId
         && lease.turns.some((candidate) => candidate.threadId === threadId && candidate.turnId === turn.turnId)
@@ -338,6 +349,7 @@ export function resolveThreadRuntimeSnapshot(input: {
         startedAtMs: turn.startedAtMs,
         source: 'local',
         lease: localLease,
+        lifecycleConfirmed,
       })
     }
   }
@@ -354,31 +366,8 @@ export function resolveThreadRuntimeSnapshot(input: {
         startedAtMs: turn.startedAtMs,
         source: lease.instanceId === input.localInstanceId ? 'local' : 'external',
         lease,
+        lifecycleConfirmed: true,
       })
-    }
-  }
-
-  const newestRunning = pickNewestCandidate(runningCandidates) as RunningCandidate | null
-  if (newestRunning) {
-    const ownerLease = newestRunning.lease
-    return {
-      threadId,
-      turnId: newestRunning.turnId,
-      state: 'running',
-      isRunning: true,
-      source: newestRunning.source,
-      startedAtIso: toIso(newestRunning.startedAtMs),
-      completedAtIso: null,
-      owner: ownerLease
-        ? {
-            instanceId: ownerLease.instanceId,
-            processId: ownerLease.processId,
-            processIdentity: ownerLease.processIdentity,
-            port: ownerLease.port,
-            local: newestRunning.source === 'local',
-            heartbeatAtIso: new Date(ownerLease.heartbeatAtMs).toISOString(),
-          }
-        : null,
     }
   }
 
@@ -417,6 +406,36 @@ export function resolveThreadRuntimeSnapshot(input: {
       )
     ) {
       latestTerminal = candidate
+    }
+  }
+
+  const newestRunning = pickNewestCandidate(runningCandidates) as RunningCandidate | null
+  const provisionalWasSuperseded = Boolean(
+    newestRunning
+    && !newestRunning.lifecycleConfirmed
+    && latestTerminal
+    && latestTerminal.atMs >= newestRunning.startedAtMs,
+  )
+  if (newestRunning && !provisionalWasSuperseded) {
+    const ownerLease = newestRunning.lease
+    return {
+      threadId,
+      turnId: newestRunning.turnId,
+      state: 'running',
+      isRunning: true,
+      source: newestRunning.source,
+      startedAtIso: toIso(newestRunning.startedAtMs),
+      completedAtIso: null,
+      owner: ownerLease
+        ? {
+            instanceId: ownerLease.instanceId,
+            processId: ownerLease.processId,
+            processIdentity: ownerLease.processIdentity,
+            port: ownerLease.port,
+            local: newestRunning.source === 'local',
+            heartbeatAtIso: new Date(ownerLease.heartbeatAtMs).toISOString(),
+          }
+        : null,
     }
   }
 
@@ -488,6 +507,7 @@ export class ThreadRuntimeState {
   readonly processId: number
   readonly processIdentity: string
   readonly leaseTtlMs: number
+  readonly provisionalTurnTtlMs: number
 
   private readonly now: () => number
   private readonly readPort: () => number | null
@@ -513,6 +533,7 @@ export class ThreadRuntimeState {
     this.readPort = options.port ?? defaultPortReader
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS
     this.leaseTtlMs = options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS
+    this.provisionalTurnTtlMs = options.provisionalTurnTtlMs ?? DEFAULT_PROVISIONAL_TURN_TTL_MS
     this.leaseDirectory = join(codexHome, 'linux-codex-webui-runtime', LEASE_DIRECTORY_NAME)
     this.leasePath = join(this.leaseDirectory, `${this.instanceId}.json`)
   }
@@ -527,6 +548,7 @@ export class ThreadRuntimeState {
       startedAtMs: this.now(),
       completedAtMs: null,
       status: 'running',
+      lifecycleConfirmed: false,
     })
     return pendingTurnId
   }
@@ -547,7 +569,7 @@ export class ThreadRuntimeState {
       if (pendingTurnId) this.rejectTurnStart(threadId, pendingTurnId)
       return
     }
-    this.promotePendingTurn(threadId, pendingTurnId, turnId)
+    this.promotePendingTurn(threadId, pendingTurnId, turnId, undefined, false)
   }
 
   observeThreadPayload(payload: unknown): void {
@@ -573,7 +595,7 @@ export class ThreadRuntimeState {
         ?? readIsoMs(paramsRecord?.startedAt)
         ?? uuidV7TimestampMs(turnId)
         ?? this.now()
-      this.promotePendingTurn(threadId, '', turnId, startedAtMs)
+      this.promotePendingTurn(threadId, '', turnId, startedAtMs, true)
       return
     }
 
@@ -591,6 +613,7 @@ export class ThreadRuntimeState {
       startedAtMs: existing?.startedAtMs ?? uuidV7TimestampMs(turnId) ?? completedAtMs,
       completedAtMs,
       status,
+      lifecycleConfirmed: true,
     })
   }
 
@@ -629,6 +652,8 @@ export class ThreadRuntimeState {
     return Promise.all(normalizedThreadIds.map(async (threadId) => {
       const sessionPath = this.sessionPathByThreadId.get(threadId) ?? ''
       const session = sessionPath ? await this.readSessionSnapshot(sessionPath) : null
+      this.confirmLocalTurnsFromSession(threadId, session)
+      this.pruneLocalTurns(threadId, nowMs)
       const localTurns = Array.from(this.localTurnsByThreadId.get(threadId)?.values() ?? [])
       return resolveThreadRuntimeSnapshot({
         threadId,
@@ -638,6 +663,7 @@ export class ThreadRuntimeState {
         localInstanceId: this.instanceId,
         nowMs,
         leaseTtlMs: this.leaseTtlMs,
+        provisionalTurnTtlMs: this.provisionalTurnTtlMs,
       })
     }))
   }
@@ -665,7 +691,13 @@ export class ThreadRuntimeState {
     this.sessionPathByThreadId.set(threadId, sessionPath)
   }
 
-  private promotePendingTurn(threadId: string, pendingTurnId: string, turnId: string, startedAtMs?: number): void {
+  private promotePendingTurn(
+    threadId: string,
+    pendingTurnId: string,
+    turnId: string,
+    startedAtMs?: number,
+    lifecycleConfirmed = true,
+  ): void {
     const normalizedThreadId = threadId.trim()
     const normalizedTurnId = turnId.trim()
     if (!normalizedThreadId || !normalizedTurnId) return
@@ -688,7 +720,23 @@ export class ThreadRuntimeState {
       status: existing?.status === 'completed' || existing?.status === 'interrupted'
         ? existing.status
         : 'running',
+      lifecycleConfirmed: existing?.lifecycleConfirmed === true || lifecycleConfirmed,
     })
+  }
+
+  private confirmLocalTurnsFromSession(threadId: string, session: SessionRuntimeSnapshot | null): void {
+    const turns = this.localTurnsByThreadId.get(threadId)
+    if (!turns || !session) return
+    const confirmedTurnIds = new Set(
+      session.turns.filter((turn) => turn.status === 'running').map((turn) => turn.turnId),
+    )
+    let changed = false
+    for (const [turnId, turn] of turns) {
+      if (turn.status !== 'running' || turn.lifecycleConfirmed !== false || !confirmedTurnIds.has(turnId)) continue
+      turns.set(turnId, { ...turn, lifecycleConfirmed: true })
+      changed = true
+    }
+    if (changed) this.queueLeaseWrite()
   }
 
   private upsertLocalTurn(turn: RuntimeTurnEvidence): void {
@@ -712,19 +760,26 @@ export class ThreadRuntimeState {
 
   private pruneLocalTurns(threadId: string, nowMs: number): void {
     const turns = this.localTurnsByThreadId.get(threadId)
-    if (!turns || turns.size <= 12) return
-    const removable = Array.from(turns.values())
-      .filter((turn) => turn.status !== 'running')
-      .sort((first, second) => (
-        (first.completedAtMs ?? first.startedAtMs) - (second.completedAtMs ?? second.startedAtMs)
-      ))
-    while (turns.size > 12 && removable.length > 0) {
-      const oldest = removable.shift()
-      if (oldest) turns.delete(oldest.turnId)
-    }
+    if (!turns) return
     for (const [turnId, turn] of turns) {
       const terminalAtMs = turn.completedAtMs ?? turn.startedAtMs
       if (turn.status === 'interrupted' && nowMs - terminalAtMs > 60_000) turns.delete(turnId)
+      if (
+        turn.status === 'running'
+        && turn.lifecycleConfirmed === false
+        && nowMs - turn.startedAtMs > this.provisionalTurnTtlMs
+      ) turns.delete(turnId)
+    }
+    if (turns.size > 12) {
+      const removable = Array.from(turns.values())
+        .filter((turn) => turn.status !== 'running')
+        .sort((first, second) => (
+          (first.completedAtMs ?? first.startedAtMs) - (second.completedAtMs ?? second.startedAtMs)
+        ))
+      while (turns.size > 12 && removable.length > 0) {
+        const oldest = removable.shift()
+        if (oldest) turns.delete(oldest.turnId)
+      }
     }
     if (turns.size === 0) this.localTurnsByThreadId.delete(threadId)
   }
@@ -733,7 +788,11 @@ export class ThreadRuntimeState {
     const turns: RuntimeLeaseTurn[] = []
     for (const [threadId, threadTurns] of this.localTurnsByThreadId) {
       for (const turn of threadTurns.values()) {
-        if (turn.status !== 'running' || turn.turnId.startsWith('pending:')) continue
+        if (
+          turn.status !== 'running'
+          || turn.lifecycleConfirmed === false
+          || turn.turnId.startsWith('pending:')
+        ) continue
         turns.push({
           threadId,
           turnId: turn.turnId,

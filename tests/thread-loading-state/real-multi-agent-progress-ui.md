@@ -40,6 +40,8 @@
    - While the newer continuation still has a fresh runtime lease, an older completion must not replace its `Running` / `运行中` state.
    - After a child starts turn B, delayed completion/runtime evidence from its turn A does not stop B; a fresh runtime owner for B can resume a terminal A row.
    - After the root turn is terminal, delayed same-turn activity or a replayed `turn/started` event does not restore `Running` / `运行中`.
+   - A `turn/start` response ID without matching `turn/started` or session `task_started` evidence remains provisional, is never published in the cross-instance runtime lease, and cannot keep the card running after a real terminal lifecycle event.
+   - A separately confirmed newer turn remains running when an overlapping older turn completes, including a silent task whose lease heartbeat remains fresh for several hours.
    - When runtime switches the root from turn A to B, a delayed turn A progress response is discarded; the card stays empty until real turn B progress arrives and then renders B.
    - Completed, failed, and interrupted rows show a frozen `Duration` / `耗时`; their labels do not keep increasing after completion.
 6. While a turn is running, deliver an app-server `error` notification with `willRetry: true`, followed by a non-retry error.

@@ -4967,6 +4967,14 @@ export function useDesktopState() {
         || activeTurnId === completedTurn.turnId
         || correctsInterruptedOverlap
       ) && !hasDifferentRunningProgress && !hasDifferentRunningRuntime
+      if (
+        !completionEndsActiveRun
+        && activeTurnId
+        && activeTurnId !== completedTurn.turnId
+        && optimisticTurnStartedAtByThreadId.has(completedTurn.threadId)
+      ) {
+        void reconcileThreadRuntimeState(completedTurn.threadId)
+      }
       if (completionEndsActiveRun || correctsInterruptedOverlap) {
         invalidateAgentProgressLoadForThread(completedTurn.threadId)
         optimisticTurnStartedAtByThreadId.delete(completedTurn.threadId)
@@ -6280,6 +6288,7 @@ export function useDesktopState() {
 
     if (isInProgress) {
       shouldAutoScrollOnNextAgentEvent = true
+      optimisticTurnStartedAtByThreadId.set(threadId, Date.now())
       void startTurnForThread(
         threadId,
         nextText,
@@ -6289,6 +6298,7 @@ export function useDesktopState() {
         collaborationModeOverride,
         speedMode,
       ).catch((unknownError) => {
+        optimisticTurnStartedAtByThreadId.delete(threadId)
         const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
         setTurnErrorForThread(threadId, errorMessage)
         error.value = errorMessage
@@ -7185,6 +7195,9 @@ export function useDesktopState() {
         && !activeTurnId.startsWith('pending:')
         && (!state.turnId || activeTurnId !== state.turnId),
       )
+      const activeTurnIsUnconfirmedOptimistic = Boolean(
+        hasDifferentActiveTurn && optimisticTurnStartedAtByThreadId.has(threadId),
+      )
       const replacesKnownRunningRuntime = Boolean(
         hasDifferentActiveTurn
         && knownRuntimeState?.isRunning
@@ -7198,7 +7211,7 @@ export function useDesktopState() {
       )
       const terminalLifecycleSupersedesActiveTurn = Boolean(
         hasDifferentActiveTurn
-        && (replacesKnownRunningRuntime || activeTurnHasTerminalProgress)
+        && (replacesKnownRunningRuntime || activeTurnHasTerminalProgress || activeTurnIsUnconfirmedOptimistic)
         && (
           !currentProgress
           || (
@@ -7208,7 +7221,12 @@ export function useDesktopState() {
         ),
       )
       if (shouldIgnoreOlderTerminalRuntimeState(state) && !terminalLifecycleSupersedesActiveTurn) continue
-      if (hasDifferentActiveTurn && !replacesKnownRunningRuntime && !activeTurnHasTerminalProgress) continue
+      if (
+        hasDifferentActiveTurn
+        && !replacesKnownRunningRuntime
+        && !activeTurnHasTerminalProgress
+        && !activeTurnIsUnconfirmedOptimistic
+      ) continue
       if (
         hasDifferentActiveTurn
         && currentProgress

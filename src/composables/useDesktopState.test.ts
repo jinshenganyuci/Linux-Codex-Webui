@@ -3487,6 +3487,108 @@ describe('notification recovery', () => {
 })
 
 describe('authoritative thread runtime reconciliation', () => {
+  it('clears an unconfirmed turn/start ghost as soon as the real turn completes', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.startThreadTurn.mockResolvedValue('turn-b')
+    gatewayMocks.resumeThread.mockResolvedValue({ model: '', modelProvider: '' })
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      state: 'completed',
+      isRunning: false,
+      source: 'session',
+      startedAtIso: new Date(1_700_000_001_000).toISOString(),
+      completedAtIso: new Date(1_700_000_004_000).toISOString(),
+      owner: null,
+    }])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    await state.loadThreads()
+    state.startPolling()
+    notificationHandler!({
+      method: 'turn/started',
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'inProgress' } },
+    })
+    expect(state.selectedThreadId.value).toBe('thread-a')
+    expect(state.projectGroups.value[0]?.threads[0]?.inProgress).toBe(true)
+
+    await state.sendMessageToSelectedThread('mid-turn steer', [], [], 'steer')
+    await vi.waitFor(() => expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1))
+    notificationHandler!({
+      method: 'turn/completed',
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'completed' } },
+    })
+
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getThreadRuntimeStates).toHaveBeenCalledWith(['thread-a'])
+      expect(state.projectGroups.value[0]?.threads[0]?.inProgress).toBe(false)
+      expect(state.error.value).toBe('')
+    })
+    await state.interruptSelectedThreadTurn()
+    expect(gatewayMocks.interruptThreadTurn).not.toHaveBeenCalled()
+    state.stopPolling()
+  })
+
+  it('keeps a genuinely started newer turn running after the older turn completes', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.startThreadTurn.mockResolvedValue('turn-b')
+    gatewayMocks.resumeThread.mockResolvedValue({ model: '', modelProvider: '' })
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{
+      threadId: 'thread-a',
+      turnId: 'turn-b',
+      state: 'running',
+      isRunning: true,
+      source: 'local',
+      startedAtIso: new Date(1_700_000_003_000).toISOString(),
+      completedAtIso: null,
+      owner: null,
+    }])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    await state.loadThreads()
+    state.startPolling()
+    notificationHandler!({
+      method: 'turn/started',
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'inProgress' } },
+    })
+    expect(state.selectedThreadId.value).toBe('thread-a')
+    expect(state.projectGroups.value[0]?.threads[0]?.inProgress).toBe(true)
+    await state.sendMessageToSelectedThread('start the next real turn', [], [], 'steer')
+    await vi.waitFor(() => expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1))
+    notificationHandler!({
+      method: 'turn/started',
+      params: { threadId: 'thread-a', turn: { id: 'turn-b', status: 'inProgress' } },
+    })
+    notificationHandler!({
+      method: 'turn/completed',
+      params: { threadId: 'thread-a', turn: { id: 'turn-a', status: 'completed' } },
+    })
+
+    expect(state.projectGroups.value[0]?.threads[0]?.inProgress).toBe(true)
+    state.stopPolling()
+  })
+
   it('repairs interrupted progress once and does not rehydrate on repeated completed polls', async () => {
     installTestWindow()
     const timers: Array<{ callback: () => void; delay: number }> = []

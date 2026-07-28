@@ -226,6 +226,77 @@ describe('resolveThreadRuntimeSnapshot', () => {
     expect(state.state).toBe('running')
   })
 
+  it('lets a real terminal lifecycle override a newer unconfirmed turn/start result', () => {
+    const session = parseSessionRuntimeEvents([
+      sessionEvent('task_started', FIRST_TURN_ID, NOW_MS - 20_000),
+      sessionEvent('task_complete', FIRST_TURN_ID, NOW_MS - 1_000),
+    ].join('\n'))
+    const provisionalTurn: RuntimeTurnEvidence = {
+      threadId: THREAD_ID,
+      turnId: SECOND_TURN_ID,
+      startedAtMs: NOW_MS - 10_000,
+      completedAtMs: null,
+      status: 'running',
+      lifecycleConfirmed: false,
+    }
+
+    expect(resolveThreadRuntimeSnapshot({
+      threadId: THREAD_ID,
+      session,
+      localTurns: [provisionalTurn],
+      nowMs: NOW_MS,
+    })).toMatchObject({
+      turnId: FIRST_TURN_ID,
+      state: 'completed',
+      isRunning: false,
+    })
+  })
+
+  it('keeps a confirmed newer turn running when an overlapping older turn completes', () => {
+    const session = parseSessionRuntimeEvents([
+      sessionEvent('task_started', FIRST_TURN_ID, NOW_MS - 20_000),
+      sessionEvent('task_complete', FIRST_TURN_ID, NOW_MS - 1_000),
+    ].join('\n'))
+    const confirmedTurn: RuntimeTurnEvidence = {
+      threadId: THREAD_ID,
+      turnId: SECOND_TURN_ID,
+      startedAtMs: NOW_MS - 10_000,
+      completedAtMs: null,
+      status: 'running',
+      lifecycleConfirmed: true,
+    }
+
+    expect(resolveThreadRuntimeSnapshot({
+      threadId: THREAD_ID,
+      session,
+      localTurns: [confirmedTurn],
+      nowMs: NOW_MS,
+    })).toMatchObject({
+      turnId: SECOND_TURN_ID,
+      state: 'running',
+      isRunning: true,
+    })
+  })
+
+  it('expires an unconfirmed turn/start result after its confirmation window', () => {
+    const provisionalTurn: RuntimeTurnEvidence = {
+      threadId: THREAD_ID,
+      turnId: SECOND_TURN_ID,
+      startedAtMs: NOW_MS - 15_001,
+      completedAtMs: null,
+      status: 'running',
+      lifecycleConfirmed: false,
+    }
+
+    expect(resolveThreadRuntimeSnapshot({
+      threadId: THREAD_ID,
+      session: null,
+      localTurns: [provisionalTurn],
+      nowMs: NOW_MS,
+      provisionalTurnTtlMs: 15_000,
+    })).toMatchObject({ state: 'idle', isRunning: false })
+  })
+
   it('prefers a later task completion over a newer abandoned overlapping turn', () => {
     const session = parseSessionRuntimeEvents([
       sessionEvent('task_started', FIRST_TURN_ID, NOW_MS - 5_000),
@@ -312,6 +383,58 @@ describe('resolveThreadRuntimeSnapshot', () => {
 })
 
 describe('ThreadRuntimeState incremental session parsing', () => {
+  it('does not publish an RPC-only turn ID in the runtime lease', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'linux-codex-runtime-'))
+    temporaryDirectories.push(codexHome)
+    const runtime = new ThreadRuntimeState({
+      codexHome,
+      instanceId: 'test-instance',
+      processId: 1234,
+      processStartedAtMs: NOW_MS - 60_000,
+      now: () => NOW_MS,
+    })
+    const pendingTurnId = runtime.beginTurn(THREAD_ID)
+    runtime.observeRpcResult('turn/start', { threadId: THREAD_ID }, { turn: { id: SECOND_TURN_ID } }, pendingTurnId)
+
+    const activeLeaseTurns = (runtime as unknown as { activeLeaseTurns: () => unknown[] }).activeLeaseTurns()
+    expect(activeLeaseTurns).toEqual([])
+
+    runtime.observeNotification('turn/started', {
+      threadId: THREAD_ID,
+      turn: { id: SECOND_TURN_ID, startedAt: new Date(NOW_MS).toISOString() },
+    })
+    expect((runtime as unknown as { activeLeaseTurns: () => Array<{ turnId: string }> }).activeLeaseTurns())
+      .toEqual([expect.objectContaining({ turnId: SECOND_TURN_ID })])
+    await runtime.dispose()
+  })
+
+  it('promotes session task_started evidence before expiring a quiet provisional turn', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'linux-codex-runtime-'))
+    temporaryDirectories.push(codexHome)
+    const sessionPath = join(codexHome, 'session.jsonl')
+    await writeFile(sessionPath, `${sessionEvent('task_started', SECOND_TURN_ID, NOW_MS - 60_000)}\n`, 'utf8')
+    const runtime = new ThreadRuntimeState({
+      codexHome,
+      instanceId: 'test-instance',
+      processId: 1234,
+      processStartedAtMs: NOW_MS - 120_000,
+      now: () => NOW_MS,
+      provisionalTurnTtlMs: 15_000,
+    })
+    runtime.observeThreadPayload({ thread: { id: THREAD_ID, path: sessionPath } })
+    const pendingTurnId = runtime.beginTurn(THREAD_ID)
+    runtime.observeRpcResult('turn/start', { threadId: THREAD_ID }, { turn: { id: SECOND_TURN_ID } }, pendingTurnId)
+
+    expect((await runtime.getStates([THREAD_ID]))[0]).toMatchObject({
+      turnId: SECOND_TURN_ID,
+      state: 'running',
+      isRunning: true,
+    })
+    expect((runtime as unknown as { activeLeaseTurns: () => Array<{ turnId: string }> }).activeLeaseTurns())
+      .toEqual([expect.objectContaining({ turnId: SECOND_TURN_ID })])
+    await runtime.dispose()
+  })
+
   it('observes an appended completion without reparsing state precedence incorrectly', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'linux-codex-runtime-'))
     temporaryDirectories.push(codexHome)
