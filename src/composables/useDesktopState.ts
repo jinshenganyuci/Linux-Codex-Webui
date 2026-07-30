@@ -872,6 +872,29 @@ function normalizeMessageText(value: string): string {
   return value.replace(/\s+/gu, ' ').trim()
 }
 
+function extractLocalImagePathFromUrl(value: string): string {
+  try {
+    const parsed = new URL(value, 'http://localhost')
+    if (parsed.pathname !== '/codex-local-image') return ''
+    return parsed.searchParams.get('path')?.trim() ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function countNonImageFileAttachments(message: UiMessage): number {
+  const fileAttachments = message.fileAttachments ?? []
+  if (fileAttachments.length === 0) return 0
+  const imagePaths = new Set(
+    (message.images ?? [])
+      .map(extractLocalImagePathFromUrl)
+      .filter(Boolean),
+  )
+  return fileAttachments.filter((attachment) => (
+    !imagePaths.has(attachment.path.trim())
+  )).length
+}
+
 function isOptimisticUserMessage(message: UiMessage): boolean {
   return message.messageType === 'userMessage.optimistic'
 }
@@ -888,14 +911,14 @@ function hasEquivalentUserMessage(target: UiMessage, messages: UiMessage[]): boo
   if (target.role !== 'user') return false
   const targetText = normalizeMessageText(target.text)
   const targetImages = Array.isArray(target.images) ? target.images : []
-  const targetFileCount = Array.isArray(target.fileAttachments) ? target.fileAttachments.length : 0
+  const targetFileCount = countNonImageFileAttachments(target)
   const targetSkillCount = Array.isArray(target.skills) ? target.skills.length : 0
 
   return messages.some((message) => {
     if (message === target || message.role !== 'user' || isOptimisticUserMessage(message)) return false
     const messageText = normalizeMessageText(message.text)
     const messageImages = Array.isArray(message.images) ? message.images : []
-    const messageFileCount = Array.isArray(message.fileAttachments) ? message.fileAttachments.length : 0
+    const messageFileCount = countNonImageFileAttachments(message)
     const messageSkillCount = Array.isArray(message.skills) ? message.skills.length : 0
     return (
       messageText === targetText &&
@@ -1676,16 +1699,6 @@ export function useDesktopState() {
   const error = ref('')
   const isPolling = ref(false)
   const hasLoadedThreads = ref(false)
-
-  function extractLocalImagePathFromUrl(value: string): string {
-    try {
-      const parsed = new URL(value, 'http://localhost')
-      if (parsed.pathname !== '/codex-local-image') return ''
-      return parsed.searchParams.get('path')?.trim() ?? ''
-    } catch {
-      return ''
-    }
-  }
 
   function shouldReuseAttachedImageFromPrompt(promptText: string): boolean {
     const normalized = promptText.trim().toLowerCase()

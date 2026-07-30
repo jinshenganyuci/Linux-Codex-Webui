@@ -632,6 +632,62 @@ describe('immediate sent-message rendering', () => {
     await sendPromise
   })
 
+  it('replaces an optimistic screenshot message when history also records its image as a file attachment', async () => {
+    installTestWindow()
+    const imagePath = '/tmp/pasted-image.png'
+    const imageUrl = `/codex-local-image?path=${encodeURIComponent(imagePath)}`
+    let serverMessages: Array<Record<string, unknown>> = []
+    gatewayMocks.getThreadDetail.mockImplementation(async () => ({
+      model: '',
+      modelProvider: '',
+      messages: serverMessages,
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    }))
+    gatewayMocks.resumeThread.mockResolvedValue({ model: '', modelProvider: '' })
+    gatewayMocks.startThreadTurn.mockResolvedValue('turn-screenshot')
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-screenshot')
+    await state.loadMessages('thread-screenshot')
+    await state.sendMessageToSelectedThread('请看截图', [imageUrl])
+
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+    expect(state.messages.value).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        text: '请看截图',
+        images: [imageUrl],
+        messageType: 'userMessage.optimistic',
+      }),
+    ])
+
+    serverMessages = [{
+      id: 'user-screenshot',
+      role: 'user',
+      text: '请看截图',
+      images: [imageUrl],
+      fileAttachments: [{ label: 'pasted-image.png', path: imagePath }],
+      messageType: 'userMessage',
+      turnId: 'turn-screenshot',
+    }]
+    await state.loadMessages('thread-screenshot', { force: true })
+
+    expect(state.messages.value).toEqual([
+      expect.objectContaining({
+        id: 'user-screenshot',
+        role: 'user',
+        text: '请看截图',
+        images: [imageUrl],
+        fileAttachments: [{ label: 'pasted-image.png', path: imagePath }],
+        messageType: 'userMessage',
+      }),
+    ])
+    expect(state.messages.value.filter((message) => message.text === '请看截图')).toHaveLength(1)
+  })
+
   it('reveals an optimistic message immediately while the selected thread is still loading', async () => {
     installTestWindow()
     const threadDetail = deferred<{

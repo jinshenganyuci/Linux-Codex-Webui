@@ -21,6 +21,7 @@
 - Mixed payload paste attaches the image while preserving text paste behavior.
 - Long plain-text paste (>= 2000 chars) creates a `.txt` attachment and does not insert raw text into the textarea.
 - Sending proceeds with the attached pasted image.
+- The sent screenshot message remains a single user-message row after its server history refresh; the image's generated file attachment must not create a second copy of the same text.
 
 #### Rollback/Cleanup
 - Remove the attached image chip from composer if not needed.
