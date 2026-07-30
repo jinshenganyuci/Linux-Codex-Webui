@@ -1,4 +1,4 @@
-### Feature: Lazy message rendering (windowed conversation)
+### Feature: Long-running conversations keep all loaded messages visible
 
 #### Prerequisites
 - App is running from this repository.
@@ -7,33 +7,33 @@
 - The thread contains one completed command with a known output smaller than 256 KiB, including unique first and last lines.
 - A separate historical fixture contains a `commandExecution.aggregatedOutput` larger than 256 KiB (262,144 UTF-8 bytes), with unique early and final markers. Reload the thread after creating the fixture so it is read through `thread/read`, `thread/resume`, or the live-state history response rather than only from an in-memory live turn.
 
-#### Steps — initial load window
+#### Steps — loaded-message visibility
 
 1. Open a thread with 60+ messages.
-2. Observe that the conversation list does **not** show all messages immediately — only the most recent ~50 are rendered.
-3. Verify the latest messages are visible and the chat is scrolled to the bottom.
-4. Confirm no persistent older-message button appears at the top of the visible list.
+2. Scroll from the newest messages to the first message currently loaded in the conversation.
+3. Verify the earlier loaded messages remain present; no loaded message disappears merely because the thread exceeds 50 rows.
+4. Verify the latest messages remain visible when the conversation is scrolled back to the bottom.
 
-#### Steps — scroll-triggered load
+#### Steps — server-paginated history
 
 5. Scroll up slowly toward the top of the conversation list.
-6. When the scroll position reaches within ~200 px of the top, verify that the previous 30 messages appear automatically above the current ones.
+6. If the thread has more persisted history, when the scroll position reaches within ~200 px of the top, verify that the next server history page appears above the current messages.
 7. Confirm the viewport does **not** jump — the messages you were reading stay in view.
-8. Repeat scrolling up to verify additional chunks load on demand.
-9. Once all messages are loaded, confirm reaching the top no longer prepends another batch.
+8. Repeat scrolling up to verify additional server pages load on demand.
+9. Once all persisted pages are loaded, confirm reaching the top no longer prepends another page.
 
 #### Steps — live session growth
 
 10. Start an active Codex session (or send many messages in quick succession).
 11. Let the conversation exceed 50 messages while staying scrolled to the bottom.
-12. Verify the rendered count stays bounded (top of the DOM list advances as new messages arrive).
-13. Scroll up to the top and confirm older trimmed messages load automatically.
+12. Scroll upward during the running task and verify every already loaded message remains readable.
+13. Confirm the conversation never leaves a blank gap that only a page refresh can repair.
 
 #### Steps — rollback / message shrink
 
 14. In a thread with a turn that can be rolled back, trigger a rollback.
 15. Verify the conversation does **not** go blank — messages still render after the list shrinks.
-16. Confirm `renderWindowStart` recovers gracefully and earlier messages remain accessible.
+16. Confirm earlier remaining messages stay accessible after the list shrinks.
 
 #### Steps — collapsed command output and historical payload limit
 
@@ -56,15 +56,15 @@
 25. Make the full-output request fail once (for example with a local request override), expand a freshly loaded truncated command, and confirm the truncated tail remains visible instead of becoming blank. Switch to another thread and return to confirm the per-thread full-output cache was cleared.
 
 #### Expected Results
-- Only ≤50 messages are in the DOM on initial load.
-- Scrolling to the top appends older messages without a viewport jump; no persistent older-message button is shown.
-- During live output, the rendered window stays bounded; old messages are trimmed from the top while the user follows the bottom.
-- After a rollback the conversation remains visible; no blank screen.
+- All messages currently loaded for the thread remain in the DOM and accessible; there is no 50-message frontend render window.
+- Scrolling to the top loads only genuinely older server-paginated history and does not cause a viewport jump.
+- During live output, previously loaded messages are never trimmed from the top by the frontend.
+- After a rollback the conversation remains visible; no blank screen or blank gap.
 - A collapsed command mounts no output `<pre>` or output text; expansion mounts one accessible output region, and collapsing it unmounts the `<pre>` again.
 - Command outputs at or below the limit remain complete when expanded.
 - Oversized historical command output is bounded to 256 KiB by UTF-8 byte count in the first-paint history response, starts with the omission marker, retains the newest valid UTF-8 tail, and exposes the original byte count and truncation flag.
 - Expanding a truncated command loads its complete output on demand once, preserves the truncated tail on failure, caches at most eight complete outputs for the active thread, and clears that cache when the active thread changes.
 
 #### Rollback/Cleanup
-- Closing or refreshing the tab resets the render window.
+- Closing or refreshing the tab does not discard any currently loaded message from the conversation renderer.
 - Delete the disposable long-thread and oversized-output fixtures if they were created only for this test; no application preference needs to be restored.

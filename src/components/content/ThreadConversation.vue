@@ -19,7 +19,7 @@
       @touchstart.passive="onConversationUserScrollIntent"
       @wheel.passive="onConversationUserScrollIntent"
     >
-      <template v-for="message in visibleMessages" :key="messageIdentityKey(message)">
+      <template v-for="message in messages" :key="messageIdentityKey(message)">
       <li
         v-if="!hiddenGroupedCommandIds.has(messageIdentityKey(message)) && !hiddenFileChangeMessageIds.has(messageIdentityKey(message))"
         class="conversation-item"
@@ -1524,15 +1524,11 @@ function setBoundedCacheEntry<K, V>(cache: Map<K, V>, key: K, value: V, limit: n
   return value
 }
 
-const RENDER_WINDOW_SIZE = 50
-const LOAD_MORE_CHUNK = 30
 const LOAD_MORE_SCROLL_THRESHOLD_PX = 200
 
-const renderWindowStart = ref(0)
 const isLoadingMore = ref(false)
 
-const visibleMessages = computed(() => props.messages.slice(renderWindowStart.value))
-const hasMoreAbove = computed(() => renderWindowStart.value > 0 || props.hasMorePersistedAbove === true)
+const hasMoreAbove = computed(() => props.hasMorePersistedAbove === true)
 
 const showJumpToLatestButton = computed(
   () => !autoFollowOutput.value && (props.messages.length > 0 || props.pendingRequests.length > 0 || Boolean(props.liveOverlay)),
@@ -3076,9 +3072,7 @@ async function loadMoreAbove(): Promise<void> {
   const prevScrollTop = container.scrollTop
 
   try {
-    if (renderWindowStart.value > 0) {
-      renderWindowStart.value = Math.max(0, renderWindowStart.value - LOAD_MORE_CHUNK)
-    } else if (props.hasMorePersistedAbove === true) {
+    if (props.hasMorePersistedAbove === true) {
       await props.loadEarlierMessages?.(threadIdAtStart)
     }
 
@@ -3162,17 +3156,6 @@ watch(
       ]),
     )
 
-    // Keep renderWindowStart in bounds whenever the message list changes length.
-    // Following output: always pin the window to the last RENDER_WINDOW_SIZE messages so
-    //   the rendered count stays bounded (handles both growth and shrink/rollback).
-    // Scrolled up: only clamp downward so renderWindowStart never exceeds the list length
-    //   (prevents visibleMessages from becoming empty after a rollback).
-    if (autoFollowOutput.value) {
-      renderWindowStart.value = Math.max(0, next.length - RENDER_WINDOW_SIZE)
-    } else {
-      renderWindowStart.value = Math.min(renderWindowStart.value, Math.max(0, next.length - 1))
-    }
-
     await scheduleConversationScroll()
   },
 )
@@ -3222,7 +3205,6 @@ watch(
   () => props.isLoading,
   async (loading) => {
     if (loading) return
-    renderWindowStart.value = Math.max(0, props.messages.length - RENDER_WINDOW_SIZE)
     await scheduleConversationScroll()
   },
 )
@@ -3238,8 +3220,6 @@ watch(
     fileChangeActionState.value = {}
     fileChangeActionError.value = {}
     fileChangeRedoPatchIds.value = {}
-    // Apply immediately for cached threads where isLoading never toggles.
-    renderWindowStart.value = Math.max(0, props.messages.length - RENDER_WINDOW_SIZE)
     await scheduleConversationScroll()
   },
   { flush: 'post' },
