@@ -45,3 +45,4 @@ Return to the [manual test index](../../tests.md).
 | [New chat live thinking and stop controls](new-chat-live-thinking-and-stop-controls.md) |
 | [Bold URL trailing punctuation parsing](bold-url-trailing-punctuation-parsing.md) |
 | [围栏代码块复制按钮](fenced-code-block-copy.md) |
+| [新聊天使用实际发送模型自动生成标题](new-thread-model-generated-title.md) |

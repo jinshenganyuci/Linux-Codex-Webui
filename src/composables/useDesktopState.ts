@@ -5435,13 +5435,14 @@ export function useDesktopState() {
     }
   }
 
-  async function requestThreadTitleGeneration(threadId: string, prompt: string, cwd: string | null): Promise<void> {
+  async function requestThreadTitleGeneration(threadId: string, prompt: string, model: string): Promise<void> {
     if (threadTitleById.value[threadId]) return
     const trimmed = prompt.trim()
-    if (!trimmed) return
+    const normalizedModel = model.trim()
+    if (!trimmed || !normalizedModel) return
     const truncated = trimmed.length > 300 ? trimmed.slice(0, 300) : trimmed
     try {
-      const title = await generateThreadTitle(truncated, cwd)
+      const title = await generateThreadTitle(threadId, truncated, normalizedModel)
       if (!title || threadTitleById.value[threadId]) return
       threadTitleById.value = { ...threadTitleById.value, [threadId]: title }
       applyThreadFlags()
@@ -6619,12 +6620,12 @@ export function useDesktopState() {
         maybeUnblockInterruptForActiveTurn(threadId, startedTurnId)
       }
       const capturedThreadId = threadId
-      const capturedCwd = targetCwd || null
       const capturedPrompt = nextText
+      const capturedModel = readModelIdForThread(threadId).trim()
       pendingThreadMessageRefresh.add(threadId)
       void syncFromNotifications()
       scheduleDelayedTurnSync(threadId)
-      void requestThreadTitleGeneration(capturedThreadId, capturedPrompt, capturedCwd)
+      void requestThreadTitleGeneration(capturedThreadId, capturedPrompt, capturedModel)
       isSendingMessage.value = false
       return threadId
     } catch (unknownError) {

@@ -2993,6 +2993,49 @@ describe('provider model selection', () => {
     ])
   })
 
+  it('uses the model actually assigned to a new thread for background title generation', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: '',
+      reasoningEffort: 'medium',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities('gpt-5.5', 'gpt-5.6-terra'))
+    gatewayMocks.startThreadWithTurn.mockResolvedValue({
+      threadId: 'title-thread',
+      model: 'gpt-5.6-terra',
+      modelProvider: 'openai',
+      turnId: 'turn-title',
+    })
+    gatewayMocks.generateThreadTitle.mockResolvedValue('分析 Linux-Codex-Webui 项目')
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    await state.sendMessageToNewThread(
+      '分析 https://github.com/jinshenganyuci/Linux-Codex-Webui 这个项目',
+      '/tmp/project',
+    )
+
+    await vi.waitFor(() => {
+      expect(gatewayMocks.generateThreadTitle).toHaveBeenCalledWith(
+        'title-thread',
+        '分析 https://github.com/jinshenganyuci/Linux-Codex-Webui 这个项目',
+        'gpt-5.6-terra',
+      )
+    })
+    await vi.waitFor(() => {
+      expect(gatewayMocks.persistThreadTitle).toHaveBeenCalledWith(
+        'title-thread',
+        '分析 Linux-Codex-Webui 项目',
+      )
+    })
+  })
+
   it('persists a manually selected new-thread combination and resets the next draft to CLI defaults', async () => {
     installTestWindow()
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })

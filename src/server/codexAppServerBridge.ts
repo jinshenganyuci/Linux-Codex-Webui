@@ -47,6 +47,7 @@ import {
   writeThreadModelPreference,
   type ThreadModelPreference,
 } from './threadModelPreferences.js'
+import { ThreadTitleGenerator } from './threadTitleGenerator.js'
 import {
   limitCommandOutputsInTurns,
   limitThreadCommandOutputs,
@@ -8324,6 +8325,7 @@ async function buildThreadSearchIndex(appServer: AppServerProcess): Promise<Thre
 
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const { appServer, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor, threadRuntimeState } = getSharedBridgeState()
+  const threadTitleGenerator = new ThreadTitleGenerator()
   const notificationStreamId = randomUUID()
   let notificationSequence = 0
   const notificationReplayBuffer: BridgeNotification[] = []
@@ -8701,7 +8703,13 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
 
         if (body.method === 'generate-thread-title') {
-          setJson(res, 200, { result: { title: '' } })
+          const params = asRecord(body.params)
+          const title = await threadTitleGenerator.generate({
+            threadId: readNonEmptyString(params?.threadId),
+            prompt: readNonEmptyString(params?.prompt),
+            model: readNonEmptyString(params?.model),
+          })
+          setJson(res, 200, { result: { title } })
           return
         }
 
@@ -10407,6 +10415,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
   middleware.dispose = () => {
     threadSearchIndex = null
+    threadTitleGenerator.dispose()
     telegramBridge.stop()
     terminalManager.dispose()
     backendQueueProcessor.dispose()
@@ -10417,6 +10426,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   }
   middleware.disposeGracefully = async () => {
     threadSearchIndex = null
+    threadTitleGenerator.dispose()
     telegramBridge.stop()
     backendQueueProcessor.dispose()
     unsubscribeAppServerNotifications()
