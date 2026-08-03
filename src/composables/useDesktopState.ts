@@ -2605,16 +2605,6 @@ export function useDesktopState() {
       reconcileSelectedReasoningEffort(selectedModelId.value)
       if (isNewThreadContext) {
         newThreadSelectionInitialized = true
-      } else {
-        const model = readModelIdForThread(selectedThreadId.value)
-        const reasoningEffort = selectedReasoningEffort.value
-        if (model && reasoningEffort) {
-          const nextPreference = { model, reasoningEffort }
-          if (!sameThreadModelPreference(selectedThreadPreference, nextPreference)) {
-            cacheThreadModelPreference(selectedThreadId.value, nextPreference)
-            void queueThreadModelPreferenceWrite(selectedThreadId.value)
-          }
-        }
       }
       selectedSpeedMode.value = currentConfig.speedMode
     } catch (unknownError) {

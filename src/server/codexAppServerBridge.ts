@@ -2919,11 +2919,31 @@ export async function startThreadAndTurn(appServer: RpcExecutor, payload: unknow
     await cleanupEmptyStartedThread(appServer, threadId)
     throw error
   }
+  await persistSuccessfulTurnModelPreference(threadId, {
+    ...turnParams,
+    model: readNonEmptyString(turnParams.model) || readNonEmptyString(threadParams.model),
+  })
   const startedThreadRecord = asRecord(startedThread) ?? {}
   const startedTurnRecord = asRecord(startedTurn)
   return {
     ...startedThreadRecord,
     turn: startedTurnRecord?.turn ?? null,
+  }
+}
+
+async function persistSuccessfulTurnModelPreference(threadIdInput: unknown, turnParamsInput: unknown): Promise<void> {
+  const threadId = readNonEmptyString(threadIdInput)
+  const turnParams = asRecord(turnParamsInput)
+  const preference = normalizeThreadModelPreference({
+    model: readNonEmptyString(turnParams?.model),
+    reasoningEffort: readNonEmptyString(turnParams?.effort),
+  })
+  if (!threadId || !preference) return
+
+  try {
+    await writeThreadModelPreference(threadId, preference)
+  } catch (error) {
+    console.warn('[thread-model-preferences] Failed to persist a successful turn preference:', getErrorMessage(error, 'Unknown error'))
   }
 }
 
@@ -8647,20 +8667,6 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         const threadId = readNonEmptyString(thread?.id)
         if (threadId) {
           appServer.storeThreadReadSnapshot(threadId, result)
-          const requestRecord = asRecord(payload)
-          const requestedThread = asRecord(requestRecord?.thread)
-          const requestedTurn = asRecord(requestRecord?.turn)
-          const preference = normalizeThreadModelPreference({
-            model: readNonEmptyString(requestedTurn?.model) || readNonEmptyString(requestedThread?.model),
-            reasoningEffort: readNonEmptyString(requestedTurn?.effort),
-          })
-          if (preference) {
-            try {
-              await writeThreadModelPreference(threadId, preference)
-            } catch (error) {
-              console.warn('[thread-model-preferences] Failed to persist a new thread preference:', getErrorMessage(error, 'Unknown error'))
-            }
-          }
         }
         setJson(res, 200, { data: result })
         return
@@ -8755,6 +8761,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
         const trimmedResult = trimAndLimitThreadCommandOutputs(body.method, rpcResult, body.params)
         const rpcParams = asRecord(body.params)
+        if (body.method === 'turn/start') {
+          await persistSuccessfulTurnModelPreference(rpcParams?.threadId, rpcParams)
+        }
         const rpcThreadId = readNonEmptyString(rpcParams?.threadId)
         const errorMergedResult = THREAD_METHODS_WITH_TURNS.has(body.method) || body.method === 'thread/turns/list'
           ? mergeStreamTurnErrorsIntoThreadResult(appServer, trimmedResult, body.method, rpcThreadId)

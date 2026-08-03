@@ -2590,10 +2590,10 @@ describe('provider model selection', () => {
     expect(restartedState.selectedReasoningEffort.value).toBe('max')
   })
 
-  it('migrates an existing browser-scoped thread model before backend hydration can overwrite it', async () => {
+  it('does not promote a desktop local default to a server preference when none exists', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
-        'thread-a': 'gpt-5.6-sol',
+        'thread-a': 'gpt-5.6-terra',
       }),
     })
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({
@@ -2605,14 +2605,14 @@ describe('provider model selection', () => {
     gatewayMocks.getSkillsList.mockResolvedValue([])
     gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
     gatewayMocks.getCurrentModelConfig.mockResolvedValue({
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-terra',
       providerId: '',
       reasoningEffort: 'xhigh',
       speedMode: 'standard',
     })
-    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities('gpt-5.5', 'gpt-5.6-sol'))
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities('gpt-5.6-terra', 'gpt-5.6-sol'))
     gatewayMocks.getThreadDetail.mockResolvedValue({
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-terra',
       modelProvider: 'openai',
       messages: [],
       inProgress: false,
@@ -2625,14 +2625,9 @@ describe('provider model selection', () => {
     state.primeSelectedThread('thread-a')
     await state.refreshAll({ includeSelectedThreadMessages: true, awaitAncillaryRefreshes: true })
 
-    expect(state.selectedModelId.value).toBe('gpt-5.6-sol')
+    expect(state.selectedModelId.value).toBe('gpt-5.6-terra')
     expect(state.selectedReasoningEffort.value).toBe('xhigh')
-    await vi.waitFor(() => {
-      expect(gatewayMocks.persistThreadModelPreference).toHaveBeenCalledWith('thread-a', {
-        model: 'gpt-5.6-sol',
-        reasoningEffort: 'xhigh',
-      })
-    })
+    expect(gatewayMocks.persistThreadModelPreference).not.toHaveBeenCalled()
   })
 
   it('keeps a persisted thread model even when a refreshed catalog temporarily omits it', async () => {
