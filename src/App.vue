@@ -2956,6 +2956,8 @@ function onDocumentPointerDown(event: PointerEvent): void {
   if (!isSettingsOpen.value) return
   if (settingsPanelRef.value?.contains(target)) return
   if (settingsButtonRef.value?.contains(target)) return
+  const targetElement = target instanceof Element ? target : target.parentElement
+  if (targetElement?.closest('.composer-dropdown-menu-wrap')) return
   isSettingsOpen.value = false
 }
 
