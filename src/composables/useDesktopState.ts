@@ -12,6 +12,7 @@ import {
   renameThread,
   getAvailableModels,
   getCurrentModelConfig,
+  getNewChatDefaults,
   getPendingServerRequests,
   getSkillsList,
   getThreadDetail,
@@ -38,6 +39,7 @@ import {
   getThreadTitleCache,
   persistThreadTitle,
   persistThreadModelPreference,
+  patchNewChatDefaults,
   generateThreadTitle,
   resumeThread,
 
@@ -45,6 +47,9 @@ import {
   subscribeCodexNotifications,
   startThreadTurn,
   type CodexRuntimeConfig,
+  type NewChatDefaultPatch,
+  type NewChatDefaultPreference,
+  type NewChatDefaultState,
   type RpcNotification,
   type SkillInfo,
   type ThreadQueueState,
@@ -1632,6 +1637,7 @@ export function useDesktopState() {
   )
   const selectedModelIdByContext = ref<Record<string, string>>(loadSelectedModelMap())
   const threadModelPreferencesById = ref<ThreadModelPreferenceState>({})
+  const newChatDefaultState = ref<NewChatDefaultState>({ version: 1, revision: 0, providers: {} })
   const selectedCollaborationMode = ref<CollaborationModeKind>(
     readSelectedCollaborationMode(selectedCollaborationModeByContext.value, selectedThreadId.value),
   )
@@ -1698,11 +1704,13 @@ export function useDesktopState() {
   const isInterruptingTurn = ref(false)
   const isUpdatingSpeedMode = ref(false)
   const isUpdatingPermissionMode = ref(false)
+  const isUpdatingNewChatDefaults = ref(false)
   const isRollingBack = ref(false)
   const pendingNewThreadMessages = ref<UiMessage[]>([])
   const pendingNewThreadPreviewError = ref('')
 
   const error = ref('')
+  const newChatDefaultsError = ref('')
   const isPolling = ref(false)
   const hasLoadedThreads = ref(false)
 
@@ -1778,14 +1786,25 @@ export function useDesktopState() {
   const fallbackRetryInFlightThreadIds = new Set<string>()
   let hasPersistedCodexPermissionMode = hasStoredCodexPermissionMode()
   let hasLoadedThreadModelPreferences = false
+  let hasLoadedNewChatDefaults = false
+  let newChatDefaultsLoadPromise: Promise<void> | null = null
   let newThreadSelectionInitialized = false
   let newThreadDraftModelId = ''
-  let runtimeDefaultModelId = ''
-  let runtimeDefaultReasoningEffort: ReasoningEffort | '' = ''
+  let newThreadModelManuallySelected = false
+  let newThreadReasoningManuallySelected = false
+  const runtimeDefaultModelId = ref('')
+  const runtimeDefaultReasoningEffort = ref<ReasoningEffort | ''>('')
   const threadModelPreferenceWriteChainById = new Map<string, Promise<void>>()
 
 
   const allThreads = computed(() => flattenThreads(projectGroups.value))
+  const activeNewChatDefaultPreference = computed<NewChatDefaultPreference>(() => (
+    newChatDefaultState.value.providers[normalizeProviderContextId(activeProviderId.value)] ?? {}
+  ))
+  const newChatDefaultModelId = computed(() => activeNewChatDefaultPreference.value.model ?? '')
+  const newChatDefaultReasoningEffort = computed<ReasoningEffort | ''>(() => (
+    activeNewChatDefaultPreference.value.reasoningEffort ?? ''
+  ))
   const selectedThread = computed(() =>
     allThreads.value.find((thread) => thread.id === selectedThreadId.value) ?? null,
   )
@@ -1924,7 +1943,7 @@ export function useDesktopState() {
     const contextId = toThreadContextId(threadId)
     if (contextId === NEW_THREAD_COLLABORATION_MODE_CONTEXT) {
       if (!selectedThreadId.value.trim()) return selectedModelId.value.trim()
-      return newThreadDraftModelId || runtimeDefaultModelId
+      return newThreadDraftModelId || runtimeDefaultModelId.value
     }
     return readSelectedModel(selectedModelIdByContext.value, threadId).trim()
   }
@@ -1941,7 +1960,7 @@ export function useDesktopState() {
   }
 
   function readReasoningEffortForThread(threadId: string): ReasoningEffort | '' {
-    return readThreadModelPreference(threadId)?.reasoningEffort || runtimeDefaultReasoningEffort
+    return readThreadModelPreference(threadId)?.reasoningEffort || runtimeDefaultReasoningEffort.value
   }
 
   function cacheThreadModelPreference(threadId: string, preference: ThreadModelPreference): void {
@@ -2031,6 +2050,41 @@ export function useDesktopState() {
     return availableModelIds.value[0] ?? ''
   }
 
+  function resolveNewChatDefaultModelId(): string {
+    const savedModelId = newChatDefaultModelId.value.trim()
+    if (savedModelId && (availableModelIds.value.length === 0 || availableModelIds.value.includes(savedModelId))) {
+      return savedModelId
+    }
+    const configuredModelId = runtimeDefaultModelId.value.trim()
+    if (configuredModelId && (availableModelIds.value.length === 0 || availableModelIds.value.includes(configuredModelId))) {
+      return configuredModelId
+    }
+    return availableModelIds.value[0] || savedModelId || configuredModelId
+  }
+
+  function resolveNewChatDefaultReasoningEffort(modelId: string = resolveNewChatDefaultModelId()): ReasoningEffort | '' {
+    const requestedEffort = newChatDefaultReasoningEffort.value || runtimeDefaultReasoningEffort.value
+    const capability = availableModelCapabilities.value[modelId.trim()]
+    const supported = capability?.supportedReasoningEfforts ?? []
+    if (supported.length === 0 || (requestedEffort && supported.includes(requestedEffort))) {
+      return requestedEffort
+    }
+    return capability?.defaultReasoningEffort && supported.includes(capability.defaultReasoningEffort)
+      ? capability.defaultReasoningEffort
+      : supported[0] ?? ''
+  }
+
+  function resetNewThreadDraftToDefaults(): void {
+    newThreadSelectionInitialized = true
+    newThreadModelManuallySelected = false
+    newThreadReasoningManuallySelected = false
+    newThreadDraftModelId = resolveNewChatDefaultModelId()
+    if (selectedThreadId.value.trim()) return
+
+    selectedModelId.value = newThreadDraftModelId
+    selectedReasoningEffort.value = resolveNewChatDefaultReasoningEffort(newThreadDraftModelId)
+  }
+
   function reconcileSelectedReasoningEffort(modelId: string): boolean {
     const capability = availableModelCapabilities.value[modelId.trim()]
     const supported = capability?.supportedReasoningEfforts ?? []
@@ -2053,12 +2107,14 @@ export function useDesktopState() {
     if (!nextThreadId.trim() && previousThreadId.trim()) {
       newThreadSelectionInitialized = false
       newThreadDraftModelId = ''
+      newThreadModelManuallySelected = false
+      newThreadReasoningManuallySelected = false
     }
     const nextModelId = nextThreadId.trim()
       ? preference?.model ?? readModelIdForThread(nextThreadId)
-      : newThreadDraftModelId || runtimeDefaultModelId
+      : newThreadDraftModelId || resolveNewChatDefaultModelId()
     selectedModelId.value = preference?.model ?? readProviderCompatibleSelectedModel(nextModelId)
-    selectedReasoningEffort.value = preference?.reasoningEffort || runtimeDefaultReasoningEffort || selectedReasoningEffort.value
+    selectedReasoningEffort.value = preference?.reasoningEffort || resolveNewChatDefaultReasoningEffort() || selectedReasoningEffort.value
     reconcileSelectedReasoningEffort(selectedModelId.value)
     selectedCollaborationMode.value = readSelectedCollaborationMode(
       selectedCollaborationModeByContext.value,
@@ -2068,11 +2124,16 @@ export function useDesktopState() {
     shouldAutoScrollOnNextAgentEvent = false
   }
 
-  function setSelectedModelIdForThread(threadId: string, modelId: string): void {
+  function setSelectedModelIdForThread(
+    threadId: string,
+    modelId: string,
+    options: { manual?: boolean } = {},
+  ): void {
     const normalizedModelId = modelId.trim()
     const contextId = toThreadContextId(threadId)
     if (contextId === NEW_THREAD_COLLABORATION_MODE_CONTEXT) {
       newThreadDraftModelId = normalizedModelId
+      if (options.manual !== false) newThreadModelManuallySelected = true
       if (!selectedThreadId.value.trim()) {
         selectedModelId.value = normalizedModelId
         ensureAvailableModelIds(normalizedModelId)
@@ -2097,8 +2158,8 @@ export function useDesktopState() {
     saveSelectedModelMap(selectedModelIdByContext.value)
   }
 
-  function setSelectedModelId(modelId: string): void {
-    setSelectedModelIdForThread(selectedThreadId.value, modelId)
+  function setSelectedModelId(modelId: string, options: { manual?: boolean } = {}): void {
+    setSelectedModelIdForThread(selectedThreadId.value, modelId, options)
   }
 
   function updateSelectedModelIdForThread(threadId: string, modelId: string): Promise<void> {
@@ -2337,7 +2398,11 @@ export function useDesktopState() {
     setSelectedReasoningEffort(effort)
     const threadId = selectedThreadId.value.trim()
     const model = readModelIdForThread(threadId)
-    if (!threadId || !model || !effort) return Promise.resolve()
+    if (!threadId) {
+      newThreadReasoningManuallySelected = true
+      return Promise.resolve()
+    }
+    if (!model || !effort) return Promise.resolve()
     cacheThreadModelPreference(threadId, { model, reasoningEffort: effort })
     return queueThreadModelPreferenceWrite(threadId)
   }
@@ -2518,13 +2583,64 @@ export function useDesktopState() {
     hasLoadedThreadModelPreferences = true
   }
 
+  async function loadNewChatDefaultsIfNeeded(): Promise<void> {
+    if (hasLoadedNewChatDefaults) return
+    if (newChatDefaultsLoadPromise) {
+      await newChatDefaultsLoadPromise
+      return
+    }
+
+    newChatDefaultsLoadPromise = (async () => {
+      try {
+        newChatDefaultState.value = await getNewChatDefaults()
+        newChatDefaultsError.value = ''
+        hasLoadedNewChatDefaults = true
+      } catch (unknownError) {
+        newChatDefaultsError.value = unknownError instanceof Error
+          ? unknownError.message
+          : 'Failed to load new chat defaults'
+      }
+    })().finally(() => {
+      newChatDefaultsLoadPromise = null
+    })
+    await newChatDefaultsLoadPromise
+  }
+
+  async function updateNewChatDefaults(patch: Omit<NewChatDefaultPatch, 'providerId'>): Promise<void> {
+    if (isUpdatingNewChatDefaults.value) return
+    const providerId = normalizeProviderContextId(activeProviderId.value)
+    isUpdatingNewChatDefaults.value = true
+    newChatDefaultsError.value = ''
+    try {
+      newChatDefaultState.value = await patchNewChatDefaults({ providerId, ...patch })
+      hasLoadedNewChatDefaults = true
+
+      if (!selectedThreadId.value.trim()) {
+        if (Object.prototype.hasOwnProperty.call(patch, 'model') && !newThreadModelManuallySelected) {
+          newThreadDraftModelId = resolveNewChatDefaultModelId()
+          selectedModelId.value = newThreadDraftModelId
+        }
+        if (Object.prototype.hasOwnProperty.call(patch, 'reasoningEffort') && !newThreadReasoningManuallySelected) {
+          selectedReasoningEffort.value = resolveNewChatDefaultReasoningEffort(selectedModelId.value)
+        }
+        reconcileSelectedReasoningEffort(selectedModelId.value)
+      }
+    } catch (unknownError) {
+      newChatDefaultsError.value = unknownError instanceof Error
+        ? unknownError.message
+        : 'Failed to update new chat defaults'
+    } finally {
+      isUpdatingNewChatDefaults.value = false
+    }
+  }
+
   async function refreshModelPreferences(options?: { providerChanged?: boolean; includeProviderModels?: boolean }): Promise<void> {
     codexCliMissingError.value = ''
     try {
       const currentConfig = await getCurrentModelConfig()
       const normalizedConfiguredModelId = currentConfig.model.trim()
-      runtimeDefaultModelId = normalizedConfiguredModelId
-      runtimeDefaultReasoningEffort = currentConfig.reasoningEffort
+      runtimeDefaultModelId.value = normalizedConfiguredModelId
+      runtimeDefaultReasoningEffort.value = currentConfig.reasoningEffort
       const normalizedProviderId = normalizeProviderContextId(currentConfig.providerId)
       activeProviderId.value = normalizedProviderId
       const targetProviderId = readProviderIdForThread(selectedThreadId.value)
@@ -2534,9 +2650,11 @@ export function useDesktopState() {
       if (isNewThreadContext && options?.providerChanged) {
         newThreadSelectionInitialized = false
         newThreadDraftModelId = ''
+        newThreadModelManuallySelected = false
+        newThreadReasoningManuallySelected = false
       }
-      const normalizedSelectedModelId = isNewThreadContext && !newThreadSelectionInitialized
-        ? normalizedConfiguredModelId
+      const normalizedSelectedModelId = isNewThreadContext && !newThreadSelectionInitialized && !newThreadModelManuallySelected
+        ? newChatDefaultModelId.value || normalizedConfiguredModelId
         : selectedThreadPreference?.model ?? readModelIdForThread(selectedThreadId.value)
       const models = await loadAvailableModelCatalog({
         includeProviderModels: isProviderBacked || options?.includeProviderModels !== false,
@@ -2566,23 +2684,25 @@ export function useDesktopState() {
 
       const currentModelInNewList = normalizedSelectedModelId && nextModelIds.includes(normalizedSelectedModelId)
       if (!normalizedSelectedModelId || !currentModelInNewList || options?.providerChanged) {
-        if (options?.providerChanged && nextModelIds.length > 0) {
+        if (isNewThreadContext && !newThreadModelManuallySelected) {
+          setSelectedModelId(resolveNewChatDefaultModelId(), { manual: false })
+        } else if (options?.providerChanged && nextModelIds.length > 0) {
           if (providerScopedModelId && modelIds.includes(providerScopedModelId)) {
-            setSelectedModelId(providerScopedModelId)
+            setSelectedModelId(providerScopedModelId, { manual: false })
           } else if (targetProviderId === normalizedProviderId && normalizedConfiguredModelId && nextModelIds.includes(normalizedConfiguredModelId)) {
-            setSelectedModelId(normalizedConfiguredModelId)
+            setSelectedModelId(normalizedConfiguredModelId, { manual: false })
           } else {
-            setSelectedModelId(nextModelIds[0])
+            setSelectedModelId(nextModelIds[0], { manual: false })
           }
         } else if (targetProviderId === normalizedProviderId && normalizedConfiguredModelId && nextModelIds.includes(normalizedConfiguredModelId)) {
-          setSelectedModelId(currentConfig.model)
+          setSelectedModelId(currentConfig.model, { manual: false })
         } else if (nextModelIds.length > 0) {
-          setSelectedModelId(nextModelIds[0])
+          setSelectedModelId(nextModelIds[0], { manual: false })
         } else {
-          setSelectedModelId('')
+          setSelectedModelId('', { manual: false })
         }
       } else if (selectedModelId.value.trim() !== normalizedSelectedModelId) {
-        setSelectedModelId(normalizedSelectedModelId)
+        setSelectedModelId(normalizedSelectedModelId, { manual: false })
       }
       if (!isNewThreadContext && providerModelContextId && selectedModelId.value.trim().length > 0) {
         const nextModelMap = cloneStringKeyedRecord(selectedModelIdByContext.value)
@@ -2601,10 +2721,12 @@ export function useDesktopState() {
 
       if (selectedThreadPreference) {
         selectedReasoningEffort.value = selectedThreadPreference.reasoningEffort
+      } else if (isNewThreadContext && !newThreadReasoningManuallySelected) {
+        selectedReasoningEffort.value = resolveNewChatDefaultReasoningEffort(selectedModelId.value)
       } else if (
         currentConfig.reasoningEffort
         && REASONING_EFFORT_OPTIONS.includes(currentConfig.reasoningEffort)
-        && (!isNewThreadContext || !newThreadSelectionInitialized)
+        && !isNewThreadContext
       ) {
         selectedReasoningEffort.value = currentConfig.reasoningEffort
       }
@@ -6095,6 +6217,7 @@ export function useDesktopState() {
       await refreshCodexRuntimeConfig()
       await loadPersistedQueueStateIfNeeded()
       await loadThreadModelPreferencesIfNeeded()
+      await loadNewChatDefaultsIfNeeded()
       await loadThreads({ force: options.forceThreadRefresh === true })
       if (includeSelectedThreadMessages) {
         try {
@@ -6222,7 +6345,7 @@ export function useDesktopState() {
     const sourceCwd = sourceThread?.cwd?.trim() ?? ''
     const sourceTitle = sourceThread?.title?.trim() ?? 'Forked chat'
     const selectedModel = readModelIdForThread(sourceThreadId)
-    const selectedReasoningEffort = readReasoningEffortForThread(sourceThreadId) || runtimeDefaultReasoningEffort
+    const selectedReasoningEffort = readReasoningEffortForThread(sourceThreadId) || runtimeDefaultReasoningEffort.value
     error.value = ''
 
     try {
@@ -6287,7 +6410,7 @@ export function useDesktopState() {
     if (lastTurnIndex >= 0 && turnIndex > lastTurnIndex) return ''
 
     const sourceThread = flattenThreads(sourceGroups.value).find((row) => row.id === normalizedThreadId) ?? null
-    const sourceReasoningEffort = readReasoningEffortForThread(normalizedThreadId) || runtimeDefaultReasoningEffort
+    const sourceReasoningEffort = readReasoningEffortForThread(normalizedThreadId) || runtimeDefaultReasoningEffort.value
 
     try {
       error.value = ''
@@ -6603,6 +6726,8 @@ export function useDesktopState() {
       setSelectedThreadId(threadId)
       newThreadSelectionInitialized = false
       newThreadDraftModelId = ''
+      newThreadModelManuallySelected = false
+      newThreadReasoningManuallySelected = false
       shouldAutoScrollOnNextAgentEvent = true
       setTurnSummaryForThread(threadId, null)
       setTurnActivityForThread(
@@ -7899,6 +8024,11 @@ export function useDesktopState() {
     selectedCollaborationMode,
     selectedModelId,
     selectedReasoningEffort,
+    activeProviderId,
+    newChatDefaultModelId,
+    newChatDefaultReasoningEffort,
+    runtimeDefaultModelId,
+    runtimeDefaultReasoningEffort,
     selectedSpeedMode,
     selectedCodexPermissionMode,
     codexCliMissingError,
@@ -7913,9 +8043,11 @@ export function useDesktopState() {
     isInterruptingTurn,
     isUpdatingSpeedMode,
     isUpdatingPermissionMode,
+    isUpdatingNewChatDefaults,
     isRollingBack,
 
     error,
+    newChatDefaultsError,
     refreshAll,
     loadThreads,
     refreshSkills,
@@ -7951,6 +8083,8 @@ export function useDesktopState() {
 
     setSelectedReasoningEffort,
     updateSelectedReasoningEffort,
+    updateNewChatDefaults,
+    resetNewThreadDraftToDefaults,
     updateSelectedSpeedMode,
     updateSelectedCodexPermissionMode,
     respondToPendingServerRequest,

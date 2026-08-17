@@ -2960,6 +2960,74 @@ export async function getCurrentModelConfig(): Promise<CurrentModelConfig> {
   return { model, providerId, reasoningEffort, speedMode }
 }
 
+export type NewChatDefaultPreference = {
+  model?: string
+  reasoningEffort?: ReasoningEffort
+}
+
+export type NewChatDefaultState = {
+  version: 1
+  revision: number
+  providers: Record<string, NewChatDefaultPreference>
+}
+
+export type NewChatDefaultPatch = {
+  providerId: string
+  model?: string | null
+  reasoningEffort?: ReasoningEffort | null
+}
+
+function normalizeNewChatDefaultPreference(value: unknown): NewChatDefaultPreference | null {
+  const record = asRecord(value)
+  if (!record) return null
+  const preference: NewChatDefaultPreference = {}
+  const model = readString(record.model)
+  const reasoningEffort = normalizeReasoningEffort(record.reasoningEffort)
+  if (model) preference.model = model
+  if (reasoningEffort) preference.reasoningEffort = reasoningEffort
+  return Object.keys(preference).length > 0 ? preference : null
+}
+
+function normalizeNewChatDefaultState(value: unknown): NewChatDefaultState {
+  const record = asRecord(value)
+  const rawProviders = asRecord(record?.providers)
+  const providers: Record<string, NewChatDefaultPreference> = {}
+  for (const [rawProviderId, rawPreference] of Object.entries(rawProviders ?? {})) {
+    const providerId = rawProviderId.trim().toLowerCase().replace(/_/gu, '-')
+    const preference = normalizeNewChatDefaultPreference(rawPreference)
+    if (providerId && preference) providers[providerId === 'openai' ? 'codex' : providerId] = preference
+  }
+  return {
+    version: 1,
+    revision: typeof record?.revision === 'number' && Number.isSafeInteger(record.revision) && record.revision >= 0
+      ? record.revision
+      : 0,
+    providers,
+  }
+}
+
+export async function getNewChatDefaults(): Promise<NewChatDefaultState> {
+  const response = await fetchWithTimeout('/codex-api/preferences/new-chat-defaults')
+  const payload = await response.json().catch(() => null) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to load new chat defaults (${response.status})`))
+  }
+  return normalizeNewChatDefaultState(asRecord(payload)?.data)
+}
+
+export async function patchNewChatDefaults(patch: NewChatDefaultPatch): Promise<NewChatDefaultState> {
+  const response = await fetchWithTimeout('/codex-api/preferences/new-chat-defaults', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  const payload = await response.json().catch(() => null) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to update new chat defaults (${response.status})`))
+  }
+  return normalizeNewChatDefaultState(asRecord(payload)?.data)
+}
+
 function normalizeThreadModelPreference(value: unknown): ThreadModelPreference | null {
   const record = asRecord(value)
   const model = readString(record?.model)

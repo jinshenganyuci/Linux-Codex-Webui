@@ -22,6 +22,7 @@ const gatewayMocks = vi.hoisted(() => ({
   getAvailableCollaborationModes: vi.fn(),
   getAvailableModels: vi.fn(),
   getCurrentModelConfig: vi.fn(),
+  getNewChatDefaults: vi.fn(),
   getPendingServerRequests: vi.fn(),
   getSkillsList: vi.fn(),
   getThreadDetail: vi.fn(),
@@ -41,6 +42,7 @@ const gatewayMocks = vi.hoisted(() => ({
   normalizeAgentProgressSnapshot: vi.fn((value) => value),
   persistThreadTitle: vi.fn(),
   persistThreadModelPreference: vi.fn(),
+  patchNewChatDefaults: vi.fn(),
   renameThread: vi.fn(),
   replyToServerRequest: vi.fn(),
   resumeThread: vi.fn(),
@@ -219,11 +221,22 @@ beforeEach(() => {
   gatewayMocks.getThreadTurnItemsPage.mockResolvedValue({ messages: [], nextCursor: null })
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
   gatewayMocks.getThreadModelPreferences.mockResolvedValue({})
+  gatewayMocks.getNewChatDefaults.mockResolvedValue({ version: 1, revision: 0, providers: {} })
   gatewayMocks.getThreadRuntimeStates.mockResolvedValue([])
   gatewayMocks.getAgentProgress.mockResolvedValue(null)
   gatewayMocks.getAgentResult.mockResolvedValue({ threadId: '', text: '', truncated: false })
   gatewayMocks.normalizeAgentProgressSnapshot.mockImplementation((value) => value)
   gatewayMocks.persistThreadModelPreference.mockImplementation(async (_threadId, preference) => preference)
+  gatewayMocks.patchNewChatDefaults.mockImplementation(async (patch) => ({
+    version: 1,
+    revision: 1,
+    providers: {
+      [patch.providerId]: {
+        ...(patch.model ? { model: patch.model } : {}),
+        ...(patch.reasoningEffort ? { reasoningEffort: patch.reasoningEffort } : {}),
+      },
+    },
+  }))
   gatewayMocks.setThreadQueueState.mockResolvedValue(undefined)
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
   gatewayMocks.getWorkspaceRootsState.mockRejectedValue(new Error('no workspace roots state'))
@@ -3031,6 +3044,151 @@ describe('provider model selection', () => {
         '分析 Linux-Codex-Webui 项目',
       )
     })
+  })
+
+  it('loads provider-scoped new-chat defaults once and applies them to the first turn', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getNewChatDefaults.mockResolvedValue({
+      version: 1,
+      revision: 4,
+      providers: {
+        codex: { model: 'gpt-5.6-sol', reasoningEffort: 'max' },
+      },
+    })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      reasoningEffort: 'medium',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities(
+      'gpt-5.5',
+      {
+        id: 'gpt-5.6-sol',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'max'],
+        defaultReasoningEffort: 'high',
+      },
+    ))
+    gatewayMocks.startThreadWithTurn.mockResolvedValue({
+      threadId: 'defaulted-thread',
+      model: 'gpt-5.6-sol',
+      modelProvider: 'openai',
+      turnId: 'turn-defaulted',
+    })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+
+    expect(gatewayMocks.getNewChatDefaults).toHaveBeenCalledTimes(1)
+    expect(state.activeProviderId.value).toBe('codex')
+    expect(state.selectedModelId.value).toBe('gpt-5.6-sol')
+    expect(state.selectedReasoningEffort.value).toBe('max')
+
+    await state.sendMessageToNewThread('use saved defaults', '/tmp/project')
+    expect(gatewayMocks.startThreadWithTurn).toHaveBeenCalledWith(
+      '/tmp/project',
+      'use saved defaults',
+      [],
+      'gpt-5.6-sol',
+      'max',
+      undefined,
+      [],
+      'default',
+      null,
+    )
+  })
+
+  it('falls back from an unsupported saved reasoning effort without changing existing thread preferences', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{
+        projectName: 'Project',
+        threads: [thread('existing-thread', '/tmp/project')],
+      }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadModelPreferences.mockResolvedValue({
+      'existing-thread': { model: 'gpt-5.5', reasoningEffort: 'low' },
+    })
+    gatewayMocks.getNewChatDefaults.mockResolvedValue({
+      version: 1,
+      revision: 2,
+      providers: {
+        codex: { model: 'gpt-5.6-luna', reasoningEffort: 'ultra' },
+      },
+    })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: '',
+      reasoningEffort: 'medium',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities(
+      { id: 'gpt-5.5', supportedReasoningEfforts: ['low', 'medium'], defaultReasoningEffort: 'medium' },
+      { id: 'gpt-5.6-luna', supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'high' },
+    ))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('existing-thread')
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+
+    expect(state.selectedModelId.value).toBe('gpt-5.5')
+    expect(state.selectedReasoningEffort.value).toBe('low')
+
+    state.resetNewThreadDraftToDefaults()
+    expect(state.selectedModelId.value).toBe('gpt-5.5')
+    expect(state.selectedReasoningEffort.value).toBe('low')
+    state.primeSelectedThread('')
+    expect(state.selectedModelId.value).toBe('gpt-5.6-luna')
+    expect(state.selectedReasoningEffort.value).toBe('high')
+  })
+
+  it('patches one active-provider default without reloading the model catalog', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: 'custom_proxy',
+      reasoningEffort: 'medium',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities('proxy-default', 'proxy-fast'))
+    gatewayMocks.patchNewChatDefaults.mockResolvedValue({
+      version: 1,
+      revision: 1,
+      providers: {
+        'custom-proxy': { model: 'proxy-fast', reasoningEffort: 'high' },
+      },
+    })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    const catalogCallsBeforePatch = gatewayMocks.getAvailableModels.mock.calls.length
+
+    await state.updateNewChatDefaults({ model: 'proxy-fast', reasoningEffort: 'high' })
+
+    expect(gatewayMocks.patchNewChatDefaults).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.patchNewChatDefaults).toHaveBeenCalledWith({
+      providerId: 'custom-proxy',
+      model: 'proxy-fast',
+      reasoningEffort: 'high',
+    })
+    expect(gatewayMocks.getAvailableModels).toHaveBeenCalledTimes(catalogCallsBeforePatch)
+    expect(state.newChatDefaultModelId.value).toBe('proxy-fast')
+    expect(state.newChatDefaultReasoningEffort.value).toBe('high')
+    expect(state.selectedModelId.value).toBe('proxy-fast')
+    expect(state.selectedReasoningEffort.value).toBe('high')
   })
 
   it('persists a manually selected new-thread combination and resets the next draft to CLI defaults', async () => {

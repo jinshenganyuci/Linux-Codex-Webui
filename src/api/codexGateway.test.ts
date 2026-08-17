@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getArchivedThreadsPage, getAvailableModelIds, getAvailableModels, getFullThreadCommandOutput, getOlderThreadMessages, getPinnedThreadState, getSidebarLayoutPreferences, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, listThreadItems, patchSidebarLayoutPreferences, permanentlyDeleteThread, persistPinnedThreadIds, persistThreadModelPreference, resumeThread, startThread, startThreadTurn, startThreadWithTurn, unarchiveThread } from './codexGateway'
+import { getArchivedThreadsPage, getAvailableModelIds, getAvailableModels, getFullThreadCommandOutput, getNewChatDefaults, getOlderThreadMessages, getPinnedThreadState, getSidebarLayoutPreferences, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, listThreadItems, patchNewChatDefaults, patchSidebarLayoutPreferences, permanentlyDeleteThread, persistPinnedThreadIds, persistThreadModelPreference, resumeThread, startThread, startThreadTurn, startThreadWithTurn, unarchiveThread } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -227,6 +227,69 @@ describe('thread model preferences', () => {
       model: 'gpt-5.5',
       reasoningEffort: 'xhigh',
     })).rejects.toThrow('disk full')
+  })
+})
+
+describe('new chat defaults', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('loads normalized provider defaults and patches one provider', async () => {
+    const requests: Array<{ url: string; method: string; body: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+      })
+      return new Response(JSON.stringify({
+        data: {
+          version: 1,
+          revision: 2,
+          providers: {
+            OpenAI: { model: 'gpt-5.6-luna', reasoningEffort: 'high' },
+            broken: { model: '', reasoningEffort: 'impossible' },
+          },
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    const expected = {
+      version: 1 as const,
+      revision: 2,
+      providers: {
+        codex: { model: 'gpt-5.6-luna', reasoningEffort: 'high' as const },
+      },
+    }
+    await expect(getNewChatDefaults()).resolves.toEqual(expected)
+    await expect(patchNewChatDefaults({
+      providerId: 'codex',
+      model: null,
+      reasoningEffort: 'max',
+    })).resolves.toEqual(expected)
+    expect(requests).toEqual([
+      { url: '/codex-api/preferences/new-chat-defaults', method: 'GET', body: null },
+      {
+        url: '/codex-api/preferences/new-chat-defaults',
+        method: 'PATCH',
+        body: { providerId: 'codex', model: null, reasoningEffort: 'max' },
+      },
+    ])
+  })
+
+  it('surfaces new chat default read and write failures', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'read only' }), {
+      status: 507,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    await expect(getNewChatDefaults()).rejects.toThrow('read only')
+    await expect(patchNewChatDefaults({ providerId: 'codex', model: 'gpt-5.6-luna' }))
+      .rejects.toThrow('read only')
   })
 })
 
