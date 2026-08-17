@@ -3934,6 +3934,23 @@ function getErrorMessageFromPayload(payload: unknown, fallback: string): string 
 export type ThreadTitleCache = { titles: Record<string, string>; order: string[] }
 export type ThreadPinnedState = { threadIds: string[] }
 export type FirstLaunchPluginsCardPreference = { dismissed: boolean }
+export type SidebarSectionPreferences = {
+  pinned: boolean
+  chats: boolean
+  projects: boolean
+}
+export type SidebarLayoutPreferences = {
+  version: 1
+  revision: number
+  persisted: boolean
+  sections: SidebarSectionPreferences
+  collapsedProjects: Record<string, true>
+}
+export type SidebarLayoutPreferencesPatch = {
+  initializeOnly?: boolean
+  sections?: Partial<SidebarSectionPreferences>
+  collapsedProjects?: Record<string, boolean>
+}
 
 export async function getThreadTitleCache(): Promise<ThreadTitleCache> {
   try {
@@ -3976,6 +3993,65 @@ export async function persistPinnedThreadIds(threadIds: string[]): Promise<void>
   if (!response.ok) {
     const payload = await response.json().catch(() => null)
     throw new Error(getErrorMessageFromPayload(payload, 'Failed to update pinned chats'))
+  }
+}
+
+function normalizeSidebarLayoutPreferences(value: unknown): SidebarLayoutPreferences {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  const sections = record.sections && typeof record.sections === 'object' && !Array.isArray(record.sections)
+    ? record.sections as Record<string, unknown>
+    : {}
+  const rawCollapsedProjects = record.collapsedProjects
+    && typeof record.collapsedProjects === 'object'
+    && !Array.isArray(record.collapsedProjects)
+    ? record.collapsedProjects as Record<string, unknown>
+    : {}
+  const collapsedProjects: Record<string, true> = {}
+  for (const [projectKey, collapsed] of Object.entries(rawCollapsedProjects)) {
+    const normalizedProjectKey = projectKey.trim()
+    if (normalizedProjectKey && collapsed === true) collapsedProjects[normalizedProjectKey] = true
+  }
+  return {
+    version: 1,
+    revision: typeof record.revision === 'number' && Number.isSafeInteger(record.revision) && record.revision >= 0
+      ? record.revision
+      : 0,
+    persisted: record.persisted === true,
+    sections: {
+      pinned: typeof sections.pinned === 'boolean' ? sections.pinned : true,
+      chats: typeof sections.chats === 'boolean' ? sections.chats : true,
+      projects: typeof sections.projects === 'boolean' ? sections.projects : true,
+    },
+    collapsedProjects,
+  }
+}
+
+export async function getSidebarLayoutPreferences(): Promise<SidebarLayoutPreferences> {
+  const response = await fetchWithTimeout('/codex-api/preferences/sidebar-layout')
+  const payload = await response.json().catch(() => null) as { data?: unknown } | null
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to load sidebar preferences'))
+  }
+  return normalizeSidebarLayoutPreferences(payload?.data)
+}
+
+export async function patchSidebarLayoutPreferences(
+  patch: SidebarLayoutPreferencesPatch,
+): Promise<{ applied: boolean; preferences: SidebarLayoutPreferences }> {
+  const response = await fetchWithTimeout('/codex-api/preferences/sidebar-layout', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  const payload = await response.json().catch(() => null) as { data?: unknown; applied?: unknown } | null
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to update sidebar preferences'))
+  }
+  return {
+    applied: payload?.applied !== false,
+    preferences: normalizeSidebarLayoutPreferences(payload?.data),
   }
 }
 

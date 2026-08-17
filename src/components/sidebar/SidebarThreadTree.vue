@@ -1,5 +1,5 @@
 <template>
-  <section class="thread-tree-root" :class="{ 'chats-first': showChatsFirst }">
+  <section class="thread-tree-root">
     <section v-if="pinnedThreads.length > 0" class="pinned-section">
       <SidebarMenuRow
         as="button"
@@ -86,6 +86,119 @@
       {{ pinnedThreadActionError }}
     </p>
 
+    <p v-if="sidebarLayoutActionError" class="thread-tree-action-error" role="alert">
+      {{ sidebarLayoutActionError }}
+    </p>
+
+    <section class="chats-section">
+      <SidebarMenuRow
+        as="button"
+        class="section-toggle-row"
+        type="button"
+        :aria-expanded="isChatsSectionExpanded"
+        @click="toggleChatsSection"
+      >
+        <template #left>
+          <IconTablerChevronRight v-if="!isChatsSectionExpanded" class="thread-icon" />
+          <IconTablerChevronDown v-else class="thread-icon" />
+        </template>
+        <span class="thread-tree-header">{{ t('Chats') }}</span>
+        <template #right>
+          <div class="chats-section-actions">
+            <button
+              class="chats-section-action"
+              type="button"
+              :aria-label="t('New chat')"
+              :title="t('New chat')"
+              @click.stop="$emit('start-new-chat')"
+            >
+              <IconTablerFilePencil class="thread-icon" />
+            </button>
+          </div>
+        </template>
+      </SidebarMenuRow>
+
+      <p v-if="isChatsSectionExpanded && chatThreads.length === 0" class="thread-tree-no-results">{{ t('No chats') }}</p>
+      <ul v-else-if="isChatsSectionExpanded" class="thread-list thread-list-global">
+        <li
+          v-for="thread in visibleChatThreads"
+          :key="thread.id"
+          class="thread-row-item"
+          :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'"
+        >
+          <SidebarMenuRow
+            class="thread-row"
+            :data-active="thread.id === selectedThreadId"
+            :data-pinned="isPinned(thread.id)"
+            :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'"
+            :force-right-hover="isThreadMenuOpen(thread.id)"
+            @click="onSelect(thread.id)"
+            @mouseleave="onThreadRowLeave(thread.id, $event)"
+            @contextmenu="onThreadRowContextMenu($event, thread.id)"
+          >
+            <template #left>
+              <span class="thread-left-stack">
+                <span
+                  v-if="shouldShowThreadIndicator(thread)"
+                  class="thread-status-indicator"
+                  :data-state="getThreadState(thread)"
+                />
+              </span>
+            </template>
+            <button class="thread-main-button" type="button" @click.stop="onSelect(thread.id)">
+              <span class="thread-row-title-wrap">
+                <span class="thread-row-title-line">
+                  <span class="thread-row-title">{{ thread.title }}</span>
+                  <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" :title="t('Worktree thread')" />
+                  <span
+                    v-if="threadHasAutomation(thread.id)"
+                    class="thread-row-automation-chip"
+                    :title="threadAutomationTooltip(thread.id)"
+                  >
+                    <IconTablerBolt class="thread-row-automation-icon" />
+                    <span v-if="threadAutomationCount(thread.id) > 1" class="thread-row-automation-count">
+                      {{ threadAutomationCount(thread.id) }}
+                    </span>
+                  </span>
+                  <span
+                    v-if="thread.pendingRequestState"
+                    class="thread-row-request-chip"
+                    :data-state="thread.pendingRequestState"
+                  >
+                    {{ threadRequestLabel(thread) }}
+                  </span>
+                </span>
+              </span>
+            </button>
+            <template #right>
+              <span class="thread-row-time">{{ formatRelativeThread(thread) }}</span>
+            </template>
+            <template #right-hover>
+              <div :ref="(el) => setThreadMenuWrapRef(thread.id, el)" class="thread-menu-wrap">
+                <button
+                  class="thread-menu-trigger"
+                  type="button"
+                  :title="t('Thread menu')"
+                  @click.stop="toggleThreadMenu(thread.id)"
+                >
+                  <IconTablerDots class="thread-icon" />
+                </button>
+              </div>
+            </template>
+          </SidebarMenuRow>
+        </li>
+      </ul>
+
+      <SidebarMenuRow v-if="isChatsSectionExpanded && hasHiddenChatThreads" class="thread-show-more-row">
+        <template #left>
+          <span class="thread-show-more-spacer" />
+        </template>
+        <button class="thread-show-more-button" type="button" @click="toggleChatsListExpansion">
+          {{ isChatsListExpanded ? t('Show less') : t('Show more') }}
+        </button>
+      </SidebarMenuRow>
+    </section>
+
     <section class="projects-section">
       <SidebarMenuRow
         as="button"
@@ -136,15 +249,6 @@
               >
                 <span>{{ t('Chronological list') }}</span>
                 <span v-if="threadViewMode === 'chronological'">✓</span>
-              </button>
-              <button
-                class="organize-menu-item"
-                :data-active="showChatsFirst"
-                type="button"
-                @click="toggleShowChatsFirst"
-              >
-                <span>{{ t('Chats first') }}</span>
-                <span v-if="showChatsFirst">✓</span>
               </button>
               <div class="organize-menu-separator" />
               <p class="organize-menu-title">{{ t('Sort by') }}</p>
@@ -463,115 +567,6 @@
       </template>
     </section>
 
-    <section class="chats-section">
-      <SidebarMenuRow
-        as="button"
-        class="section-toggle-row"
-        type="button"
-        :aria-expanded="isChatsSectionExpanded"
-        @click="toggleChatsSection"
-      >
-        <template #left>
-          <IconTablerChevronRight v-if="!isChatsSectionExpanded" class="thread-icon" />
-          <IconTablerChevronDown v-else class="thread-icon" />
-        </template>
-        <span class="thread-tree-header">{{ t('Chats') }}</span>
-        <template #right>
-          <div class="chats-section-actions">
-            <button
-              class="chats-section-action"
-              type="button"
-              :aria-label="t('New chat')"
-              :title="t('New chat')"
-              @click.stop="$emit('start-new-chat')"
-            >
-              <IconTablerFilePencil class="thread-icon" />
-            </button>
-          </div>
-        </template>
-      </SidebarMenuRow>
-
-      <p v-if="isChatsSectionExpanded && chatThreads.length === 0" class="thread-tree-no-results">{{ t('No chats') }}</p>
-      <ul v-else-if="isChatsSectionExpanded" class="thread-list thread-list-global">
-        <li
-          v-for="thread in visibleChatThreads"
-          :key="thread.id"
-          class="thread-row-item"
-          :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'"
-        >
-          <SidebarMenuRow
-            class="thread-row"
-            :data-active="thread.id === selectedThreadId"
-            :data-pinned="isPinned(thread.id)"
-            :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'"
-            :force-right-hover="isThreadMenuOpen(thread.id)"
-            @click="onSelect(thread.id)"
-            @mouseleave="onThreadRowLeave(thread.id, $event)"
-            @contextmenu="onThreadRowContextMenu($event, thread.id)"
-          >
-            <template #left>
-              <span class="thread-left-stack">
-                <span
-                  v-if="shouldShowThreadIndicator(thread)"
-                  class="thread-status-indicator"
-                  :data-state="getThreadState(thread)"
-                />
-              </span>
-            </template>
-            <button class="thread-main-button" type="button" @click.stop="onSelect(thread.id)">
-              <span class="thread-row-title-wrap">
-                <span class="thread-row-title-line">
-                  <span class="thread-row-title">{{ thread.title }}</span>
-                  <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" :title="t('Worktree thread')" />
-                  <span
-                    v-if="threadHasAutomation(thread.id)"
-                    class="thread-row-automation-chip"
-                    :title="threadAutomationTooltip(thread.id)"
-                  >
-                    <IconTablerBolt class="thread-row-automation-icon" />
-                    <span v-if="threadAutomationCount(thread.id) > 1" class="thread-row-automation-count">
-                      {{ threadAutomationCount(thread.id) }}
-                    </span>
-                  </span>
-                  <span
-                    v-if="thread.pendingRequestState"
-                    class="thread-row-request-chip"
-                    :data-state="thread.pendingRequestState"
-                  >
-                    {{ threadRequestLabel(thread) }}
-                  </span>
-                </span>
-              </span>
-            </button>
-            <template #right>
-              <span class="thread-row-time">{{ formatRelativeThread(thread) }}</span>
-            </template>
-            <template #right-hover>
-              <div :ref="(el) => setThreadMenuWrapRef(thread.id, el)" class="thread-menu-wrap">
-                <button
-                  class="thread-menu-trigger"
-                  type="button"
-                  :title="t('Thread menu')"
-                  @click.stop="toggleThreadMenu(thread.id)"
-                >
-                  <IconTablerDots class="thread-icon" />
-                </button>
-              </div>
-            </template>
-          </SidebarMenuRow>
-        </li>
-      </ul>
-
-      <SidebarMenuRow v-if="isChatsSectionExpanded && hasHiddenChatThreads" class="thread-show-more-row">
-        <template #left>
-          <span class="thread-show-more-spacer" />
-        </template>
-        <button class="thread-show-more-button" type="button" @click="toggleChatsListExpansion">
-          {{ isChatsListExpanded ? t('Show less') : t('Show more') }}
-        </button>
-      </SidebarMenuRow>
-    </section>
-
     <Teleport to="body">
       <div
         v-if="openThreadMenuThread"
@@ -888,12 +883,16 @@ import {
   deleteProjectAutomation,
   getProjectAutomationMap,
   getPinnedThreadState,
+  getSidebarLayoutPreferences,
   getThreadAutomationMap,
   getThreadSummary,
+  patchSidebarLayoutPreferences,
   persistPinnedThreadIds,
   runThreadAutomationNow,
   upsertProjectAutomation,
   upsertThreadAutomation,
+  type SidebarLayoutPreferences,
+  type SidebarLayoutPreferencesPatch,
 } from '../../api/codexGateway'
 import type { UiProjectGroup, UiThread, UiThreadAutomation, UiThreadAutomationStatus } from '../../types/codex'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
@@ -991,8 +990,9 @@ type AutomationScheduleDraft = {
 const DRAG_START_THRESHOLD_PX = 4
 const PROJECT_GROUP_EXPANDED_GAP_PX = 6
 const PINNED_THREAD_HYDRATION_CONCURRENCY = 4
-const SECTION_EXPANSION_STORAGE_KEY = 'codex-web-local.sidebar-section-expansion.v1'
-const CHATS_FIRST_STORAGE_KEY = 'codex-web-local.sidebar-chats-first.v1'
+const LEGACY_SECTION_EXPANSION_STORAGE_KEY = 'codex-web-local.sidebar-section-expansion.v1'
+const LEGACY_CHATS_FIRST_STORAGE_KEY = 'codex-web-local.sidebar-chats-first.v1'
+const LEGACY_COLLAPSED_PROJECTS_STORAGE_KEY = 'codex-web-local.collapsed-projects.v1'
 const CHAT_SORT_MODE_STORAGE_KEY = 'codex-web-local.sidebar-chat-sort-mode.v1'
 const expandedProjects = ref<Record<string, boolean>>({})
 const collapsedProjects = ref<Record<string, boolean>>({})
@@ -1000,8 +1000,9 @@ const isPinnedSectionExpanded = ref(true)
 const isProjectsSectionExpanded = ref(true)
 const isChatsSectionExpanded = ref(true)
 const isChatsListExpanded = ref(false)
-const showChatsFirst = ref(loadBooleanStorage(CHATS_FIRST_STORAGE_KEY, false))
 const chatSortMode = ref<ChatSortMode>(loadChatSortMode())
+const hasLoadedSidebarLayout = ref(false)
+const sidebarLayoutActionError = ref('')
 const hasLoadedPinnedThreadState = ref(false)
 const pinnedThreadIds = ref<string[]>([])
 const hydratedPinnedThreadById = ref<Record<string, UiThread>>({})
@@ -1148,17 +1149,20 @@ const projectGroupResizeObserver =
         }
       })
     : null
-const COLLAPSED_STORAGE_KEY = 'codex-web-local.collapsed-projects.v1'
-
 function loadCollapsedState(): Record<string, boolean> {
   if (typeof window === 'undefined') return {}
 
   try {
-    const raw = window.localStorage.getItem(COLLAPSED_STORAGE_KEY)
+    const raw = window.localStorage.getItem(LEGACY_COLLAPSED_PROJECTS_STORAGE_KEY)
     if (!raw) return {}
     const parsed = JSON.parse(raw) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
-    return parsed as Record<string, boolean>
+    const collapsed: Record<string, boolean> = {}
+    for (const [projectName, value] of Object.entries(parsed)) {
+      const normalizedProjectName = projectName.trim()
+      if (normalizedProjectName && value === true) collapsed[normalizedProjectName] = true
+    }
+    return collapsed
   } catch {
     return {}
   }
@@ -1171,26 +1175,19 @@ function loadThreadViewMode(): 'project' | 'chronological' {
   return raw === 'chronological' ? 'chronological' : 'project'
 }
 
-function loadBooleanStorage(key: string, fallback: boolean): boolean {
-  if (typeof window === 'undefined') return fallback
-  const raw = window.localStorage.getItem(key)
-  if (raw === 'true') return true
-  if (raw === 'false') return false
-  return fallback
-}
-
 function loadChatSortMode(): ChatSortMode {
   if (typeof window === 'undefined') return 'updated'
   return window.localStorage.getItem(CHAT_SORT_MODE_STORAGE_KEY) === 'created' ? 'created' : 'updated'
 }
 
-collapsedProjects.value = loadCollapsedState()
+const legacyCollapsedProjects = loadCollapsedState()
+collapsedProjects.value = legacyCollapsedProjects
 
-function loadSectionExpansionState(): void {
+function loadLegacySectionExpansionState(): void {
   if (typeof window === 'undefined') return
 
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(SECTION_EXPANSION_STORAGE_KEY) || '{}') as {
+    const parsed = JSON.parse(window.localStorage.getItem(LEGACY_SECTION_EXPANSION_STORAGE_KEY) || '{}') as {
       pinned?: unknown
       projects?: unknown
       chats?: unknown
@@ -1203,37 +1200,11 @@ function loadSectionExpansionState(): void {
   }
 }
 
-function persistSectionExpansionState(): void {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(
-    SECTION_EXPANSION_STORAGE_KEY,
-    JSON.stringify({
-      pinned: isPinnedSectionExpanded.value,
-      projects: isProjectsSectionExpanded.value,
-      chats: isChatsSectionExpanded.value,
-    }),
-  )
-}
-
-loadSectionExpansionState()
-
-watch(
-  collapsedProjects,
-  (value) => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(value))
-  },
-  { deep: true },
-)
+loadLegacySectionExpansionState()
 
 watch(threadViewMode, (value) => {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(THREAD_VIEW_MODE_STORAGE_KEY, value)
-})
-
-watch(showChatsFirst, (value) => {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(CHATS_FIRST_STORAGE_KEY, String(value))
 })
 
 watch(chatSortMode, (value) => {
@@ -1241,7 +1212,109 @@ watch(chatSortMode, (value) => {
   window.localStorage.setItem(CHAT_SORT_MODE_STORAGE_KEY, value)
 })
 
-watch([isPinnedSectionExpanded, isProjectsSectionExpanded, isChatsSectionExpanded], persistSectionExpansionState)
+let sidebarLayoutMutationChain: Promise<void> = Promise.resolve()
+let sidebarLayoutRefreshPromise: Promise<void> | null = null
+let sidebarLayoutMutationSequence = 0
+let pendingSidebarLayoutMutations = 0
+let refreshSidebarLayoutAfterMutations = false
+let lastSidebarLayoutRefreshAtMs = 0
+let isSidebarTreeUnmounted = false
+
+function applySidebarLayoutPreferences(preferences: SidebarLayoutPreferences): void {
+  if (isSidebarTreeUnmounted) return
+  isPinnedSectionExpanded.value = preferences.sections.pinned
+  isChatsSectionExpanded.value = preferences.sections.chats
+  isProjectsSectionExpanded.value = preferences.sections.projects
+  collapsedProjects.value = { ...preferences.collapsedProjects }
+  hasLoadedSidebarLayout.value = true
+}
+
+function clearLegacySidebarLayoutStorage(): void {
+  if (typeof window === 'undefined') return
+  window.localStorage.removeItem(LEGACY_SECTION_EXPANSION_STORAGE_KEY)
+  window.localStorage.removeItem(LEGACY_COLLAPSED_PROJECTS_STORAGE_KEY)
+  window.localStorage.removeItem(LEGACY_CHATS_FIRST_STORAGE_KEY)
+}
+
+async function refreshSidebarLayoutPreferences(allowLegacyMigration: boolean): Promise<void> {
+  if (sidebarLayoutRefreshPromise) return await sidebarLayoutRefreshPromise
+
+  sidebarLayoutRefreshPromise = (async () => {
+    try {
+      let preferences = await getSidebarLayoutPreferences()
+      if (!preferences.persisted && allowLegacyMigration) {
+        const result = await patchSidebarLayoutPreferences({
+          initializeOnly: true,
+          sections: {
+            pinned: isPinnedSectionExpanded.value,
+            chats: isChatsSectionExpanded.value,
+            projects: isProjectsSectionExpanded.value,
+          },
+          collapsedProjects: legacyCollapsedProjects,
+        })
+        preferences = result.preferences
+      }
+      applySidebarLayoutPreferences(preferences)
+      clearLegacySidebarLayoutStorage()
+      sidebarLayoutActionError.value = ''
+      lastSidebarLayoutRefreshAtMs = Date.now()
+    } catch (error) {
+      if (isSidebarTreeUnmounted) return
+      const message = error instanceof Error ? error.message : t('Failed to load sidebar preferences')
+      sidebarLayoutActionError.value = message
+      recordVisibleFailure(message)
+    }
+  })().finally(() => {
+    sidebarLayoutRefreshPromise = null
+  })
+
+  await sidebarLayoutRefreshPromise
+}
+
+function queueSidebarLayoutPatch(patch: SidebarLayoutPreferencesPatch): void {
+  const mutationSequence = ++sidebarLayoutMutationSequence
+  pendingSidebarLayoutMutations += 1
+  sidebarLayoutMutationChain = sidebarLayoutMutationChain
+    .then(async () => {
+      const result = await patchSidebarLayoutPreferences(patch)
+      if (mutationSequence === sidebarLayoutMutationSequence) {
+        applySidebarLayoutPreferences(result.preferences)
+      }
+      if (!isSidebarTreeUnmounted) {
+        sidebarLayoutActionError.value = ''
+        lastSidebarLayoutRefreshAtMs = Date.now()
+      }
+    })
+    .catch(async (error) => {
+      if (isSidebarTreeUnmounted) return
+      const message = error instanceof Error ? error.message : t('Failed to update sidebar preferences')
+      sidebarLayoutActionError.value = message
+      recordVisibleFailure(message)
+      if (mutationSequence === sidebarLayoutMutationSequence) {
+        await refreshSidebarLayoutPreferences(false)
+      }
+    })
+    .finally(() => {
+      pendingSidebarLayoutMutations = Math.max(0, pendingSidebarLayoutMutations - 1)
+      if (pendingSidebarLayoutMutations === 0 && refreshSidebarLayoutAfterMutations) {
+        refreshSidebarLayoutAfterMutations = false
+        void refreshSidebarLayoutPreferences(false)
+      }
+    })
+}
+
+function onSidebarLayoutWindowFocus(): void {
+  if (!hasLoadedSidebarLayout.value) {
+    void refreshSidebarLayoutPreferences(true)
+    return
+  }
+  if (Date.now() - lastSidebarLayoutRefreshAtMs < 500) return
+  if (pendingSidebarLayoutMutations > 0) {
+    refreshSidebarLayoutAfterMutations = true
+    return
+  }
+  void refreshSidebarLayoutPreferences(false)
+}
 
 const normalizedSearchQuery = computed(() => props.searchQuery.trim().toLowerCase())
 
@@ -1360,6 +1433,10 @@ watch([pinnedThreadIds, threadById, () => props.isLoading], () => {
 })
 
 onMounted(async () => {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', onSidebarLayoutWindowFocus)
+  }
+  void refreshSidebarLayoutPreferences(true)
   try {
     const { threadIds } = await getPinnedThreadState()
     pinnedThreadIds.value = Array.isArray(threadIds)
@@ -1429,15 +1506,21 @@ const pinnedThreads = computed(() =>
 )
 
 function togglePinnedSection(): void {
-  isPinnedSectionExpanded.value = !isPinnedSectionExpanded.value
+  const expanded = !isPinnedSectionExpanded.value
+  isPinnedSectionExpanded.value = expanded
+  queueSidebarLayoutPatch({ sections: { pinned: expanded } })
 }
 
 function toggleProjectsSection(): void {
-  isProjectsSectionExpanded.value = !isProjectsSectionExpanded.value
+  const expanded = !isProjectsSectionExpanded.value
+  isProjectsSectionExpanded.value = expanded
+  queueSidebarLayoutPatch({ sections: { projects: expanded } })
 }
 
 function toggleChatsSection(): void {
-  isChatsSectionExpanded.value = !isChatsSectionExpanded.value
+  const expanded = !isChatsSectionExpanded.value
+  isChatsSectionExpanded.value = expanded
+  queueSidebarLayoutPatch({ sections: { chats: expanded } })
 }
 
 const projectedDropProjectIndex = computed<number | null>(() => {
@@ -2249,10 +2332,6 @@ function setThreadViewMode(mode: 'project' | 'chronological'): void {
   isOrganizeMenuOpen.value = false
 }
 
-function toggleShowChatsFirst(): void {
-  showChatsFirst.value = !showChatsFirst.value
-}
-
 function setChatSortMode(mode: ChatSortMode): void {
   chatSortMode.value = mode
 }
@@ -2399,10 +2478,12 @@ function toggleProjectCollapse(projectName: string): void {
     return
   }
 
-  collapsedProjects.value = {
-    ...collapsedProjects.value,
-    [projectName]: !isCollapsed(projectName),
-  }
+  const collapsed = !isCollapsed(projectName)
+  const next = { ...collapsedProjects.value }
+  if (collapsed) next[projectName] = true
+  else delete next[projectName]
+  collapsedProjects.value = next
+  queueSidebarLayoutPatch({ collapsedProjects: { [projectName]: collapsed } })
 }
 
 function getProjectOuterHeight(projectName: string): number {
@@ -3011,6 +3092,10 @@ watch(openThreadMenuId, (threadId) => {
 })
 
 onBeforeUnmount(() => {
+  isSidebarTreeUnmounted = true
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('focus', onSidebarLayoutWindowFocus)
+  }
   for (const element of projectGroupElementByName.values()) {
     projectGroupResizeObserver?.unobserve(element)
   }
@@ -3034,19 +3119,11 @@ onBeforeUnmount(() => {
 }
 
 .projects-section {
-  @apply order-2;
+  @apply order-3;
 }
 
 .chats-section {
-  @apply order-3 mt-2;
-}
-
-.thread-tree-root.chats-first .chats-section {
-  @apply order-2;
-}
-
-.thread-tree-root.chats-first .projects-section {
-  @apply order-3;
+  @apply order-2 mb-2;
 }
 
 .thread-tree-header-row {

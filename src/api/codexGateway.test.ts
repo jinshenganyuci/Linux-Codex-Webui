@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getArchivedThreadsPage, getAvailableModelIds, getAvailableModels, getFullThreadCommandOutput, getOlderThreadMessages, getPinnedThreadState, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, listThreadItems, permanentlyDeleteThread, persistPinnedThreadIds, persistThreadModelPreference, resumeThread, startThread, startThreadTurn, startThreadWithTurn, unarchiveThread } from './codexGateway'
+import { getArchivedThreadsPage, getAvailableModelIds, getAvailableModels, getFullThreadCommandOutput, getOlderThreadMessages, getPinnedThreadState, getSidebarLayoutPreferences, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, listThreadItems, patchSidebarLayoutPreferences, permanentlyDeleteThread, persistPinnedThreadIds, persistThreadModelPreference, resumeThread, startThread, startThreadTurn, startThreadWithTurn, unarchiveThread } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -265,6 +265,69 @@ describe('pinned chats', () => {
 
     await expect(getPinnedThreadState()).rejects.toThrow('disk full')
     await expect(persistPinnedThreadIds(['thread-a'])).rejects.toThrow('disk full')
+  })
+})
+
+describe('sidebar layout preferences', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('loads normalized state and sends field-level patches', async () => {
+    const requests: Array<{ url: string; method: string; body: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+      })
+      return new Response(JSON.stringify({
+        applied: true,
+        data: {
+          version: 1,
+          revision: 4,
+          persisted: true,
+          sections: { pinned: false, chats: true, projects: true },
+          collapsedProjects: { ' /repo/a ': true, '/repo/b': false },
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    const expectedPreferences = {
+      version: 1 as const,
+      revision: 4,
+      persisted: true,
+      sections: { pinned: false, chats: true, projects: true },
+      collapsedProjects: { '/repo/a': true as const },
+    }
+    await expect(getSidebarLayoutPreferences()).resolves.toEqual(expectedPreferences)
+    await expect(patchSidebarLayoutPreferences({
+      collapsedProjects: { '/repo/a': false },
+    })).resolves.toEqual({
+      applied: true,
+      preferences: expectedPreferences,
+    })
+    expect(requests).toEqual([
+      { url: '/codex-api/preferences/sidebar-layout', method: 'GET', body: null },
+      {
+        url: '/codex-api/preferences/sidebar-layout',
+        method: 'PATCH',
+        body: { collapsedProjects: { '/repo/a': false } },
+      },
+    ])
+  })
+
+  it('surfaces sidebar preference read and write failures', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'read only' }), {
+      status: 507,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    await expect(getSidebarLayoutPreferences()).rejects.toThrow('read only')
+    await expect(patchSidebarLayoutPreferences({ sections: { chats: false } })).rejects.toThrow('read only')
   })
 })
 
