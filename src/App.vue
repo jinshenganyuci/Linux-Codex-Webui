@@ -285,7 +285,36 @@
 
               <div class="sidebar-settings-row">
                 <span class="sidebar-settings-label">{{ t('Provider') }}</span>
-                <span class="sidebar-settings-value">{{ t('Codex') }}</span>
+                <span class="sidebar-settings-value">{{ activeProviderLabel }}</span>
+              </div>
+              <div class="sidebar-settings-row sidebar-settings-row--select" :title="t('Choose the model used when a new chat starts. Existing chats keep their own model.')">
+                <span class="sidebar-settings-label">{{ t('New chat model') }}</span>
+                <ComposerDropdown
+                  class="sidebar-settings-dropdown sidebar-settings-new-chat-dropdown"
+                  :model-value="newChatDefaultModelSelection"
+                  :options="newChatDefaultModelOptions"
+                  :placeholder="t('Follow Codex config')"
+                  :disabled="isUpdatingNewChatDefaults"
+                  menu-align="end"
+                  :enable-search="true"
+                  :search-placeholder="t('Search models...')"
+                  @update:model-value="onNewChatDefaultModelChange"
+                />
+              </div>
+              <div class="sidebar-settings-row sidebar-settings-row--select" :title="t('Choose the reasoning effort used when a new chat starts. Unsupported values fall back to the selected model capability.')">
+                <span class="sidebar-settings-label">{{ t('New chat reasoning') }}</span>
+                <ComposerDropdown
+                  class="sidebar-settings-dropdown sidebar-settings-new-chat-dropdown"
+                  :model-value="newChatDefaultReasoningSelection"
+                  :options="newChatDefaultReasoningOptions"
+                  :placeholder="t('Follow Codex config')"
+                  :disabled="isUpdatingNewChatDefaults"
+                  menu-align="end"
+                  @update:model-value="onNewChatDefaultReasoningChange"
+                />
+              </div>
+              <div v-if="newChatDefaultsError" class="sidebar-settings-new-chat-error" role="alert">
+                {{ newChatDefaultsError }}
               </div>
               <div class="sidebar-settings-row sidebar-settings-row--select" :title="SETTINGS_HELP.dictationLanguage">
                 <span class="sidebar-settings-label">{{ t('Dictation language') }}</span>
@@ -1022,7 +1051,7 @@ import {
   searchThreads,
   switchAccount,
 } from './api/codexGateway'
-import type { CodexPermissionMode, ReasoningEffort, SpeedMode, UiAccountEntry, UiRateLimitWindow, UiServerRequest, UiServerRequestReply, UiThreadAutomation } from './types/codex'
+import { REASONING_EFFORT_VALUES, type CodexPermissionMode, type ReasoningEffort, type SpeedMode, type UiAccountEntry, type UiRateLimitWindow, type UiServerRequest, type UiServerRequestReply, type UiThreadAutomation } from './types/codex'
 import type { ComposerDraftPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
 import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, TelegramStatus, ThreadTerminalQuickCommand, WorktreeBranchOption } from './api/codexGateway'
 import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
@@ -1040,6 +1069,7 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const ACCOUNTS_SECTION_COLLAPSED_STORAGE_KEY = 'codex-web-local.accounts-section-collapsed.v1'
 const TERMINAL_QUICK_COMMAND_STORAGE_KEY = 'codex-web-local.terminal-quick-commands.v1'
 const TOGGLE_TERMINAL_COMMAND_VALUE = '__toggle_terminal__'
+const NEW_CHAT_DEFAULT_INHERIT_VALUE = '__follow-codex-config__'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
 const SETTINGS_HELP = {
@@ -1093,6 +1123,10 @@ const {
   selectedCollaborationMode,
   selectedModelId,
   selectedReasoningEffort,
+  activeProviderId,
+  newChatDefaultModelId,
+  newChatDefaultReasoningEffort,
+  runtimeDefaultModelId,
   selectedSpeedMode,
   selectedCodexPermissionMode,
   codexCliMissingError,
@@ -1108,6 +1142,8 @@ const {
   isSelectedThreadInterruptPending,
   isUpdatingSpeedMode,
   isUpdatingPermissionMode,
+  isUpdatingNewChatDefaults,
+  newChatDefaultsError,
   error: desktopError,
   refreshAll,
   loadThreads,
@@ -1137,6 +1173,8 @@ const {
   updateSelectedModelIdForThread,
 
   updateSelectedReasoningEffort,
+  updateNewChatDefaults,
+  resetNewThreadDraftToDefaults,
   updateSelectedSpeedMode,
   updateSelectedCodexPermissionMode,
   respondToPendingServerRequest,
@@ -1440,6 +1478,59 @@ const latestUserTurnId = computed(() => {
 const liveOverlay = computed(() => selectedLiveOverlay.value)
 const composerThreadContextId = computed(() => (isHomeRoute.value ? '__new-thread__' : selectedThreadId.value))
 const composerSelectedModelId = computed(() => readModelIdForThread(composerThreadContextId.value))
+const activeProviderLabel = computed(() => activeProviderId.value === 'codex'
+  ? t('Codex')
+  : activeProviderId.value || t('Codex'))
+const newChatDefaultModelSelection = computed(() => (
+  newChatDefaultModelId.value || NEW_CHAT_DEFAULT_INHERIT_VALUE
+))
+const newChatDefaultModelOptions = computed(() => {
+  const inheritedModel = runtimeDefaultModelId.value.trim()
+  const inheritLabel = inheritedModel
+    ? `${t('Follow Codex config')} (${inheritedModel})`
+    : t('Follow Codex config')
+  const modelIds = [...availableModelIds.value]
+  const savedModel = newChatDefaultModelId.value.trim()
+  if (savedModel && !modelIds.includes(savedModel)) modelIds.push(savedModel)
+  return [
+    { value: NEW_CHAT_DEFAULT_INHERIT_VALUE, label: inheritLabel },
+    ...modelIds.map((modelId) => ({
+      value: modelId,
+      label: availableModelCapabilities.value[modelId]?.displayName || modelId,
+    })),
+  ]
+})
+const newChatDefaultReasoningModelId = computed(() => {
+  const savedModel = newChatDefaultModelId.value.trim()
+  if (savedModel && availableModelCapabilities.value[savedModel]) return savedModel
+  const inheritedModel = runtimeDefaultModelId.value.trim()
+  if (inheritedModel && availableModelCapabilities.value[inheritedModel]) return inheritedModel
+  return availableModelIds.value[0] ?? ''
+})
+const newChatDefaultReasoningOptions = computed(() => {
+  const supported = availableModelCapabilities.value[newChatDefaultReasoningModelId.value]?.supportedReasoningEfforts ?? []
+  const efforts = supported.length > 0 ? supported : [...REASONING_EFFORT_VALUES]
+  const labels: Record<ReasoningEffort, string> = {
+    none: t('None'),
+    minimal: t('Minimal'),
+    low: t('Low'),
+    medium: t('Medium'),
+    high: t('High'),
+    xhigh: t('Extra high'),
+    max: 'Max',
+    ultra: 'Ultra',
+  }
+  return [
+    { value: NEW_CHAT_DEFAULT_INHERIT_VALUE, label: t('Follow Codex config') },
+    ...efforts.map((effort) => ({ value: effort, label: labels[effort] })),
+  ]
+})
+const newChatDefaultReasoningSelection = computed(() => {
+  const savedEffort = newChatDefaultReasoningEffort.value
+  return savedEffort && newChatDefaultReasoningOptions.value.some((option) => option.value === savedEffort)
+    ? savedEffort
+    : NEW_CHAT_DEFAULT_INHERIT_VALUE
+})
 const isComposerFastModeSupported = computed(() => (
   isFastModeSupportedForModel(composerSelectedModelId.value)
 ))
@@ -2390,9 +2481,9 @@ function resolvePreferredLocalCwd(projectName: string, fallbackCwd = ''): string
 function onStartNewThread(projectName: string): void {
   const projectGroup = projectGroups.value.find((group) => group.projectName === projectName)
   const projectCwd = resolvePreferredLocalCwd(projectName, projectGroup?.threads[0]?.cwd?.trim() ?? '')
-  if (projectCwd) {
-    newThreadCwd.value = projectCwd
-  }
+  newThreadCwd.value = projectCwd
+  newThreadRuntime.value = 'local'
+  resetNewThreadDraftToDefaults()
   if (isMobile.value) setSidebarCollapsed(true)
   if (isHomeRoute.value) return
   void router.push({ name: 'home' })
@@ -2501,28 +2592,14 @@ async function onCreateProjectWorktree(projectName: string): Promise<void> {
   }
 }
 
-function resolveSelectedThreadProjectCwd(): string {
-  const thread = selectedThread.value
-  if (!thread) return ''
-  const projectName = thread.projectName?.trim() ?? ''
-  if (!projectName) return thread.cwd?.trim() ?? ''
-  return resolvePreferredLocalCwd(projectName, thread.cwd?.trim() ?? '')
-}
-
 function onStartNewThreadFromToolbar(): void {
-  const resolvedCwd = resolveSelectedThreadProjectCwd()
-  if (resolvedCwd) {
-    newThreadCwd.value = resolvedCwd
-  }
-  newThreadRuntime.value = 'local'
-  if (isMobile.value) setSidebarCollapsed(true)
-  if (isHomeRoute.value) return
-  void router.push({ name: 'home' })
+  onStartProjectlessNewChat()
 }
 
 function onStartProjectlessNewChat(): void {
   newThreadCwd.value = ''
   newThreadRuntime.value = 'local'
+  resetNewThreadDraftToDefaults()
   if (isMobile.value) setSidebarCollapsed(true)
   if (isHomeRoute.value) return
   void router.push({ name: 'home' })
@@ -3656,6 +3733,29 @@ function onSelectModel(modelId: string): void {
 
 function onSelectReasoningEffort(effort: ReasoningEffort | ''): void {
   void updateSelectedReasoningEffort(effort)
+}
+
+function onNewChatDefaultModelChange(value: string): void {
+  const nextModel = value === NEW_CHAT_DEFAULT_INHERIT_VALUE ? null : value
+  const targetModel = nextModel || runtimeDefaultModelId.value.trim()
+  const supported = availableModelCapabilities.value[targetModel]?.supportedReasoningEfforts ?? []
+  const savedEffort = newChatDefaultReasoningEffort.value
+  const patch: { model: string | null; reasoningEffort?: ReasoningEffort | null } = { model: nextModel }
+  if (savedEffort && supported.length > 0 && !supported.includes(savedEffort)) {
+    const capabilityDefault = availableModelCapabilities.value[targetModel]?.defaultReasoningEffort
+    patch.reasoningEffort = capabilityDefault && supported.includes(capabilityDefault)
+      ? capabilityDefault
+      : supported[0] ?? null
+  }
+  void updateNewChatDefaults(patch)
+}
+
+function onNewChatDefaultReasoningChange(value: string): void {
+  void updateNewChatDefaults({
+    reasoningEffort: value === NEW_CHAT_DEFAULT_INHERIT_VALUE
+      ? null
+      : value as ReasoningEffort,
+  })
 }
 
 function onSelectSpeedMode(mode: SpeedMode): void {
@@ -5093,6 +5193,18 @@ async function loadWorktreeBranches(sourceCwd: string): Promise<void> {
 
 .sidebar-settings-dropdown :deep(.composer-dropdown-value) {
   @apply max-w-36;
+}
+
+.sidebar-settings-new-chat-dropdown {
+  @apply max-w-40;
+}
+
+.sidebar-settings-new-chat-dropdown :deep(.composer-dropdown-value) {
+  @apply max-w-28 truncate;
+}
+
+.sidebar-settings-new-chat-error {
+  @apply border-t border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700;
 }
 
 .settings-panel-enter-active,

@@ -3058,6 +3058,12 @@ samp {
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 28%);
 }
 
+:root.dark .sidebar-settings-new-chat-error {
+  border-color: rgb(255 69 58 / 32%);
+  background-color: color-mix(in srgb, #ff453a 12%, var(--mac-panel));
+  color: #ff9a94;
+}
+
 :root:not(.dark) body .automation-thread-panel .rename-thread-actions,
 :root:not(.dark) .directory-modal-header,
 :root:not(.dark) .directory-modal-footer,
