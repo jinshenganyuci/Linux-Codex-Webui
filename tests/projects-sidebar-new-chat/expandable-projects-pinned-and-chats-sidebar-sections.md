@@ -1,40 +1,44 @@
-### Expandable Projects, Pinned, and Chats sidebar sections
+### Server-persisted sidebar sections and project collapse
 
 #### Feature/Change Name
-The sidebar labels the grouped thread area as `Projects`, makes `Projects`, `Pinned`, and `Chats` independently expandable, and places `Chats` after `Projects` in the same scrollable sidebar area.
+The sidebar uses the fixed order `Pinned → Chats → Projects` and stores section and per-project collapse state on the WebUI server so the same layout is restored in another browser.
 
 #### Prerequisites/Setup
-1. Dev server running at `http://127.0.0.1:5174` or the active Vite dev URL
-2. At least one existing thread is available in the sidebar
-3. At least one pinned thread exists to verify the `Pinned` section
-4. Light theme and dark theme are available from the appearance switcher
+1. The current build is running at the approved test address `http://127.0.0.1:13511`
+2. At least one projectless chat, two projects, and one pinned thread are available in the sidebar
+3. Two isolated browser profiles or contexts can access the same WebUI instance and `CODEX_HOME`
+4. The browser network panel can inspect `/codex-api/preferences/sidebar-layout`
+5. Light and dark themes are available from the appearance switcher
 
 #### Steps
-1. In light theme, open the app with the sidebar expanded
-2. Verify the grouped thread header reads `Projects` instead of `Threads`
-3. Verify `Pinned`, `Projects`, and `Chats` each show a chevron when present
-4. Collapse and expand `Pinned`, confirming pinned rows hide and return
-5. Collapse and expand `Projects`, confirming project groups hide and return
-6. Confirm `Chats` appears after `Projects` and scrolls with the same sidebar content, not as a fixed bottom shelf
-7. Collapse and expand `Chats`, confirming recent chat rows hide and return
-8. Click the `Chats` filter icon and verify the existing sidebar search field opens and the filter button shows active state
-9. Click the `Chats` compose icon and verify the app navigates to the new-chat/home composer
-10. Open the Projects organize menu, enable `Chats first`, and verify `Chats` moves above `Projects`
-11. In the same menu, switch `Sort by` between `Created` and `Updated`, then verify the active checkmark moves and the chat rows reorder by the selected timestamp
-12. Refresh the page and verify `Chats first` and the selected sort mode persist
-13. Switch to dark theme and repeat the visibility checks for section headers, chevrons, active filter state, sort menu state, and row text
+1. In browser A with the light theme, open the app with the sidebar expanded
+2. Verify the visible and keyboard navigation order is `Pinned`, `Chats`, then `Projects`
+3. Open the Projects organize menu and verify there is no `Chats first` option; switch `Sort by` between `Created` and `Updated` and verify only chat row ordering changes
+4. Collapse `Pinned`, `Chats`, and `Projects` one at a time; confirm each click updates immediately and sends one successful field-level `PATCH /codex-api/preferences/sidebar-layout`
+5. Expand the three sections again, then collapse one named project and leave a second project expanded
+6. Refresh browser A and verify the section and per-project states are restored by `GET /codex-api/preferences/sidebar-layout`
+7. Open browser B and verify the same named project is collapsed, the second project is expanded, and the fixed section order matches browser A
+8. In browser B, expand the collapsed project; return focus to browser A and verify browser A refreshes to the expanded server state
+9. Collapse the project again, then navigate directly to a thread under that project using its URL; verify the project remains collapsed
+10. Search for a thread under the collapsed project and refresh the thread list; verify neither operation changes the saved project collapse state
+11. Pin and unpin a chat; verify `Pinned` remains above `Chats` and an unpinned projectless chat returns to `Chats`
+12. Click `Show more` in `Chats` or a project with more than 10 rows, refresh, and verify this paging-only state returns to its default without changing section/project collapse state
+13. Switch to the dark theme and repeat the fixed-order, chevron, collapsed-row, error-message, and hover checks
 
 #### Expected Results
-- The sidebar uses `Projects` for the grouped project/thread area
-- `Pinned`, `Projects`, and `Chats` expansion state changes immediately and persists across reload
-- `Chats` is appended after `Projects` in the same scroll space
-- `Chats first` moves the `Chats` section before `Projects` and persists across reload
-- `Created` and `Updated` sort options update only the `Chats` ordering and persist across reload
-- The filter icon toggles the sidebar search without losing the `Chats` section
-- The compose icon starts a new chat using the existing new-thread flow
-- Light theme and dark theme both keep section headers, controls, and rows readable
+- The sidebar always renders `Pinned → Chats → Projects`; when there are no pinned rows, `Chats` is first
+- `Chats first` and its old browser-local ordering preference no longer affect layout
+- Section and per-project collapse changes are controlled only by explicit user clicks
+- Route selection, search, incoming thread data, project reordering, and refresh do not automatically expand or collapse a project
+- Server state wins over stale localStorage state after the one-time migration
+- Two browsers using the same WebUI instance restore the same state; different project fields merge without replacing each other
+- A failed GET or PATCH leaves the sidebar usable and presents a visible persistence error
+- `Show more` remains a transient paging control rather than a persisted project-collapse preference
+- Light and dark themes keep section headers, controls, and rows readable
 
 #### Rollback/Cleanup
-- Clear the sidebar search query if the filter step left it open
+- Return the desired sections and projects to their normal state using their chevrons
+- To repeat first-run migration testing, stop the disposable test instance and remove only its `linux-codex-webui-sidebar-preferences.json` file from that test instance's `CODEX_HOME`
+- Do not remove or modify the formal instance's preference file during routine verification
 
 ---

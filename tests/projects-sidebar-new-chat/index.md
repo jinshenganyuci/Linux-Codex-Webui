@@ -18,7 +18,7 @@ Return to the [manual test index](../../tests.md).
 | [Feature: Revert new-project folder-browser flow to inline add flow](revert-new-project-folder-browser-flow-to-inline-add-flow.md) |
 | [Feature: Frontend missing-entry 404 page auto-redirects to chat](frontend-missing-entry-404-page-auto-redirects-to-chat.md) |
 | [Editable current folder path in the folder picker](editable-current-folder-path-in-the-folder-picker.md) |
-| [Expandable Projects, Pinned, and Chats sidebar sections](expandable-projects-pinned-and-chats-sidebar-sections.md) |
+| [Server-persisted sidebar sections and project collapse](expandable-projects-pinned-and-chats-sidebar-sections.md) |
 | [Sidebar chats show more projectless chats](sidebar-chats-show-more-projectless-chats.md) |
 | [Projectless new chat folder collisions](projectless-new-chat-folder-collisions.md) |
 | [Sidebar sessions survive symlinked workspace roots](sidebar-sessions-survive-symlinked-workspace-roots.md) |
