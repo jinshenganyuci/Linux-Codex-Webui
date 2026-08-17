@@ -52,6 +52,11 @@ import {
   patchSidebarPreferences,
   readSidebarPreferences,
 } from './sidebarPreferences.js'
+import {
+  normalizeNewChatDefaultPatch,
+  patchNewChatDefaults,
+  readNewChatDefaults,
+} from './newChatDefaults.js'
 import { ThreadTitleGenerator } from './threadTitleGenerator.js'
 import {
   limitCommandOutputsInTurns,
@@ -8658,6 +8663,27 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             data: result.preferences,
             applied: result.applied,
           })
+          return
+        }
+
+        setJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+
+      if (url.pathname === '/codex-api/preferences/new-chat-defaults') {
+        if (req.method === 'GET') {
+          setJson(res, 200, { data: await readNewChatDefaults() })
+          return
+        }
+
+        if (req.method === 'PATCH') {
+          const body = asRecord(await readJsonBody(req))
+          const patch = normalizeNewChatDefaultPatch(body)
+          if (!patch) {
+            setJson(res, 400, { error: 'Invalid new chat default patch' })
+            return
+          }
+          setJson(res, 200, { data: await patchNewChatDefaults(patch) })
           return
         }
 
