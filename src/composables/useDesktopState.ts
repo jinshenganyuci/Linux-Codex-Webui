@@ -773,6 +773,7 @@ function areMessageFieldsEqual(first: UiMessage, second: UiMessage): boolean {
     first.id === second.id &&
     first.role === second.role &&
     first.text === second.text &&
+    first.timestampIso === second.timestampIso &&
     areStringArraysEqual(first.images, second.images) &&
     areUiFileChangesEqual(first.fileChanges, second.fileChanges) &&
     first.fileChangeStatus === second.fileChangeStatus &&
@@ -1010,6 +1011,11 @@ function parseIsoTimestamp(value: string): number | null {
   if (!value) return null
   const ms = new Date(value).getTime()
   return Number.isNaN(ms) ? null : ms
+}
+
+function timestampFromNotification(notification: Pick<RpcNotification, 'atIso'>): string {
+  const timestamp = parseIsoTimestamp(notification.atIso)
+  return timestamp === null ? new Date().toISOString() : new Date(timestamp).toISOString()
 }
 
 function formatTurnDuration(durationMs: number): string {
@@ -3607,10 +3613,13 @@ export function useDesktopState() {
     },
     setAgentText: (threadId, itemId, text) => {
       const turnId = activeTurnIdByThreadId.value[threadId] ?? ''
+      const current = (liveAgentMessagesByThreadId.value[threadId] ?? [])
+        .find((message) => message.id === itemId && (!turnId || message.turnId === turnId))
       upsertLiveAgentMessage(threadId, {
         id: itemId,
         role: 'assistant',
         text,
+        timestampIso: current?.timestampIso ?? new Date().toISOString(),
         messageType: 'agentMessage.live',
         turnId: turnId || undefined,
       })
@@ -3644,6 +3653,7 @@ export function useDesktopState() {
       id: `optimistic-user:${threadId}:${Date.now()}`,
       role: 'user',
       text,
+      timestampIso: new Date().toISOString(),
       images: imageUrls.length > 0 ? [...imageUrls] : undefined,
       skills: skills.length > 0 ? skills.map((skill) => ({ name: skill.name, path: skill.path })) : undefined,
       fileAttachments: fileAttachments.length > 0 ? fileAttachments.map((file) => ({ ...file })) : undefined,
@@ -3675,6 +3685,7 @@ export function useDesktopState() {
       id: `optimistic-user:new-thread:${Date.now()}`,
       role: 'user',
       text: nextText,
+      timestampIso: new Date().toISOString(),
       images: imageUrls.length > 0 ? [...imageUrls] : undefined,
       skills: skills.length > 0 ? skills.map((skill) => ({ name: skill.name, path: skill.path })) : undefined,
       fileAttachments: fileAttachments.length > 0 ? fileAttachments.map((file) => ({ ...file })) : undefined,
@@ -3862,6 +3873,8 @@ export function useDesktopState() {
       steps,
       isStreaming: true,
     }
+    const existing = (livePlanMessagesByThreadId.value[threadId] ?? [])
+      .find((message) => message.id === `${turnId}:plan`)
 
     return {
       threadId,
@@ -3869,6 +3882,7 @@ export function useDesktopState() {
         id: `${turnId}:plan`,
         role: 'assistant',
         text: buildPlanMessageText(plan),
+        timestampIso: existing?.timestampIso ?? timestampFromNotification(notification),
         messageType: 'plan.live',
         plan,
       },
@@ -3896,6 +3910,7 @@ export function useDesktopState() {
         id: messageId,
         role: 'assistant',
         text: nextText,
+        timestampIso: existing?.timestampIso ?? timestampFromNotification(notification),
         messageType: 'plan.live',
         plan: nextPlan,
       },
@@ -4696,6 +4711,7 @@ export function useDesktopState() {
         id,
         role: 'assistant',
         text,
+        timestampIso: timestampFromNotification(notification),
         messageType: 'agentMessage.live',
       }
     }
@@ -4737,6 +4753,7 @@ export function useDesktopState() {
         id,
         role: 'assistant',
         text: '',
+        timestampIso: timestampFromNotification(notification),
         images: [toLocalImageUrl(path)],
         messageType: 'imageView',
       }
@@ -4749,6 +4766,7 @@ export function useDesktopState() {
       id,
       role: 'assistant',
       text: '',
+      timestampIso: timestampFromNotification(notification),
       images: [imageUrl],
       messageType: 'imageView',
 

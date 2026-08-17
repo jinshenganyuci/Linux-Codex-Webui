@@ -42,6 +42,7 @@ Return to the [manual test index](../../tests.md).
 | [Backend-drained queue UI refresh](backend-drained-queue-ui-refresh.md) |
 | [Persisted idle queue recovery](persisted-idle-queue-recovery.md) |
 | [Sent user messages are visible immediately in new and existing chats](first-user-message-is-visible-immediately-in-new-chats.md) |
+| [User and assistant message dates](user-and-assistant-message-dates.md) |
 | [New chat live thinking and stop controls](new-chat-live-thinking-and-stop-controls.md) |
 | [Bold URL trailing punctuation parsing](bold-url-trailing-punctuation-parsing.md) |
 | [围栏代码块复制按钮](fenced-code-block-copy.md) |

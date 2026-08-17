@@ -620,6 +620,7 @@ describe('immediate sent-message rendering', () => {
       expect.objectContaining({
         role: 'user',
         text: 'show this now',
+        timestampIso: expect.any(String),
         messageType: 'userMessage.optimistic',
       }),
     ])
@@ -978,6 +979,7 @@ describe('immediate sent-message rendering', () => {
       expect.objectContaining({
         role: 'user',
         text: 'new thread now',
+        timestampIso: expect.any(String),
         messageType: 'userMessage.optimistic',
       }),
     ])

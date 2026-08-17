@@ -168,6 +168,36 @@ describe('ThreadConversation turn-scoped message identity', () => {
   })
 })
 
+describe('ThreadConversation message timestamps', () => {
+  it('renders dates for user and assistant messages but not system rows', async () => {
+    const html = await renderConversation([
+      {
+        id: 'user-message',
+        role: 'user',
+        text: 'sent message',
+        timestampIso: '2026-08-17T01:02:03.000Z',
+      },
+      {
+        id: 'assistant-message',
+        role: 'assistant',
+        text: 'reply message',
+        timestampIso: '2026-08-17T01:04:05.000Z',
+      },
+      {
+        id: 'system-message',
+        role: 'system',
+        text: 'system detail',
+        timestampIso: '2026-08-17T01:05:06.000Z',
+      },
+    ])
+
+    expect(countClass(html, 'message-timestamp')).toBe(2)
+    expect(html).toContain('datetime="2026-08-17T01:02:03.000Z"')
+    expect(html).toContain('datetime="2026-08-17T01:04:05.000Z"')
+    expect(html).not.toContain('datetime="2026-08-17T01:05:06.000Z"')
+  })
+})
+
 describe('ThreadConversation truncated command-output cache', () => {
   it('loads a truncated command once and retains the full output after repeated expansion requests', async () => {
     let requestCount = 0

@@ -257,6 +257,8 @@ export type UiMessage = {
   id: string
   role: 'user' | 'assistant' | 'system'
   text: string
+  /** ISO timestamp used for the visible user/assistant message date. */
+  timestampIso?: string
   images?: string[]
   skills?: Array<{ name: string; path: string }>
   fileAttachments?: UiFileAttachment[]

@@ -106,6 +106,38 @@ Reply with &lt;/instructions&gt; and A &amp; B
     })
   })
 
+  it('assigns real turn timestamps to user messages and completed assistant replies', () => {
+    const response = threadReadResponseWithContent([
+      {
+        type: 'userMessage',
+        id: 'user-timestamped',
+        content: [{ type: 'text', text: 'When was this sent?', text_elements: [] }],
+      },
+      {
+        type: 'agentMessage',
+        id: 'assistant-timestamped',
+        text: 'This was the reply.',
+      },
+    ])
+    Object.assign(response.thread.turns[0] as unknown as Record<string, unknown>, {
+      startedAt: '2026-08-17T01:02:03.000Z',
+      completedAt: '2026-08-17T01:04:05.000Z',
+    })
+
+    const messages = normalizeThreadMessagesV2(response)
+
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'user-timestamped',
+        timestampIso: '2026-08-17T01:02:03.000Z',
+      }),
+      expect.objectContaining({
+        id: 'assistant-timestamped',
+        timestampIso: '2026-08-17T01:04:05.000Z',
+      }),
+    ]))
+  })
+
   it('preserves command-output truncation metadata from the wire payload', () => {
     const commandItem = {
       type: 'commandExecution',

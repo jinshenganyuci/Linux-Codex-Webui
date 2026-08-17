@@ -667,6 +667,12 @@
                 </div>
               </section>
 
+              <time
+                v-if="messageTimestampLabel(message)"
+                class="message-timestamp"
+                :datetime="message.timestampIso"
+              >{{ messageTimestampLabel(message) }}</time>
+
               <div
                 v-if="showCopyResponseButton(message) || showEditMessageButton(message)"
                 class="message-toolbar"
@@ -2583,10 +2589,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
-function formatIsoTime(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleTimeString()
+function messageTimestampLabel(message: UiMessage): string {
+  if (message.role !== 'user' && message.role !== 'assistant') return ''
+  if (!message.timestampIso) return ''
+  const date = new Date(message.timestampIso)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
 function readRequestReason(request: UiServerRequest): string {
@@ -3501,6 +3510,10 @@ onBeforeUnmount(() => {
 .message-body[data-role='user'] {
   @apply ml-auto items-end;
   align-self: flex-end;
+}
+
+.message-timestamp {
+  @apply mt-1 px-1 text-[11px] leading-4 text-slate-400;
 }
 
 .message-toolbar {

@@ -24,6 +24,62 @@ function toIso(seconds: number): string {
   return new Date(seconds * 1000).toISOString()
 }
 
+function toTimestampIso(value: unknown): string | undefined {
+  const milliseconds = typeof value === 'number' && Number.isFinite(value)
+    ? (value < 10_000_000_000 ? value * 1000 : value)
+    : typeof value === 'string' && value.trim().length > 0
+      ? Date.parse(value)
+      : Number.NaN
+  if (!Number.isFinite(milliseconds)) return undefined
+  return new Date(milliseconds).toISOString()
+}
+
+function readTurnTimestampIso(turn: Turn, key: 'startedAt' | 'completedAt'): string | undefined {
+  return toTimestampIso((turn as unknown as Record<string, unknown>)[key])
+}
+
+function readUuidV7TimestampIso(value: string): string | undefined {
+  const normalized = value.trim().toLowerCase()
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(normalized)) {
+    return undefined
+  }
+  return toTimestampIso(Number.parseInt(`${normalized.slice(0, 8)}${normalized.slice(9, 13)}`, 16))
+}
+
+function messageTimestampIsoForTurn(message: UiMessage, turn: Turn): string | undefined {
+  if (message.role === 'user') return readTurnTimestampIso(turn, 'startedAt')
+  if (message.role === 'assistant') {
+    return readTurnTimestampIso(turn, 'completedAt') ?? readTurnTimestampIso(turn, 'startedAt')
+  }
+  return undefined
+}
+
+function withTurnMetadata(
+  message: UiMessage,
+  turn: Turn,
+  turnId: string | undefined,
+  turnIndex?: number,
+): UiMessage {
+  const timestampIso = messageTimestampIsoForTurn(message, turn)
+  return {
+    ...message,
+    turnId,
+    ...(turnIndex === undefined ? {} : { turnIndex }),
+    ...(timestampIso ? { timestampIso } : {}),
+  }
+}
+
+function withPaginatedItemMetadata(message: UiMessage, turnId: string): UiMessage {
+  const timestampIso = message.role === 'user' || message.role === 'assistant'
+    ? readUuidV7TimestampIso(turnId)
+    : undefined
+  return {
+    ...message,
+    turnId,
+    ...(timestampIso ? { timestampIso } : {}),
+  }
+}
+
 function toRawPayload(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2)
@@ -694,7 +750,7 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse, baseTurnI
     const items = Array.isArray(turn.items) ? turn.items : []
     for (const item of items) {
       for (const msg of toUiMessages(item)) {
-        messages.push({ ...msg, turnId, turnIndex })
+        messages.push(withTurnMetadata(msg, turn, turnId, turnIndex))
       }
     }
     const errorText = readTurnErrorText(turn)
@@ -747,7 +803,7 @@ export function normalizePaginatedThreadTurnsV2(turnsValue: unknown): Normalized
     const items = Array.isArray(turn.items) ? turn.items : []
     for (const item of dedupePaginatedItems(items)) {
       for (const message of toPaginatedUiMessages(item)) {
-        messages.push({ ...message, turnId: rawTurnId })
+        messages.push(withTurnMetadata(message, turn, rawTurnId))
       }
     }
 
@@ -796,7 +852,7 @@ export function normalizePaginatedThreadItemsV2(entriesValue: unknown): UiMessag
   ]
   for (const { turnId, item } of normalizedEntries) {
     for (const message of toPaginatedUiMessages(item)) {
-      messages.push({ ...message, turnId })
+      messages.push(withPaginatedItemMetadata(message, turnId))
     }
   }
 
