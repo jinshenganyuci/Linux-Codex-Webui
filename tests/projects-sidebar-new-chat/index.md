@@ -23,4 +23,4 @@ Return to the [manual test index](../../tests.md).
 | [Projectless new chat folder collisions](projectless-new-chat-folder-collisions.md) |
 | [Sidebar sessions survive symlinked workspace roots](sidebar-sessions-survive-symlinked-workspace-roots.md) |
 | [Sidebar scroll position survives collapse](sidebar-scroll-position-survives-collapse.md) |
-| [Toolbar new thread keeps active project](toolbar-new-thread-keeps-active-project.md) |
+| [新聊天目的地与持久化默认模型](new-chat-destinations-and-persisted-defaults.md) |
