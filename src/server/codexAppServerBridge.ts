@@ -47,6 +47,11 @@ import {
   writeThreadModelPreference,
   type ThreadModelPreference,
 } from './threadModelPreferences.js'
+import {
+  normalizeSidebarPreferencesPatch,
+  patchSidebarPreferences,
+  readSidebarPreferences,
+} from './sidebarPreferences.js'
 import { ThreadTitleGenerator } from './threadTitleGenerator.js'
 import {
   limitCommandOutputsInTurns,
@@ -8628,6 +8633,31 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }
           await deleteThreadModelPreference(threadId)
           setJson(res, 200, { ok: true })
+          return
+        }
+
+        setJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+
+      if (url.pathname === '/codex-api/preferences/sidebar-layout') {
+        if (req.method === 'GET') {
+          setJson(res, 200, { data: await readSidebarPreferences() })
+          return
+        }
+
+        if (req.method === 'PATCH') {
+          const body = asRecord(await readJsonBody(req))
+          const patch = normalizeSidebarPreferencesPatch(body)
+          if (!patch) {
+            setJson(res, 400, { error: 'Invalid sidebar preference patch' })
+            return
+          }
+          const result = await patchSidebarPreferences(patch)
+          setJson(res, 200, {
+            data: result.preferences,
+            applied: result.applied,
+          })
           return
         }
 
