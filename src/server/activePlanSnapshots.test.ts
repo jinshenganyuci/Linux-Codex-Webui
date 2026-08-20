@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   ACTIVE_PLAN_SNAPSHOT_MAX_TEXT_BYTES,
+  ACTIVE_PLAN_SNAPSHOT_MAX_TOTAL_BYTES,
   ActivePlanSnapshotStore,
 } from './activePlanSnapshots'
 
@@ -95,6 +96,35 @@ describe('ActivePlanSnapshotStore', () => {
     expect(snapshots.map((snapshot) => snapshot.turnId)).toEqual(['turn-b', 'turn-c'])
     expect(snapshots.every((snapshot) => snapshot.steps.length === 2)).toBe(true)
     expect(snapshots.every((snapshot) => Buffer.byteLength(snapshot.text, 'utf8') <= ACTIVE_PLAN_SNAPSHOT_MAX_TEXT_BYTES)).toBe(true)
+  })
+
+  it('bounds the aggregate ready payload and retains the newest plans', () => {
+    let nowMs = 1_000
+    const store = new ActivePlanSnapshotStore({
+      maxCount: 64,
+      maxTextBytes: 256,
+      maxTotalBytes: 1_024,
+      now: () => nowMs,
+    })
+    for (const turnId of ['turn-a', 'turn-b', 'turn-c', 'turn-d']) {
+      store.applyNotification('turn/plan/updated', {
+        threadId: 'thread-a',
+        turnId,
+        explanation: turnId,
+        plan: [{ step: 'x'.repeat(180), status: 'inProgress' }],
+      })
+      nowMs += 1
+    }
+
+    const snapshots = store.getSnapshots()
+    const serializedBytes = snapshots.reduce(
+      (sum, snapshot) => sum + Buffer.byteLength(JSON.stringify(snapshot), 'utf8'),
+      0,
+    )
+    expect(serializedBytes).toBeLessThanOrEqual(1_024)
+    expect(snapshots.at(-1)?.turnId).toBe('turn-d')
+    expect(snapshots.length).toBeLessThan(4)
+    expect(ACTIVE_PLAN_SNAPSHOT_MAX_TOTAL_BYTES).toBe(512 * 1024)
   })
 
   it('ignores malformed notifications and empty deltas', () => {

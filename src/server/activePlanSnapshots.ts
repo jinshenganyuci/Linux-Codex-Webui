@@ -3,12 +3,14 @@ import type { ActivePlanSnapshot, UiPlanLifecycle, UiPlanStep } from '../types/c
 export const ACTIVE_PLAN_SNAPSHOT_MAX_COUNT = 64
 export const ACTIVE_PLAN_SNAPSHOT_MAX_STEPS = 64
 export const ACTIVE_PLAN_SNAPSHOT_MAX_TEXT_BYTES = 64 * 1024
+export const ACTIVE_PLAN_SNAPSHOT_MAX_TOTAL_BYTES = 512 * 1024
 export const ACTIVE_PLAN_TERMINAL_RETENTION_MS = 30_000
 
 type ActivePlanSnapshotStoreOptions = {
   maxCount?: number
   maxSteps?: number
   maxTextBytes?: number
+  maxTotalBytes?: number
   terminalRetentionMs?: number
   now?: () => number
 }
@@ -97,11 +99,16 @@ function cloneSnapshot(snapshot: StoredActivePlanSnapshot): ActivePlanSnapshot {
   }
 }
 
+function serializedSnapshotBytes(snapshot: StoredActivePlanSnapshot): number {
+  return Buffer.byteLength(JSON.stringify(cloneSnapshot(snapshot)), 'utf8')
+}
+
 export class ActivePlanSnapshotStore {
   private readonly snapshotsByTurnId = new Map<string, StoredActivePlanSnapshot>()
   private readonly maxCount: number
   private readonly maxSteps: number
   private readonly maxTextBytes: number
+  private readonly maxTotalBytes: number
   private readonly terminalRetentionMs: number
   private readonly now: () => number
 
@@ -109,6 +116,10 @@ export class ActivePlanSnapshotStore {
     this.maxCount = Math.max(1, options.maxCount ?? ACTIVE_PLAN_SNAPSHOT_MAX_COUNT)
     this.maxSteps = Math.max(1, options.maxSteps ?? ACTIVE_PLAN_SNAPSHOT_MAX_STEPS)
     this.maxTextBytes = Math.max(256, options.maxTextBytes ?? ACTIVE_PLAN_SNAPSHOT_MAX_TEXT_BYTES)
+    this.maxTotalBytes = Math.max(
+      this.maxTextBytes * 2,
+      options.maxTotalBytes ?? ACTIVE_PLAN_SNAPSHOT_MAX_TOTAL_BYTES,
+    )
     this.terminalRetentionMs = Math.max(0, options.terminalRetentionMs ?? ACTIVE_PLAN_TERMINAL_RETENTION_MS)
     this.now = options.now ?? Date.now
   }
@@ -285,13 +296,14 @@ export class ActivePlanSnapshotStore {
   }
 
   private enforceCapacity(): void {
-    if (this.snapshotsByTurnId.size <= this.maxCount) return
     const oldestFirst = Array.from(this.snapshotsByTurnId.values())
       .sort((first, second) => first.updatedAtMs - second.updatedAtMs)
-    while (this.snapshotsByTurnId.size > this.maxCount) {
+    let totalBytes = oldestFirst.reduce((sum, snapshot) => sum + serializedSnapshotBytes(snapshot), 0)
+    while (this.snapshotsByTurnId.size > this.maxCount || totalBytes > this.maxTotalBytes) {
       const oldest = oldestFirst.shift()
       if (!oldest) break
       this.snapshotsByTurnId.delete(oldest.turnId)
+      totalBytes -= serializedSnapshotBytes(oldest)
     }
   }
 }
