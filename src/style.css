@@ -1414,6 +1414,28 @@
   @apply bg-sky-800 text-sky-100;
 }
 
+:root.dark .plan-card-summary,
+:root.dark .plan-card-chevron {
+  @apply text-zinc-400;
+}
+
+:root.dark .plan-card-header:focus-visible {
+  @apply ring-sky-500 ring-offset-slate-900;
+}
+
+:root.dark .plan-card-badge[data-lifecycle='completed'] {
+  @apply bg-emerald-900 text-emerald-200;
+}
+
+:root.dark .plan-card-badge[data-lifecycle='failed'] {
+  @apply bg-rose-950 text-rose-200;
+}
+
+:root.dark .plan-card-badge[data-lifecycle='interrupted'],
+:root.dark .plan-card-badge[data-lifecycle='incomplete'] {
+  @apply bg-amber-950 text-amber-200;
+}
+
 :root.dark .plan-card-explanation {
   @apply text-zinc-200;
 }

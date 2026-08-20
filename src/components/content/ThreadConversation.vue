@@ -270,37 +270,57 @@
                     </div>
                   </div>
                 </div>
-                <div v-else-if="isPlanMessage(message)" class="plan-card" :data-streaming="message.messageType === 'plan.live'">
-                  <div class="plan-card-header">
-                    <p class="plan-card-title">{{ t('Plan') }}</p>
-                    <span v-if="message.messageType === 'plan.live'" class="plan-card-badge">{{ t('Updating') }}</span>
-                  </div>
-                  <div
-                    v-if="readPlanExplanation(message)"
-                    class="plan-card-explanation plan-card-markdown"
-                    v-html="renderMarkdownBlocksAsHtml(readPlanExplanation(message))"
-                  />
-                  <ol v-if="readPlanSteps(message).length > 0" class="plan-step-list">
-                    <li
-                      v-for="(step, stepIndex) in readPlanSteps(message)"
-                      :key="`${messageIdentityKey(message)}:plan-step:${stepIndex}`"
-                      class="plan-step-item"
-                      :data-status="step.status"
-                    >
-                      <span class="plan-step-status" :data-status="step.status">{{ planStepStatusIcon(step.status) }}</span>
-                      <div class="plan-step-text plan-card-markdown" v-html="renderMarkdownBlocksAsHtml(step.step)" />
-                    </li>
-                  </ol>
-                  <div v-else class="plan-card-markdown" v-html="renderMarkdownBlocksAsHtml(message.text)" />
-                  <div v-if="showImplementPlanButton(message)" class="plan-card-actions">
-                    <button
-                      type="button"
-                      class="plan-card-implement-button"
-                      @click="implementPlan(message)"
-                    >
-                      {{ t('Implement plan') }}
-                    </button>
-                  </div>
+                <div
+                  v-else-if="isPlanMessage(message)"
+                  class="plan-card"
+                  :data-streaming="message.plan?.lifecycle ? message.plan.lifecycle === 'live' : message.messageType === 'plan.live'"
+                  :data-collapsed="!isPlanExpanded(message)"
+                  :data-lifecycle="resolvedPlanLifecycle(message)"
+                >
+                  <button
+                    type="button"
+                    class="plan-card-header"
+                    :aria-expanded="isPlanExpanded(message)"
+                    :aria-label="planToggleLabel(message)"
+                    @click="togglePlanExpanded(message)"
+                  >
+                    <span class="plan-card-title">{{ t('Plan') }}</span>
+                    <span v-if="!isPlanExpanded(message)" class="plan-card-summary">{{ planSummaryLabel(message) }}</span>
+                    <span class="plan-card-header-actions">
+                      <span v-if="planLifecycleBadge(message)" class="plan-card-badge" :data-lifecycle="resolvedPlanLifecycle(message)">
+                        {{ planLifecycleBadge(message) }}
+                      </span>
+                      <span class="plan-card-chevron" :data-expanded="isPlanExpanded(message)">▶</span>
+                    </span>
+                  </button>
+                  <template v-if="isPlanExpanded(message)">
+                    <div
+                      v-if="readPlanExplanation(message)"
+                      class="plan-card-explanation plan-card-markdown"
+                      v-html="renderMarkdownBlocksAsHtml(readPlanExplanation(message))"
+                    />
+                    <ol v-if="readPlanSteps(message).length > 0" class="plan-step-list">
+                      <li
+                        v-for="(step, stepIndex) in readPlanSteps(message)"
+                        :key="`${messageIdentityKey(message)}:plan-step:${stepIndex}`"
+                        class="plan-step-item"
+                        :data-status="step.status"
+                      >
+                        <span class="plan-step-status" :data-status="step.status">{{ planStepStatusIcon(step.status) }}</span>
+                        <div class="plan-step-text plan-card-markdown" v-html="renderMarkdownBlocksAsHtml(step.step)" />
+                      </li>
+                    </ol>
+                    <div v-else class="plan-card-markdown" v-html="renderMarkdownBlocksAsHtml(message.text)" />
+                    <div v-if="showImplementPlanButton(message)" class="plan-card-actions">
+                      <button
+                        type="button"
+                        class="plan-card-implement-button"
+                        @click="implementPlan(message)"
+                      >
+                        {{ t('Implement plan') }}
+                      </button>
+                    </div>
+                  </template>
                 </div>
                 <div
                   v-else
@@ -993,7 +1013,7 @@ export function createThreadCommandOutputCache(
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanStep, UiServerRequest } from '../../types/codex'
+import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanLifecycle, UiPlanStep, UiServerRequest } from '../../types/codex'
 import { getFullThreadCommandOutput, updateThreadFileChanges } from '../../api/codexGateway'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
 import { useMobile } from '../../composables/useMobile'
@@ -1037,6 +1057,29 @@ const collapsedAutoCommandIds = ref<Set<string>>(new Set())
 const expandedCommandGroupIds = ref<Set<string>>(new Set())
 const expandedWorkedIds = ref<Set<string>>(new Set())
 const expandedFileChangeSummaryIds = ref<Set<string>>(new Set())
+const PLAN_CARD_OVERRIDE_STORAGE_KEY = 'codex-web-local.plan-card-open.v1'
+const PLAN_CARD_OVERRIDE_LIMIT = 200
+type PlanCardManualOverride = 'expanded' | 'collapsed'
+
+function loadPlanCardOverrides(): Record<string, PlanCardManualOverride> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(PLAN_CARD_OVERRIDE_STORAGE_KEY) ?? '{}') as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter((entry): entry is [string, PlanCardManualOverride] => (
+          typeof entry[0] === 'string'
+          && (entry[1] === 'expanded' || entry[1] === 'collapsed')
+        ))
+        .slice(-PLAN_CARD_OVERRIDE_LIMIT),
+    )
+  } catch {
+    return {}
+  }
+}
+
+const planCardOverrideByIdentity = ref<Record<string, PlanCardManualOverride>>(loadPlanCardOverrides())
 const activeDiffViewerSummary = ref<TurnFileChangeSummary | null>(null)
 const activeDiffViewerChangeKey = ref('')
 const isDiffViewerFileListOpen = ref(false)
@@ -1120,6 +1163,100 @@ function isCommandMessage(message: UiMessage): boolean {
 
 function isPlanMessage(message: UiMessage): boolean {
   return message.messageType === 'plan' || message.messageType === 'plan.live'
+}
+
+function planOverrideIdentity(message: UiMessage): string {
+  return `${props.activeThreadId}\u0000${message.turnId?.trim() || messageIdentityKey(message)}`
+}
+
+function persistPlanCardOverrides(next: Record<string, PlanCardManualOverride>): void {
+  const bounded = Object.fromEntries(Object.entries(next).slice(-PLAN_CARD_OVERRIDE_LIMIT))
+  planCardOverrideByIdentity.value = bounded
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(PLAN_CARD_OVERRIDE_STORAGE_KEY, JSON.stringify(bounded))
+}
+
+function hasNewerUserTurn(message: UiMessage): boolean {
+  const turnId = message.turnId?.trim() ?? ''
+  if (!turnId) return false
+  const overlayTurnId = props.liveOverlay?.turnProgress?.turnId?.trim() ?? ''
+  if (overlayTurnId && overlayTurnId !== turnId) return true
+  const messageIndex = props.messages.findIndex((candidate) => messageIdentityKey(candidate) === messageIdentityKey(message))
+  for (let index = 0; index < props.messages.length; index += 1) {
+    const candidate = props.messages[index]
+    if (candidate.role !== 'user') continue
+    const candidateTurnId = candidate.turnId?.trim() ?? ''
+    if (!candidateTurnId || candidateTurnId === turnId) continue
+    if (
+      typeof message.turnIndex === 'number'
+      && typeof candidate.turnIndex === 'number'
+      && candidate.turnIndex > message.turnIndex
+    ) {
+      return true
+    }
+    if (messageIndex >= 0 && index > messageIndex) return true
+  }
+  return false
+}
+
+function resolvedPlanLifecycle(message: UiMessage): UiPlanLifecycle | 'unknown' {
+  if (message.plan?.lifecycle) return message.plan.lifecycle
+  if (message.messageType === 'plan.live') return 'live'
+  const turnId = message.turnId?.trim() ?? ''
+  if (turnId && props.messages.some((candidate) => (
+    candidate.turnId?.trim() === turnId
+    && candidate.messageType === 'turnError'
+  ))) {
+    return 'failed'
+  }
+  const steps = readPlanSteps(message)
+  if (steps.length > 0 && steps.every((step) => step.status === 'completed')) return 'completed'
+  if (hasNewerUserTurn(message)) return 'incomplete'
+  return 'unknown'
+}
+
+function isPlanAutomaticallyCollapsed(message: UiMessage): boolean {
+  const lifecycle = resolvedPlanLifecycle(message)
+  if (lifecycle === 'completed') return true
+  if (lifecycle === 'failed' || lifecycle === 'interrupted' || lifecycle === 'incomplete') {
+    return hasNewerUserTurn(message)
+  }
+  return false
+}
+
+function isPlanExpanded(message: UiMessage): boolean {
+  const manualOverride = planCardOverrideByIdentity.value[planOverrideIdentity(message)]
+  if (manualOverride) return manualOverride === 'expanded'
+  return !isPlanAutomaticallyCollapsed(message)
+}
+
+function togglePlanExpanded(message: UiMessage): void {
+  const key = planOverrideIdentity(message)
+  const next = { ...planCardOverrideByIdentity.value }
+  delete next[key]
+  next[key] = isPlanExpanded(message) ? 'collapsed' : 'expanded'
+  persistPlanCardOverrides(next)
+}
+
+function planSummaryLabel(message: UiMessage): string {
+  const steps = readPlanSteps(message)
+  if (steps.length === 0) return t('Plan details')
+  const completed = steps.filter((step) => step.status === 'completed').length
+  return t('{completed}/{total} completed', { completed, total: steps.length })
+}
+
+function planLifecycleBadge(message: UiMessage): string {
+  const lifecycle = resolvedPlanLifecycle(message)
+  if (lifecycle === 'live') return t('Updating')
+  if (lifecycle === 'completed') return t('Completed')
+  if (lifecycle === 'failed') return t('Failed')
+  if (lifecycle === 'interrupted') return t('Interrupted')
+  if (lifecycle === 'incomplete') return t('Incomplete')
+  return ''
+}
+
+function planToggleLabel(message: UiMessage): string {
+  return isPlanExpanded(message) ? t('Collapse plan') : t('Expand plan')
 }
 
 function isTurnErrorMessage(message: UiMessage): boolean {
@@ -3646,16 +3783,53 @@ onBeforeUnmount(() => {
   @apply flex max-w-[min(var(--chat-card-max,76ch),100%)] flex-col gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-slate-900;
 }
 
+.plan-card[data-collapsed='true'] {
+  @apply gap-0 py-2.5;
+}
+
 .plan-card-header {
-  @apply flex items-center justify-between gap-3;
+  @apply flex w-full cursor-pointer items-center gap-3 border-0 bg-transparent p-0 text-left;
+}
+
+.plan-card-header:focus-visible {
+  @apply rounded-lg outline-none ring-2 ring-sky-400 ring-offset-2 ring-offset-sky-50;
 }
 
 .plan-card-title {
-  @apply m-0 text-sm font-semibold leading-5 text-sky-900;
+  @apply m-0 shrink-0 text-sm font-semibold leading-5 text-sky-900;
+}
+
+.plan-card-summary {
+  @apply min-w-0 flex-1 truncate text-xs text-slate-600;
+}
+
+.plan-card-header-actions {
+  @apply ml-auto inline-flex shrink-0 items-center gap-2;
 }
 
 .plan-card-badge {
   @apply inline-flex items-center rounded-full bg-sky-200 px-2 py-0.5 text-[11px] font-medium leading-4 text-sky-900;
+}
+
+.plan-card-badge[data-lifecycle='completed'] {
+  @apply bg-emerald-200 text-emerald-900;
+}
+
+.plan-card-badge[data-lifecycle='failed'] {
+  @apply bg-rose-200 text-rose-900;
+}
+
+.plan-card-badge[data-lifecycle='interrupted'],
+.plan-card-badge[data-lifecycle='incomplete'] {
+  @apply bg-amber-200 text-amber-900;
+}
+
+.plan-card-chevron {
+  @apply inline-flex text-[10px] text-slate-500 transition-transform;
+}
+
+.plan-card-chevron[data-expanded='true'] {
+  transform: rotate(90deg);
 }
 
 .plan-card-explanation {

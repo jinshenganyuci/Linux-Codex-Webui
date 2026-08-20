@@ -92,6 +92,28 @@ function fileChange(path: string): UiFileChange {
   }
 }
 
+function planMessage(
+  turnId: string,
+  lifecycle: 'live' | 'completed' | 'failed' | 'interrupted' | 'incomplete',
+): UiMessage {
+  return {
+    id: `${turnId}:plan`,
+    role: 'assistant',
+    text: 'Release safely\n- [x] Inspect\n- [~] Publish',
+    turnId,
+    messageType: 'plan.live',
+    plan: {
+      explanation: 'Release safely',
+      steps: [
+        { step: 'Inspect unique plan step', status: 'completed' },
+        { step: 'Publish unique plan step', status: lifecycle === 'completed' ? 'completed' : 'inProgress' },
+      ],
+      isStreaming: lifecycle === 'live',
+      lifecycle,
+    },
+  }
+}
+
 function countClass(html: string, className: string): number {
   return html.match(new RegExp(`class="[^"]*\\b${className}\\b[^"]*"`, 'gu'))?.length ?? 0
 }
@@ -195,6 +217,65 @@ describe('ThreadConversation message timestamps', () => {
     expect(html).toContain('datetime="2026-08-17T01:02:03.000Z"')
     expect(html).toContain('datetime="2026-08-17T01:04:05.000Z"')
     expect(html).not.toContain('datetime="2026-08-17T01:05:06.000Z"')
+  })
+})
+
+describe('ThreadConversation plan lifecycle presentation', () => {
+  it('keeps a live plan expanded with its updating badge', async () => {
+    const html = await renderConversation([planMessage('turn-live', 'live')])
+    expect(html).toContain('data-lifecycle="live"')
+    expect(html).toContain('aria-expanded="true"')
+    expect(html).toContain('Inspect unique plan step')
+    expect(html).toContain('更新中')
+  })
+
+  it('collapses a completed plan into a compact progress summary', async () => {
+    const html = await renderConversation([planMessage('turn-completed', 'completed')])
+    expect(html).toContain('data-collapsed="true"')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('已完成 2/2')
+    expect(html).not.toContain('Inspect unique plan step')
+  })
+
+  it('keeps a failed plan open until a newer user turn exists', async () => {
+    const failedPlan = planMessage('turn-failed', 'failed')
+    const failedHtml = await renderConversation([failedPlan])
+    expect(failedHtml).toContain('aria-expanded="true"')
+    expect(failedHtml).toContain('Inspect unique plan step')
+
+    const continuedHtml = await renderConversation([
+      failedPlan,
+      { id: 'next-user', role: 'user', text: 'continue', turnId: 'turn-next' },
+    ])
+    expect(continuedHtml).toContain('data-collapsed="true"')
+    expect(continuedHtml).toContain('aria-expanded="false"')
+    expect(continuedHtml).not.toContain('Inspect unique plan step')
+  })
+
+  it('recovers a failed lifecycle from persisted turn history', async () => {
+    const failedPlan = planMessage('turn-history-failed', 'failed')
+    const historicalPlan: UiMessage = {
+      ...failedPlan,
+      messageType: 'plan',
+      plan: {
+        explanation: failedPlan.plan?.explanation,
+        steps: failedPlan.plan?.steps ?? [],
+        isStreaming: false,
+      },
+    }
+    const html = await renderConversation([
+      historicalPlan,
+      {
+        id: 'turn-history-failed-error',
+        role: 'system',
+        text: 'registry rejected',
+        turnId: 'turn-history-failed',
+        messageType: 'turnError',
+      },
+    ])
+    expect(html).toContain('data-lifecycle="failed"')
+    expect(html).toContain('失败')
+    expect(html).toContain('aria-expanded="true"')
   })
 })
 
