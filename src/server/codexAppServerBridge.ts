@@ -31,6 +31,7 @@ import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoute
 import { TelegramThreadBridge } from './telegramThreadBridge.js'
 import { ThreadTerminalManager } from './terminalManager.js'
 import { ThreadRuntimeState } from './threadRuntimeState.js'
+import { ActivePlanSnapshotStore } from './activePlanSnapshots.js'
 import {
   AgentProgressTracker,
   type AgentProgressSnapshot,
@@ -70,7 +71,7 @@ import {
   resolveCodexCommand,
   resolveRipgrepCommand,
 } from '../commandResolution.js'
-import type { CollaborationModeKind, ReasoningEffort } from '../types/codex.js'
+import type { ActivePlanSnapshot, CollaborationModeKind, ReasoningEffort } from '../types/codex.js'
 import { isAbsoluteLikePath } from '../pathUtils.js'
 
 type JsonRpcCall = {
@@ -8225,6 +8226,7 @@ type CodexBridgeMiddleware = ((req: IncomingMessage, res: ServerResponse, next: 
   disposeGracefully: () => Promise<void>
   subscribeNotifications: (listener: (value: BridgeNotification) => void, cursor?: { streamId?: string; sequence?: number }) => () => void
   getNotificationStreamState: () => { streamId: string; latestSequence: number; oldestSequence: number }
+  getActivePlanSnapshots: () => ActivePlanSnapshot[]
 }
 
 type SharedBridgeState = {
@@ -8356,14 +8358,22 @@ async function buildThreadSearchIndex(appServer: AppServerProcess): Promise<Thre
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const { appServer, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor, threadRuntimeState } = getSharedBridgeState()
   const threadTitleGenerator = new ThreadTitleGenerator()
+  const activePlanSnapshots = new ActivePlanSnapshotStore()
   const notificationStreamId = randomUUID()
   let notificationSequence = 0
   const notificationReplayBuffer: BridgeNotification[] = []
   const notificationSubscribers = new Set<(value: BridgeNotification) => void>()
   const publishNotification = (notification: { method: string; params: unknown; generation?: number }) => {
+    const atIso = new Date().toISOString()
+    activePlanSnapshots.applyNotification(
+      notification.method,
+      notification.params,
+      notification.generation ?? 0,
+      atIso,
+    )
     const frame: BridgeNotification = {
       ...notification,
-      atIso: new Date().toISOString(),
+      atIso,
       streamId: notificationStreamId,
       sequence: ++notificationSequence,
     }
@@ -10453,7 +10463,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           if (res.writableEnded || res.destroyed) return
           res.write(`id: ${notification.sequence}\ndata: ${JSON.stringify(notification)}\n\n`)
         }, { streamId: cursorStreamId, sequence: cursorSequence })
-        res.write(`event: ready\ndata: ${JSON.stringify({ ok: true, ...streamState, replayAvailable })}\n\n`)
+        res.write(`event: ready\ndata: ${JSON.stringify({
+          ok: true,
+          ...streamState,
+          replayAvailable,
+          activePlans: middleware.getActivePlanSnapshots(),
+        })}\n\n`)
         const keepAlive = setInterval(() => {
           res.write(': ping\n\n')
         }, 15000)
@@ -10521,6 +10536,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     latestSequence: notificationSequence,
     oldestSequence: notificationReplayBuffer[0]?.sequence ?? notificationSequence,
   })
+  middleware.getActivePlanSnapshots = () => activePlanSnapshots.getSnapshots()
 
   return middleware
 }

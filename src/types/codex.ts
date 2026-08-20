@@ -247,10 +247,28 @@ export type UiPlanStep = {
   status: UiPlanStepStatus
 }
 
+export type UiPlanLifecycle = 'live' | 'completed' | 'failed' | 'interrupted' | 'incomplete'
+
 export type UiPlanData = {
   explanation?: string
   steps: UiPlanStep[]
   isStreaming?: boolean
+  lifecycle?: UiPlanLifecycle
+  revision?: number
+  updatedAtIso?: string
+}
+
+export type ActivePlanSnapshot = {
+  threadId: string
+  turnId: string
+  messageId: string
+  text: string
+  explanation?: string
+  steps: UiPlanStep[]
+  revision: number
+  updatedAtIso: string
+  generation: number
+  lifecycle: UiPlanLifecycle
 }
 
 export type UiMessage = {

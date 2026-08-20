@@ -296,7 +296,16 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
           if (ws.readyState !== WebSocket.OPEN) return
           ws.send(JSON.stringify(notification))
         }, { streamId: cursorStreamId, sequence: cursorSequence })
-        ws.send(JSON.stringify({ method: 'ready', params: { ok: true, ...streamState, replayAvailable }, atIso: new Date().toISOString() }))
+        ws.send(JSON.stringify({
+          method: 'ready',
+          params: {
+            ok: true,
+            ...streamState,
+            replayAvailable,
+            activePlans: bridge.getActivePlanSnapshots(),
+          },
+          atIso: new Date().toISOString(),
+        }))
 
         ws.on('pong', () => responsiveClients.add(ws))
         ws.on('close', unsubscribe)
