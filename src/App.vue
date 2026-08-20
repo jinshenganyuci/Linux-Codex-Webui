@@ -1182,6 +1182,8 @@ const {
   removeProject,
   reorderProject,
   pinProjectToTop,
+  startNotificationStream,
+  startRuntimePolling,
   startPolling,
   stopPolling,
   primeSelectedThread,
@@ -3916,6 +3918,8 @@ async function initialize(): Promise<void> {
     primeSelectedThread('', { persist: false })
   }
 
+  startNotificationStream()
+
   await refreshAll({
     includeSelectedThreadMessages: route.name === 'thread',
   })
@@ -3923,7 +3927,7 @@ async function initialize(): Promise<void> {
   await applyLaunchProjectPathFromUrl()
   hasInitialized.value = true
   await syncThreadSelectionWithRoute()
-  startPolling()
+  startRuntimePolling()
 }
 
 async function syncThreadSelectionWithRoute(): Promise<void> {

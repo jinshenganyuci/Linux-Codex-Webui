@@ -3757,6 +3757,176 @@ describe('notification recovery', () => {
     })
   })
 
+  it('restores a ready plan before pending history and hands it off without duplication', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-plan', '/tmp/project', { inProgress: true })] }],
+      nextCursor: null,
+    })
+    const pendingDetail = deferred<{
+      messages: Array<{
+        id: string
+        role: 'assistant'
+        text: string
+        messageType: 'plan'
+        turnId: string
+        plan: { explanation: string; steps: Array<{ step: string; status: 'completed' | 'inProgress' }> }
+      }>
+      inProgress: boolean
+      activeTurnId: string
+      turnIndexByTurnId: Record<string, number>
+      hasMoreOlder: boolean
+    }>()
+    gatewayMocks.getThreadDetail.mockReturnValue(pendingDetail.promise)
+
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('thread-plan')
+    const historyLoad = state.loadMessages('thread-plan')
+    state.startNotificationStream()
+    notificationHandler!({
+      method: 'ready',
+      params: {
+        replayAvailable: false,
+        streamChanged: false,
+        activePlans: [{
+          threadId: 'thread-plan',
+          turnId: 'turn-plan',
+          messageId: 'turn-plan:plan',
+          text: 'Recover now\n- [x] Inspect\n- [~] Ship',
+          explanation: 'Recover now',
+          steps: [
+            { step: 'Inspect', status: 'completed' },
+            { step: 'Ship', status: 'inProgress' },
+          ],
+          revision: 3,
+          updatedAtIso: '2026-08-20T00:00:00.000Z',
+          generation: 9,
+          lifecycle: 'live',
+        }],
+      },
+    })
+    notificationHandler!({
+      method: 'ready',
+      params: {
+        replayAvailable: false,
+        streamChanged: false,
+        activePlans: [{
+          threadId: 'thread-plan',
+          turnId: 'turn-plan',
+          messageId: 'turn-plan:plan',
+          text: 'Recover now\n- [x] Inspect\n- [~] Ship',
+          explanation: 'Recover now',
+          steps: [
+            { step: 'Inspect', status: 'completed' },
+            { step: 'Ship', status: 'inProgress' },
+          ],
+          revision: 3,
+          updatedAtIso: '2026-08-20T00:00:00.000Z',
+          generation: 9,
+          lifecycle: 'live',
+        }],
+      },
+    })
+
+    expect(state.messages.value).toHaveLength(1)
+    expect(state.messages.value[0]).toMatchObject({
+      id: 'turn-plan:plan',
+      turnId: 'turn-plan',
+      messageType: 'plan.live',
+      plan: { lifecycle: 'live', revision: 3, isStreaming: true },
+    })
+    expect(gatewayMocks.getThreadRuntimeStates).not.toHaveBeenCalled()
+
+    pendingDetail.resolve({
+      messages: [{
+        id: 'persisted-plan',
+        role: 'assistant',
+        text: 'Recover now\n- [x] Inspect\n- [x] Ship',
+        messageType: 'plan',
+        turnId: 'turn-plan',
+        plan: {
+          explanation: 'Recover now',
+          steps: [
+            { step: 'Inspect', status: 'completed' },
+            { step: 'Ship', status: 'completed' },
+          ],
+        },
+      }],
+      inProgress: false,
+      activeTurnId: '',
+      turnIndexByTurnId: { 'turn-plan': 0 },
+      hasMoreOlder: false,
+    })
+    await historyLoad
+
+    expect(state.messages.value).toHaveLength(1)
+    expect(state.messages.value[0]).toMatchObject({
+      id: 'persisted-plan',
+      turnId: 'turn-plan',
+      messageType: 'plan',
+    })
+    state.startRuntimePolling()
+    state.stopPolling()
+  })
+
+  it('keeps a failed live plan available until history or a newer turn takes over', () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-failed-plan')
+    state.startPolling()
+    notificationHandler!({
+      method: 'turn/started',
+      atIso: '2026-08-20T00:00:00.000Z',
+      params: { threadId: 'thread-failed-plan', turn: { id: 'turn-failed', status: 'inProgress' } },
+    })
+    notificationHandler!({
+      method: 'turn/plan/updated',
+      atIso: '2026-08-20T00:00:01.000Z',
+      params: {
+        threadId: 'thread-failed-plan',
+        turnId: 'turn-failed',
+        explanation: 'Try release',
+        plan: [{ step: 'Publish', status: 'inProgress' }],
+      },
+    })
+    notificationHandler!({
+      method: 'turn/completed',
+      atIso: '2026-08-20T00:00:02.000Z',
+      params: {
+        threadId: 'thread-failed-plan',
+        turn: { id: 'turn-failed', status: 'failed', error: { message: 'registry rejected' } },
+      },
+    })
+
+    const failedPlan = state.messages.value.find((message) => message.messageType === 'plan.live')
+    expect(failedPlan).toMatchObject({
+      turnId: 'turn-failed',
+      messageType: 'plan.live',
+      plan: { lifecycle: 'failed', isStreaming: false },
+    })
+
+    notificationHandler!({
+      method: 'turn/started',
+      atIso: '2026-08-20T00:00:03.000Z',
+      params: { threadId: 'thread-failed-plan', turn: { id: 'turn-next', status: 'inProgress' } },
+    })
+    expect(state.messages.value.find((message) => message.messageType === 'plan.live')?.plan?.lifecycle).toBe('failed')
+    state.stopPolling()
+  })
+
   it('skips duplicate initial-ready history and forces the selected thread when replay is unavailable', async () => {
     installTestWindow()
     let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
