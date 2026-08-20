@@ -10,13 +10,15 @@ Completed plan cards show an `Implement plan` button that turns plan mode off an
 
 #### Steps
 1. Open a thread containing a completed plan card
-2. Verify the plan card shows `Implement plan` at the bottom
-3. Click `Implement plan`
-4. Confirm the composer thread switches back to default mode
-5. Inspect the next `turn/start` request or the resulting assistant behavior
+2. Verify the completed plan card is collapsed by default, then click its header to expand it
+3. Verify the expanded plan card shows `Implement plan` at the bottom
+4. Click `Implement plan`
+5. Confirm the composer thread switches back to default mode
+6. Inspect the next `turn/start` request or the resulting assistant behavior
 
 #### Expected Results
 - Completed plan cards render the `Implement plan` action even when the plan body is structured as headings/lists instead of checkbox steps
+- Completed plan cards remain compact by default while keeping the action available after expansion
 - Clicking the button sends a simple implementation follow-up message instead of copying the whole plan body into chat
 - The next turn runs in default mode rather than plan mode
 

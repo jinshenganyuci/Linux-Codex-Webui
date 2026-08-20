@@ -36,6 +36,7 @@ Return to the [manual test index](../../tests.md).
 | [Stop button activates promptly for new threads](stop-button-activates-promptly-for-new-threads.md) |
 | [New-thread plan mode persists and toggles correctly](new-thread-plan-mode-persists-and-toggles-correctly.md) |
 | [Completed plan cards expose implement action](completed-plan-cards-expose-implement-action.md) |
+| [活动计划刷新恢复与生命周期折叠](active-plan-refresh-recovery-and-lifecycle.md) |
 | [Default mode can follow plan mode in the same thread](default-mode-can-follow-plan-mode-in-the-same-thread.md) |
 | [Queue mode is default for in-progress messages](queue-mode-is-default-for-in-progress-messages.md) |
 | [Backend-persisted queued messages and drag reorder](backend-persisted-queued-messages-and-drag-reorder.md) |
