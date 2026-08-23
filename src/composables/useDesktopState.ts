@@ -148,6 +148,7 @@ const TURN_START_FOLLOW_UP_SYNC_DELAY_MS = 3000
 const RECENT_THREAD_MESSAGE_LOAD_REUSE_MS = 2000
 const MAX_CACHED_THREAD_HISTORIES = 20
 const MAX_RECENT_PAGINATED_RECONCILIATIONS = 100
+const MAX_LIVE_PLAN_MESSAGES_PER_THREAD = 64
 const RECENT_AGENT_PROGRESS_LOAD_REUSE_MS = 30_000
 const AGENT_PROGRESS_RETRY_BASE_DELAY_MS = 5_000
 const AGENT_PROGRESS_RETRY_MAX_DELAY_MS = 60_000
@@ -3073,7 +3074,7 @@ export function useDesktopState() {
     } else {
       invalidateAgentProgressLoadForThread(threadId)
       inProgressById.value = omitKey(inProgressById.value, threadId)
-      clearCompletedTurnLiveState(threadId, { preservePlans: options.preserveLivePlans === true })
+      clearCompletedTurnLiveState(threadId, { preservePlans: options.preserveLivePlans !== false })
       clearInterruptPersistenceGate(threadId)
     }
     applyThreadFlags()
@@ -3864,10 +3865,13 @@ export function useDesktopState() {
 
   function setLivePlanMessagesForThread(threadId: string, nextMessages: UiMessage[]): void {
     const previous = livePlanMessagesByThreadId.value[threadId] ?? []
-    if (areMessageArraysEqual(previous, nextMessages)) return
+    const boundedMessages = nextMessages.length > MAX_LIVE_PLAN_MESSAGES_PER_THREAD
+      ? nextMessages.slice(-MAX_LIVE_PLAN_MESSAGES_PER_THREAD)
+      : nextMessages
+    if (areMessageArraysEqual(previous, boundedMessages)) return
     livePlanMessagesByThreadId.value = {
       ...livePlanMessagesByThreadId.value,
-      [threadId]: nextMessages,
+      [threadId]: boundedMessages,
     }
   }
 
@@ -4023,7 +4027,10 @@ export function useDesktopState() {
   function clearCompletedTurnLiveState(threadId: string, options: { preservePlans?: boolean } = {}): void {
     if (!threadId) return
     liveDeltaBuffer.discardThread(threadId)
-    if (options.preservePlans !== true) clearLivePlansForThread(threadId)
+    // update_plan notifications are not guaranteed to be persisted as thread items.
+    // Keep the terminal live card until history reconciliation confirms that a
+    // persisted plan for the same turn can take over without a visual gap.
+    if (options.preservePlans === false) clearLivePlansForThread(threadId)
     clearLiveReasoningForThread(threadId)
     setTurnActivityForThread(threadId, null)
     if (threadId === selectedThreadId.value) {

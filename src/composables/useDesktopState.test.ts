@@ -3927,6 +3927,116 @@ describe('notification recovery', () => {
     state.stopPolling()
   })
 
+  it('keeps the completed plan card when the follow-up history omits update_plan items', async () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: '',
+      modelProvider: '',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-completed-plan')
+    state.startPolling()
+    notificationHandler!({
+      method: 'turn/started',
+      atIso: '2026-08-24T00:00:00.000Z',
+      params: { threadId: 'thread-completed-plan', turn: { id: 'turn-plan', status: 'inProgress' } },
+    })
+    notificationHandler!({
+      method: 'turn/plan/updated',
+      atIso: '2026-08-24T00:00:01.000Z',
+      params: {
+        threadId: 'thread-completed-plan',
+        turnId: 'turn-plan',
+        explanation: 'Observe completion',
+        plan: [
+          { step: 'Create card', status: 'completed' },
+          { step: 'Keep summary', status: 'inProgress' },
+        ],
+      },
+    })
+    notificationHandler!({
+      method: 'turn/completed',
+      atIso: '2026-08-24T00:00:02.000Z',
+      params: {
+        threadId: 'thread-completed-plan',
+        turn: { id: 'turn-plan', status: 'completed' },
+      },
+    })
+
+    expect(state.messages.value.find((message) => message.messageType === 'plan.live')).toEqual(
+      expect.objectContaining({
+        turnId: 'turn-plan',
+        messageType: 'plan.live',
+        plan: expect.objectContaining({ lifecycle: 'completed', isStreaming: false }),
+      }),
+    )
+
+    await state.loadMessages('thread-completed-plan', { force: true })
+
+    expect(state.messages.value.find((message) => message.messageType === 'plan.live')).toEqual(
+      expect.objectContaining({
+        turnId: 'turn-plan',
+        messageType: 'plan.live',
+        plan: expect.objectContaining({ lifecycle: 'completed', isStreaming: false }),
+      }),
+    )
+    state.stopPolling()
+  })
+
+  it('bounds terminal live plans retained for one thread', () => {
+    installTestWindow()
+    let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler as typeof notificationHandler
+      return vi.fn()
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-many-plans')
+    state.startPolling()
+    for (let index = 0; index < 65; index += 1) {
+      const turnId = `turn-${index}`
+      notificationHandler!({
+        method: 'turn/started',
+        atIso: `2026-08-24T00:00:${String(index % 60).padStart(2, '0')}.000Z`,
+        params: { threadId: 'thread-many-plans', turn: { id: turnId, status: 'inProgress' } },
+      })
+      notificationHandler!({
+        method: 'turn/plan/updated',
+        atIso: `2026-08-24T00:01:${String(index % 60).padStart(2, '0')}.000Z`,
+        params: {
+          threadId: 'thread-many-plans',
+          turnId,
+          plan: [{ step: `Plan ${index}`, status: 'completed' }],
+        },
+      })
+      notificationHandler!({
+        method: 'turn/completed',
+        atIso: `2026-08-24T00:02:${String(index % 60).padStart(2, '0')}.000Z`,
+        params: { threadId: 'thread-many-plans', turn: { id: turnId, status: 'completed' } },
+      })
+    }
+
+    const retainedPlans = state.messages.value.filter((message) => message.messageType === 'plan.live')
+    expect(retainedPlans).toHaveLength(64)
+    expect(retainedPlans[0]?.turnId).toBe('turn-1')
+    expect(retainedPlans.at(-1)?.turnId).toBe('turn-64')
+    state.stopPolling()
+  })
+
   it('skips duplicate initial-ready history and forces the selected thread when replay is unavailable', async () => {
     installTestWindow()
     let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
