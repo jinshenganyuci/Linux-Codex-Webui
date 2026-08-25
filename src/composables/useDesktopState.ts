@@ -6825,6 +6825,7 @@ export function useDesktopState() {
     imageUrls: string[] = [],
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
+    collaborationModeOverride?: CollaborationModeKind,
   ): Promise<string> {
     if (isUpdatingSpeedMode.value) return ''
 
@@ -6832,7 +6833,11 @@ export function useDesktopState() {
     const targetCwd = cwd.trim()
     const selectedModel = readModelIdForThread(NEW_THREAD_COLLABORATION_MODE_CONTEXT).trim()
     let selectedEffort = selectedReasoningEffort.value
-    const selectedMode = selectedCollaborationMode.value
+    const selectedMode = collaborationModeOverride === 'plan'
+      ? 'plan'
+      : collaborationModeOverride === 'default'
+        ? 'default'
+        : selectedCollaborationMode.value
     const speedMode = selectedSpeedMode.value
     if (!nextText && imageUrls.length === 0 && fileAttachments.length === 0) return ''
 

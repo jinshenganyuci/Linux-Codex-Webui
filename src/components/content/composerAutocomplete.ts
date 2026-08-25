@@ -13,6 +13,10 @@ export type ComposerSlashCommand = {
   supportsInlineArgs?: boolean
 }
 
+export type ComposerPlanCommand = {
+  prompt: string
+}
+
 export type ComposerSkillCandidate = {
   name: string
   displayName?: string
@@ -140,6 +144,17 @@ export function filterComposerSlashCommands(query: string): ComposerSlashCommand
     command.name.includes(normalizedQuery)
     || command.description.toLowerCase().includes(normalizedQuery)
   ))
+}
+
+/**
+ * Parses the one slash command that the WebUI executes locally today.
+ * `/plan` mirrors the native Codex mode toggle while `/plan <prompt>` is a
+ * WebUI convenience that enables Plan mode and submits the remaining prompt.
+ */
+export function parseComposerPlanCommand(text: string): ComposerPlanCommand | null {
+  const match = text.match(/^[\t ]*\/plan(?:\s+([\s\S]*))?[\t ]*$/u)
+  if (!match) return null
+  return { prompt: (match[1] ?? '').trim() }
 }
 
 export function filterComposerSkills<T extends ComposerSkillCandidate>(

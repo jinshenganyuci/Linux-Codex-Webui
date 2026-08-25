@@ -1052,7 +1052,7 @@ import {
   switchAccount,
 } from './api/codexGateway'
 import { REASONING_EFFORT_VALUES, type CodexPermissionMode, type ReasoningEffort, type SpeedMode, type UiAccountEntry, type UiRateLimitWindow, type UiServerRequest, type UiServerRequestReply, type UiThreadAutomation } from './types/codex'
-import type { ComposerDraftPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
+import type { ComposerDraftPayload, SubmitPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
 import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, TelegramStatus, ThreadTerminalQuickCommand, WorktreeBranchOption } from './api/codexGateway'
 import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
 import { copyTextToClipboard } from './utils/clipboard'
@@ -3028,8 +3028,11 @@ async function syncAfterMobileResume(): Promise<void> {
   }
 }
 
-function onSubmitThreadMessage(payload: { text: string; imageUrls: string[]; fileAttachments: Array<{ label: string; path: string; fsPath: string }>; skills: Array<{ name: string; path: string }>; mode: 'steer' | 'queue' }): void {
+function onSubmitThreadMessage(payload: SubmitPayload): void {
   const text = payload.text
+  if (payload.persistCollaborationMode && payload.collaborationModeOverride) {
+    setSelectedCollaborationMode(payload.collaborationModeOverride)
+  }
   scheduleMobileConversationJumpToLatest()
   const editingState = editingQueuedMessageState.value
   const queueInsertIndex =
@@ -3040,10 +3043,24 @@ function onSubmitThreadMessage(payload: { text: string; imageUrls: string[]; fil
       : undefined
   editingQueuedMessageState.value = null
   if (isHomeRoute.value) {
-    void submitFirstMessageForNewThread(text, payload.imageUrls, payload.skills, payload.fileAttachments)
+    void submitFirstMessageForNewThread(
+      text,
+      payload.imageUrls,
+      payload.skills,
+      payload.fileAttachments,
+      payload.collaborationModeOverride,
+    )
     return
   }
-  void sendMessageToSelectedThread(text, payload.imageUrls, payload.skills, payload.mode, payload.fileAttachments, queueInsertIndex)
+  void sendMessageToSelectedThread(
+    text,
+    payload.imageUrls,
+    payload.skills,
+    payload.mode,
+    payload.fileAttachments,
+    queueInsertIndex,
+    payload.collaborationModeOverride,
+  )
 }
 
 function onEditQueuedMessage(messageId: string): void {
@@ -4160,6 +4177,7 @@ async function submitFirstMessageForNewThread(
   imageUrls: string[] = [],
   skills: Array<{ name: string; path: string }> = [],
   fileAttachments: Array<{ label: string; path: string; fsPath: string }> = [],
+  collaborationModeOverride?: 'default' | 'plan',
 ): Promise<void> {
   let didStartThreadRequest = false
   beginPendingNewThreadPreview(text, imageUrls, skills, fileAttachments)
@@ -4192,7 +4210,14 @@ async function submitFirstMessageForNewThread(
       newThreadCwd.value = directory.cwd
     }
     didStartThreadRequest = true
-    const threadId = await sendMessageToNewThread(text, targetCwd, imageUrls, skills, fileAttachments)
+    const threadId = await sendMessageToNewThread(
+      text,
+      targetCwd,
+      imageUrls,
+      skills,
+      fileAttachments,
+      collaborationModeOverride,
+    )
     if (!threadId) return
     await router.replace({ name: 'thread', params: { threadId } })
     clearPendingNewThreadPreview()

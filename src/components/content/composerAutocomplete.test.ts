@@ -5,6 +5,7 @@ import {
   filterComposerSkills,
   filterComposerSlashCommands,
   findComposerAutocompleteMatch,
+  parseComposerPlanCommand,
   replaceComposerAutocompleteMatch,
 } from './composerAutocomplete'
 
@@ -63,6 +64,15 @@ describe('composerAutocomplete', () => {
     const goal = COMPOSER_SLASH_COMMANDS.find((command) => command.name === 'goal')
     expect(buildSlashCommandInsertion(model!)).toBe('/model')
     expect(buildSlashCommandInsertion(goal!)).toBe('/goal ')
+  })
+
+  it('parses native and inline Plan commands without matching ordinary text', () => {
+    expect(parseComposerPlanCommand('/plan')).toEqual({ prompt: '' })
+    expect(parseComposerPlanCommand('  /plan   ')).toEqual({ prompt: '' })
+    expect(parseComposerPlanCommand('/plan design a dashboard')).toEqual({ prompt: 'design a dashboard' })
+    expect(parseComposerPlanCommand('/plan\nask before planning')).toEqual({ prompt: 'ask before planning' })
+    expect(parseComposerPlanCommand('/planet')).toBeNull()
+    expect(parseComposerPlanCommand('explain /plan')).toBeNull()
   })
 
   it('ranks and caps skill matches without changing the source list', () => {

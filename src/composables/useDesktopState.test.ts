@@ -1017,6 +1017,30 @@ describe('immediate sent-message rendering', () => {
     expect(state.pendingNewThreadLiveOverlay.value).toBeNull()
   })
 
+  it('uses an explicit Plan override atomically for a new thread', async () => {
+    installTestWindow()
+    gatewayMocks.startThreadWithTurn.mockResolvedValue({
+      threadId: 'planned-thread',
+      model: 'gpt-5.6-terra',
+      modelProvider: 'openai',
+      turnId: 'planned-turn',
+    })
+
+    const state = useDesktopState()
+    await state.sendMessageToNewThread(
+      'design the feature',
+      '/tmp/project',
+      [],
+      [],
+      [],
+      'plan',
+    )
+
+    expect(gatewayMocks.startThreadWithTurn.mock.calls[0]?.[7]).toBe('plan')
+    expect(state.selectedThreadId.value).toBe('planned-thread')
+    expect(state.selectedCollaborationMode.value).toBe('plan')
+  })
+
   it('keeps the new-thread message visible with an error when creation fails', async () => {
     installTestWindow()
     gatewayMocks.startThreadWithTurn.mockRejectedValue(new Error('Thread creation failed'))

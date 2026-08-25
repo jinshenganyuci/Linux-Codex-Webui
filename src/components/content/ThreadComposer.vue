@@ -288,7 +288,7 @@
             >
               <span class="thread-composer-attach-setting-copy">
                 <span class="thread-composer-attach-setting-label">{{ t('Plan mode') }}</span>
-                <span class="thread-composer-attach-setting-description">{{ t('Agent proposes a plan before acting') }}</span>
+                <span class="thread-composer-attach-setting-description">{{ t('Asks with a form when clarification is needed') }}</span>
               </span>
               <span
                 class="thread-composer-attach-switch"
@@ -361,6 +361,18 @@
           @update:selected-model="onModelSelect"
           @update:selected-reasoning-effort="onReasoningEffortSelect"
         />
+
+        <button
+          v-if="!isDictationRecording && isPlanModeSelected"
+          class="thread-composer-plan-mode-indicator"
+          type="button"
+          :aria-label="t('Disable plan mode')"
+          :title="t('Disable plan mode')"
+          @click="toggleCollaborationMode"
+        >
+          <span class="thread-composer-plan-mode-indicator-dot" aria-hidden="true" />
+          {{ t('Plan mode') }}
+        </button>
 
         <div
           class="thread-composer-actions"
@@ -712,6 +724,7 @@ import {
   filterComposerSkills,
   filterComposerSlashCommands,
   findComposerAutocompleteMatch,
+  parseComposerPlanCommand,
   replaceComposerAutocompleteMatch,
   type ComposerAutocompleteMatch,
   type ComposerSlashCommand,
@@ -782,6 +795,8 @@ export type SubmitPayload = {
   fileAttachments: FileAttachment[]
   skills: Array<{ name: string; path: string }>
   mode: 'steer' | 'queue'
+  collaborationModeOverride?: CollaborationModeKind
+  persistCollaborationMode?: boolean
 }
 
 export type ThreadComposerExposed = {
@@ -1377,12 +1392,32 @@ function buildContextUsageView(
 function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
   const text = draft.value.trim()
   if (!canSubmit.value) return
+  const planCommand = parseComposerPlanCommand(text)
+  if (planCommand && planCommand.prompt.length === 0) {
+    emit('update:selected-collaboration-mode', isPlanModeSelected.value ? 'default' : 'plan')
+    draft.value = ''
+    persistDraftForThread(props.activeThreadId, getCurrentDraftPayload())
+    isAttachMenuOpen.value = false
+    closeComposerAutocomplete()
+    closeFileMention()
+    queueComposerOverflowMeasurement()
+    void nextTick(() => inputRef.value?.focus())
+    return
+  }
+
+  const submitText = planCommand?.prompt ?? text
   emit('submit', {
-    text,
+    text: submitText,
     imageUrls: selectedImages.value.map((image) => image.url),
     fileAttachments: [...fileAttachments.value],
     skills: selectedSkills.value.map((s) => ({ name: s.name, path: s.path })),
-    mode,
+    mode: planCommand && props.isTurnInProgress ? 'queue' : mode,
+    ...(planCommand
+      ? {
+          collaborationModeOverride: 'plan' as const,
+          persistCollaborationMode: true,
+        }
+      : {}),
   })
   clearPersistedDraftForThread(props.activeThreadId)
   clearDraftState()
@@ -3011,6 +3046,14 @@ watch(
   @apply ml-auto w-[6.5rem] shrink-0 sm:w-[clamp(7.5rem,18vw,10rem)];
 }
 
+.thread-composer-plan-mode-indicator {
+  @apply inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2 text-xs font-semibold text-sky-800 transition hover:border-sky-300 hover:bg-sky-100;
+}
+
+.thread-composer-plan-mode-indicator-dot {
+  @apply h-1.5 w-1.5 rounded-full bg-sky-500;
+}
+
 .thread-composer-control :deep(.composer-dropdown-value) {
   @apply truncate;
 }
@@ -3355,6 +3398,10 @@ watch(
 
   .thread-composer-model-reasoning-control {
     @apply hidden;
+  }
+
+  .thread-composer-plan-mode-indicator {
+    @apply h-9 px-2;
   }
 
   .thread-composer-actions {

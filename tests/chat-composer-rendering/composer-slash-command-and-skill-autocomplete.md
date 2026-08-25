@@ -18,6 +18,11 @@
 8. Confirm the `$` token is removed, the selected Skill appears as a composer chip, and the input keeps keyboard focus.
 9. Add a short prompt and send it. Confirm the sent user message retains the selected Skill metadata/chip.
 10. Repeat the slash and Skill flows using mouse/touch selection in light and dark themes at desktop, `375x812`, and `768x1024` sizes.
+11. In an idle existing thread, select `/plan`, submit it without additional text, and confirm no user message or network turn is created; the persistent `Plan mode` indicator appears beside the model control.
+12. Submit `/plan design a settings page` and inspect `turn/start`: confirm the visible user message is only `design a settings page` and the request carries `collaborationMode.mode = plan` exactly once.
+13. While a turn is running in Steer mode, submit `/plan prepare the next migration`; confirm the stripped prompt is queued for the next turn with Plan mode instead of steering the active Default turn.
+14. Run the same inline `/plan <prompt>` flow from the new-chat composer and confirm the created thread opens with the Plan mode indicator still visible.
+15. Click the persistent Plan mode indicator and confirm it disables Plan mode without sending a message.
 
 #### Expected Results
 
@@ -25,6 +30,9 @@
 - `$` opens a filtered list from the already-loaded composer Skill data without an additional network request.
 - Arrow keys wrap through results; Enter/Tab selects; Escape closes; pointer selection works without losing the draft.
 - Slash selection inserts only the active slash token. Commands that accept inline arguments leave the caret after a trailing space.
+- Exact `/plan` mirrors native Codex: it is consumed locally, toggles the current chat mode, and never becomes a user message.
+- `/plan <prompt>` is a WebUI convenience: it strips the command, persists Plan mode for the chat, and sends exactly one Plan-mode turn; active turns queue this request for the next turn.
+- The Plan mode indicator remains visible without reopening the attachment menu and stays readable in light and dark themes and all required viewports.
 - Skill selection attaches exactly one Skill even if the same Skill is selected again, and preserves all text outside the active `$` token.
 - Menus stay inside each tested viewport and remain readable in light and dark themes.
 

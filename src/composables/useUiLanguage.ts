@@ -145,6 +145,7 @@ const zhCN: Record<string, string> = {
   'Fast mode': '快速模式',
   'Plan mode': '规划模式',
   'Agent proposes a plan before acting': '代理在执行前先提出计划',
+  'Asks with a form when clarification is needed': '需要澄清时会用表单提问',
   'Codex permissions': 'Codex 权限',
   'Request approval': '请求批准',
   'Ask before commands or file changes': '执行命令或改文件前先询问',

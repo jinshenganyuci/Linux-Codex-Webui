@@ -516,6 +516,14 @@
   @apply bg-emerald-500;
 }
 
+:root.dark .thread-composer-plan-mode-indicator {
+  @apply border-sky-700/70 bg-sky-950/70 text-sky-200 hover:border-sky-600 hover:bg-sky-900/80;
+}
+
+:root.dark .thread-composer-plan-mode-indicator-dot {
+  @apply bg-sky-400;
+}
+
 :root.dark .thread-composer-file-mentions {
   @apply border-zinc-600 bg-zinc-800;
 }
