@@ -80,6 +80,8 @@ import type {
   UiReviewWorkspaceView,
   UiRateLimitSnapshot,
   UiRateLimitWindow,
+  UiRequestUserInputHistoryState,
+  UiRequestUserInputSummary,
   UiThreadAutomation,
   UiThreadAutomationStatus,
   UiAgentProgressEvent,
@@ -93,6 +95,10 @@ import type {
   ThreadTurnItemsPage,
 } from '../types/codex'
 import { normalizePathForUi } from '../pathUtils.js'
+import {
+  normalizeRequestUserInputHistoryState,
+  normalizeRequestUserInputSummary,
+} from '../requestUserInputHistory.js'
 
 export type {
   ThreadHistoryDetail,
@@ -2315,6 +2321,7 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
   } catch (error) {
     throw normalizeCodexApiError(error, `Failed to permanently delete thread ${threadId}`, 'thread/delete')
   }
+  await deleteRequestUserInputHistory(threadId).catch(() => {})
 }
 
 export async function renameThread(threadId: string, threadName: string): Promise<void> {
@@ -3068,6 +3075,45 @@ export async function persistThreadModelPreference(
   const saved = normalizeThreadModelPreference(asRecord(payload)?.data)
   if (!saved) throw new Error('Thread model preference response was invalid')
   return saved
+}
+
+export async function getRequestUserInputHistory(threadId: string): Promise<UiRequestUserInputSummary[]> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return []
+  const response = await fetchWithTimeout(`/codex-api/request-user-input-history?threadId=${encodeURIComponent(normalizedThreadId)}`)
+  const payload = await response.json().catch(() => null) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to load planning question history (${response.status})`))
+  }
+  const state: UiRequestUserInputHistoryState = normalizeRequestUserInputHistoryState(asRecord(payload)?.data)
+  return state[normalizedThreadId] ?? []
+}
+
+export async function persistRequestUserInputSummary(
+  summary: UiRequestUserInputSummary,
+): Promise<UiRequestUserInputSummary> {
+  const response = await fetchWithTimeout('/codex-api/request-user-input-history', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(summary),
+  })
+  const payload = await response.json().catch(() => null) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to save planning question history (${response.status})`))
+  }
+  const saved = normalizeRequestUserInputSummary(asRecord(payload)?.data)
+  if (!saved) throw new Error('Planning question history response was invalid')
+  return saved
+}
+
+async function deleteRequestUserInputHistory(threadId: string): Promise<void> {
+  const response = await fetchWithTimeout(`/codex-api/request-user-input-history?threadId=${encodeURIComponent(threadId)}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as unknown
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to delete planning question history (${response.status})`))
+  }
 }
 
 function normalizeDirectoryPluginApp(value: unknown): DirectoryPluginAppSummary | null {

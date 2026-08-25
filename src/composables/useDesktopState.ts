@@ -22,6 +22,7 @@ import {
   getThreadTurnItemsPage,
   getThreadRuntimeStates,
   getThreadModelPreferences,
+  getRequestUserInputHistory,
   getBackgroundThreadListLimit,
   interruptThreadTurn,
   pickCodexRateLimitSnapshot,
@@ -39,6 +40,7 @@ import {
   getThreadTitleCache,
   persistThreadTitle,
   persistThreadModelPreference,
+  persistRequestUserInputSummary,
   patchNewChatDefaults,
   generateThreadTitle,
   resumeThread,
@@ -79,6 +81,7 @@ import type {
   UiPlanStep,
   UiProjectGroup,
   UiRateLimitSnapshot,
+  UiRequestUserInputSummary,
   UiServerRequest,
   UiServerRequestReply,
   UiThreadTokenUsage,
@@ -87,6 +90,11 @@ import type {
   UiTurnProgress,
   ThreadHistoryMode,
 } from '../types/codex'
+import {
+  buildRequestUserInputSummary,
+  mergeRequestUserInputSummaryMessages,
+  upsertRequestUserInputSummary,
+} from '../requestUserInputHistory'
 import { getPathParent, isProjectlessChatPath, normalizePathForUi, toProjectName } from '../pathUtils.js'
 import {
   collectThreadRuntimeStateIds,
@@ -1592,6 +1600,7 @@ export function useDesktopState() {
   const liveReasoningTextByThreadId = ref<Record<string, string>>({})
   const liveCommandsByThreadId = ref<Record<string, UiMessage[]>>({})
   const liveFileChangeMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
+  const requestUserInputSummariesByThreadId = ref<Record<string, UiRequestUserInputSummary[]>>({})
   const agentProgressByThreadId = ref<Record<string, UiTurnProgress>>({})
   const notificationConnectionState = ref<UiNotificationConnectionState>('connecting')
   const inProgressById = ref<Record<string, boolean>>({})
@@ -1804,6 +1813,9 @@ export function useDesktopState() {
   const runtimeDefaultModelId = ref('')
   const runtimeDefaultReasoningEffort = ref<ReasoningEffort | ''>('')
   const threadModelPreferenceWriteChainById = new Map<string, Promise<void>>()
+  const requestUserInputHistoryLoadByThreadId = new Map<string, Promise<void>>()
+  const loadedRequestUserInputHistoryThreadIds = new Set<string>()
+  const respondingServerRequestKeys = new Set<string>()
 
 
   const allThreads = computed(() => flattenThreads(projectGroups.value))
@@ -1915,6 +1927,75 @@ export function useDesktopState() {
     if (!threadId) return null
     return threadTokenUsageByThreadId.value[threadId] ?? null
   })
+
+  function serverRequestKey(requestId: number, generation: number): string {
+    return `${generation}:${requestId}`
+  }
+
+  function setRequestUserInputSummariesForThread(
+    threadId: string,
+    summaries: UiRequestUserInputSummary[],
+  ): void {
+    requestUserInputSummariesByThreadId.value = summaries.length > 0
+      ? { ...requestUserInputSummariesByThreadId.value, [threadId]: summaries }
+      : omitKey(requestUserInputSummariesByThreadId.value, threadId)
+  }
+
+  function upsertRequestUserInputSummaryForThread(summary: UiRequestUserInputSummary): void {
+    const current = requestUserInputSummariesByThreadId.value[summary.threadId] ?? []
+    setRequestUserInputSummariesForThread(
+      summary.threadId,
+      upsertRequestUserInputSummary(current, summary),
+    )
+    loadedRequestUserInputHistoryThreadIds.add(summary.threadId)
+  }
+
+  async function loadRequestUserInputHistoryForThread(
+    threadId: string,
+    options: { force?: boolean } = {},
+  ): Promise<void> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return
+    if (options.force !== true && loadedRequestUserInputHistoryThreadIds.has(normalizedThreadId)) return
+    const existing = requestUserInputHistoryLoadByThreadId.get(normalizedThreadId)
+    if (existing) return await existing
+
+    const load = getRequestUserInputHistory(normalizedThreadId)
+      .then((summaries) => {
+        setRequestUserInputSummariesForThread(normalizedThreadId, summaries)
+        loadedRequestUserInputHistoryThreadIds.add(normalizedThreadId)
+      })
+      .catch(() => {
+        // Question history is supplementary; the Codex thread remains usable when it is unavailable.
+      })
+      .finally(() => {
+        if (requestUserInputHistoryLoadByThreadId.get(normalizedThreadId) === load) {
+          requestUserInputHistoryLoadByThreadId.delete(normalizedThreadId)
+        }
+      })
+    requestUserInputHistoryLoadByThreadId.set(normalizedThreadId, load)
+    await load
+  }
+
+  async function recordRequestUserInputSummary(
+    request: UiServerRequest,
+    status: 'answered' | 'unanswered',
+    result?: unknown,
+  ): Promise<void> {
+    const summary = buildRequestUserInputSummary(request, status, result)
+    if (!summary) return
+    upsertRequestUserInputSummaryForThread(summary)
+    if (status === 'answered') return
+    try {
+      const saved = await persistRequestUserInputSummary(summary)
+      upsertRequestUserInputSummaryForThread(saved)
+    } catch (unknownError) {
+      error.value = unknownError instanceof Error
+        ? unknownError.message
+        : 'Planning question history could not be saved'
+    }
+  }
+
   const messages = computed<UiMessage[]>(() => {
     const threadId = selectedThreadId.value
     if (!threadId) return []
@@ -1934,7 +2015,11 @@ export function useDesktopState() {
     const liveAgent = liveAgentMessagesByThreadId.value[threadId] ?? []
     const liveCommands = liveCommandsByThreadId.value[threadId] ?? []
     const liveFileChanges = liveFileChangeMessagesByThreadId.value[threadId] ?? []
-    const combined = [...visiblePersisted, ...livePlan, ...liveCommands, ...liveFileChanges, ...liveAgent]
+    const withQuestionHistory = mergeRequestUserInputSummaryMessages(
+      visiblePersisted,
+      requestUserInputSummariesByThreadId.value[threadId] ?? [],
+    )
+    const combined = [...withQuestionHistory, ...livePlan, ...liveCommands, ...liveFileChanges, ...liveAgent]
 
     const summary = turnSummaryByThreadId.value[threadId]
     if (!summary) return combined
@@ -2984,6 +3069,13 @@ export function useDesktopState() {
     resumedThreadById.value = pruneThreadStateMap(resumedThreadById.value, activeThreadIds)
     turnIndexByTurnIdByThreadId.value = pruneThreadStateMap(turnIndexByTurnIdByThreadId.value, activeThreadIds)
     persistedMessagesByThreadId.value = pruneThreadStateMap(persistedMessagesByThreadId.value, activeThreadIds)
+    requestUserInputSummariesByThreadId.value = pruneThreadStateMap(
+      requestUserInputSummariesByThreadId.value,
+      activeThreadIds,
+    )
+    for (const threadId of loadedRequestUserInputHistoryThreadIds) {
+      if (!activeThreadIds.has(threadId)) loadedRequestUserInputHistoryThreadIds.delete(threadId)
+    }
     liveAgentMessagesByThreadId.value = pruneThreadStateMap(liveAgentMessagesByThreadId.value, activeThreadIds)
     liveReasoningTextByThreadId.value = pruneThreadStateMap(liveReasoningTextByThreadId.value, activeThreadIds)
     liveCommandsByThreadId.value = pruneThreadStateMap(liveCommandsByThreadId.value, activeThreadIds)
@@ -4600,16 +4692,22 @@ export function useDesktopState() {
     applyThreadFlags()
   }
 
-  function removePendingServerRequestById(requestId: number, generation?: number): void {
+  function removePendingServerRequestById(requestId: number, generation?: number): UiServerRequest[] {
     const next: Record<string, UiServerRequest[]> = {}
+    const removed: UiServerRequest[] = []
     for (const [threadId, requests] of Object.entries(pendingServerRequestsByThreadId.value)) {
-      const filtered = requests.filter((request) => request.id !== requestId || (generation !== undefined && request.generation !== generation))
+      const filtered = requests.filter((request) => {
+        const matches = request.id === requestId && (generation === undefined || request.generation === generation)
+        if (matches) removed.push(request)
+        return !matches
+      })
       if (filtered.length > 0) {
         next[threadId] = filtered
       }
     }
     pendingServerRequestsByThreadId.value = next
     applyThreadFlags()
+    return removed
   }
 
   function replacePendingServerRequests(requests: UiServerRequest[]): void {
@@ -4640,7 +4738,16 @@ export function useDesktopState() {
       const row = asRecord(notification.params)
       const id = row?.id
       if (typeof id === 'number' && Number.isInteger(id)) {
-        removePendingServerRequestById(id, typeof row?.generation === 'number' ? row.generation : undefined)
+        const generation = typeof row?.generation === 'number' ? row.generation : undefined
+        const removed = removePendingServerRequestById(id, generation)
+        for (const request of removed) {
+          if (
+            request.method === 'item/tool/requestUserInput'
+            && !respondingServerRequestKeys.has(serverRequestKey(request.id, request.generation))
+          ) {
+            void loadRequestUserInputHistoryForThread(request.threadId, { force: true })
+          }
+        }
       }
       return true
     }
@@ -4653,7 +4760,12 @@ export function useDesktopState() {
       const requestIds = Array.isArray(row?.requestIds) ? row.requestIds : []
       for (const requestId of requestIds) {
         if (typeof requestId === 'number' && Number.isInteger(requestId)) {
-          removePendingServerRequestById(requestId, generation)
+          const removed = removePendingServerRequestById(requestId, generation)
+          for (const request of removed) {
+            if (request.method === 'item/tool/requestUserInput') {
+              void recordRequestUserInputSummary(request, 'unanswered')
+            }
+          }
         }
       }
       return true
@@ -5967,6 +6079,7 @@ export function useDesktopState() {
     const loadGeneration = messageLoadGeneration
     const loadPromise = (async () => {
       try {
+      void loadRequestUserInputHistoryForThread(threadId)
       const historyMode = await resolveThreadHistoryMode(threadId)
       if (loadGeneration !== messageLoadGeneration) return
       invalidateThreadHistoryCache(threadId, historyMode)
@@ -8061,19 +8174,35 @@ export function useDesktopState() {
   }
 
   async function respondToPendingServerRequest(reply: UiServerRequestReply): Promise<boolean> {
+    let request: UiServerRequest | undefined
+    let requestKey = ''
     try {
       const generation = reply.generation ?? selectedThreadServerRequests.value
         .find((request) => request.id === reply.id)?.generation
       if (generation === undefined) throw new Error('Server request generation is unavailable')
+      request = Object.values(pendingServerRequestsByThreadId.value)
+        .flat()
+        .find((candidate) => candidate.id === reply.id && candidate.generation === generation)
+      requestKey = serverRequestKey(reply.id, generation)
+      respondingServerRequestKeys.add(requestKey)
       await replyToServerRequest(reply.id, generation, {
         result: reply.result,
         error: reply.error,
       })
       removePendingServerRequestById(reply.id, generation)
+      if (request?.method === 'item/tool/requestUserInput') {
+        await recordRequestUserInputSummary(
+          request,
+          reply.error ? 'unanswered' : 'answered',
+          reply.result,
+        )
+      }
       return true
     } catch (unknownError) {
       error.value = unknownError instanceof Error ? unknownError.message : 'Failed to reply to server request'
       return false
+    } finally {
+      if (requestKey) respondingServerRequestKeys.delete(requestKey)
     }
   }
 
@@ -8135,6 +8264,10 @@ export function useDesktopState() {
     activeReasoningItemIdByThreadId.clear()
     shouldAutoScrollOnNextAgentEvent = false
     persistedMessagesByThreadId.value = {}
+    requestUserInputSummariesByThreadId.value = {}
+    loadedRequestUserInputHistoryThreadIds.clear()
+    requestUserInputHistoryLoadByThreadId.clear()
+    respondingServerRequestKeys.clear()
     loadedMessagesByThreadId.value = {}
     loadedVersionByThreadId.value = {}
     threadHistoryStateById.value = {}

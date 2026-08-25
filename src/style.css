@@ -3273,3 +3273,46 @@ html.dark .queued-row-sending {
   background: rgba(39, 39, 42, 0.78);
   color: rgb(161, 161, 170);
 }
+
+html.dark .request-user-input-summary {
+  border-color: rgb(99 102 241 / 46%);
+  background: rgb(49 46 129 / 22%);
+  color: rgb(226 232 240);
+}
+
+html.dark .request-user-input-summary[data-status='unanswered'] {
+  border-color: rgb(245 158 11 / 42%);
+  background: rgb(120 53 15 / 20%);
+}
+
+html.dark .request-user-input-summary-title,
+html.dark .request-user-input-summary-question-title {
+  color: rgb(238 242 255);
+}
+
+html.dark .request-user-input-summary-count,
+html.dark .request-user-input-summary-chevron,
+html.dark .request-user-input-summary-question-text {
+  color: rgb(148 163 184);
+}
+
+html.dark .request-user-input-summary-body {
+  border-color: rgb(99 102 241 / 32%);
+}
+
+html.dark .request-user-input-summary[data-status='unanswered'] .request-user-input-summary-body {
+  border-color: rgb(245 158 11 / 30%);
+}
+
+html.dark .request-user-input-summary-question {
+  border-color: rgb(148 163 184 / 18%);
+  background: rgb(15 23 42 / 46%);
+}
+
+html.dark .request-user-input-summary-answer {
+  color: rgb(226 232 240);
+}
+
+html.dark .request-user-input-summary-answer-label {
+  color: rgb(165 180 252);
+}

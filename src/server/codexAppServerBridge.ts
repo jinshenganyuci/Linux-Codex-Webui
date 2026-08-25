@@ -49,6 +49,12 @@ import {
   type ThreadModelPreference,
 } from './threadModelPreferences.js'
 import {
+  deleteRequestUserInputHistory,
+  readRequestUserInputHistory,
+  writeRequestUserInputSummary,
+} from './requestUserInputHistory.js'
+import { buildRequestUserInputSummary } from '../requestUserInputHistory.js'
+import {
   normalizeSidebarPreferencesPatch,
   patchSidebarPreferences,
   readSidebarPreferences,
@@ -71,7 +77,7 @@ import {
   resolveCodexCommand,
   resolveRipgrepCommand,
 } from '../commandResolution.js'
-import type { ActivePlanSnapshot, CollaborationModeKind, ReasoningEffort } from '../types/codex.js'
+import type { ActivePlanSnapshot, CollaborationModeKind, ReasoningEffort, UiServerRequest } from '../types/codex.js'
 import { isAbsoluteLikePath } from '../pathUtils.js'
 
 type JsonRpcCall = {
@@ -7363,7 +7369,7 @@ export class AppServerProcess {
     }, generation)
   }
 
-  private resolvePendingServerRequest(generation: number, requestId: number, reply: ServerRequestReply): void {
+  private async resolvePendingServerRequest(generation: number, requestId: number, reply: ServerRequestReply): Promise<void> {
     const pendingRequest = this.pendingServerRequests.get(requestId)
     if (!pendingRequest || pendingRequest.generation !== generation) {
       throw new Error(`No pending server request found for id ${String(requestId)}`)
@@ -7372,10 +7378,42 @@ export class AppServerProcess {
 
     this.sendServerRequestReply(generation, requestId, reply)
     const requestParams = asRecord(pendingRequest.params)
-    const threadId =
-      typeof requestParams?.threadId === 'string' && requestParams.threadId.length > 0
-        ? requestParams.threadId
-        : ''
+    const threadId = readNonEmptyString(
+      requestParams?.threadId
+      ?? requestParams?.thread_id
+      ?? requestParams?.conversationId
+      ?? requestParams?.conversation_id,
+    )
+    const hasToolQuestions = Array.isArray(requestParams?.questions)
+    const normalizedMethod = (
+      pendingRequest.method === 'item/tool/requestUserInput'
+      || pendingRequest.method === 'request_user_input'
+      || hasToolQuestions
+    )
+      ? 'item/tool/requestUserInput'
+      : pendingRequest.method
+    const request: UiServerRequest = {
+      id: pendingRequest.id,
+      generation: pendingRequest.generation,
+      method: normalizedMethod,
+      threadId,
+      turnId: readNonEmptyString(requestParams?.turnId ?? requestParams?.turn_id),
+      itemId: readNonEmptyString(requestParams?.itemId ?? requestParams?.item_id),
+      receivedAtIso: pendingRequest.receivedAtIso,
+      params: pendingRequest.params,
+    }
+    const summary = buildRequestUserInputSummary(
+      request,
+      reply.error ? 'unanswered' : 'answered',
+      reply.result,
+    )
+    if (summary) {
+      try {
+        await writeRequestUserInputSummary(summary)
+      } catch (error) {
+        console.warn('[request-user-input-history] Failed to persist a resolved request:', getErrorMessage(error, 'Unknown error'))
+      }
+    }
     this.emitNotification({
       method: 'server/request/resolved',
       params: {
@@ -7575,7 +7613,7 @@ export class AppServerProcess {
       const code = typeof rawError.code === 'number' && Number.isFinite(rawError.code)
         ? Math.trunc(rawError.code)
         : -32000
-      this.resolvePendingServerRequest(generation, id, { error: { code, message } })
+      await this.resolvePendingServerRequest(generation, id, { error: { code, message } })
       return
     }
 
@@ -7583,7 +7621,7 @@ export class AppServerProcess {
       throw new Error('Invalid response payload: expected "result" or "error"')
     }
 
-    this.resolvePendingServerRequest(generation, id, { result: body.result })
+    await this.resolvePendingServerRequest(generation, id, { result: body.result })
   }
 
   listPendingServerRequests(): PendingServerRequest[] {
@@ -8647,6 +8685,38 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             return
           }
           await deleteThreadModelPreference(threadId)
+          setJson(res, 200, { ok: true })
+          return
+        }
+
+        setJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+
+      if (url.pathname === '/codex-api/request-user-input-history') {
+        if (req.method === 'GET') {
+          const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+          if (!threadId) {
+            setJson(res, 400, { error: 'Missing threadId' })
+            return
+          }
+          setJson(res, 200, { data: await readRequestUserInputHistory(threadId) })
+          return
+        }
+
+        if (req.method === 'POST') {
+          const saved = await writeRequestUserInputSummary(await readJsonBody(req))
+          setJson(res, 200, { data: saved })
+          return
+        }
+
+        if (req.method === 'DELETE') {
+          const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+          if (!threadId) {
+            setJson(res, 400, { error: 'Missing threadId' })
+            return
+          }
+          await deleteRequestUserInputHistory(threadId)
           setJson(res, 200, { ok: true })
           return
         }

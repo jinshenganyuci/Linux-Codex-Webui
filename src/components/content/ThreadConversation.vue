@@ -241,7 +241,59 @@
                   <span>{{ t('Sent via automation') }}</span>
                   <code v-if="message.automationDisplayName">{{ message.automationDisplayName }}</code>
                 </div>
-                <div v-if="message.messageType === 'worked'" class="worked-separator-wrap" aria-live="polite">
+                <div
+                  v-if="isRequestUserInputSummaryMessage(message)"
+                  class="request-user-input-summary"
+                  :data-status="message.requestUserInputSummary?.status"
+                >
+                  <button
+                    type="button"
+                    class="request-user-input-summary-header"
+                    :aria-expanded="isRequestUserInputSummaryExpanded(message)"
+                    @click="toggleRequestUserInputSummary(message)"
+                  >
+                    <span class="request-user-input-summary-title">{{ t('Planning clarification') }}</span>
+                    <span class="request-user-input-summary-count">
+                      {{ requestUserInputSummaryCountLabel(message) }}
+                    </span>
+                    <span
+                      class="request-user-input-summary-badge"
+                      :data-status="message.requestUserInputSummary?.status"
+                    >
+                      {{ requestUserInputSummaryStatusLabel(message) }}
+                    </span>
+                    <span
+                      class="request-user-input-summary-chevron"
+                      :data-expanded="isRequestUserInputSummaryExpanded(message)"
+                      aria-hidden="true"
+                    >▶</span>
+                  </button>
+                  <div
+                    v-if="isRequestUserInputSummaryExpanded(message)"
+                    class="request-user-input-summary-body"
+                  >
+                    <div
+                      v-for="question in message.requestUserInputSummary?.questions ?? []"
+                      :key="`${messageIdentityKey(message)}:${question.id}`"
+                      class="request-user-input-summary-question"
+                    >
+                      <p class="request-user-input-summary-question-title">
+                        {{ question.header || question.question }}
+                      </p>
+                      <p
+                        v-if="question.header && question.question && question.header !== question.question"
+                        class="request-user-input-summary-question-text"
+                      >
+                        {{ question.question }}
+                      </p>
+                      <p class="request-user-input-summary-answer">
+                        <span class="request-user-input-summary-answer-label">{{ t('Answer') }}</span>
+                        <span>{{ requestUserInputQuestionAnswerLabel(question, message) }}</span>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <div v-else-if="message.messageType === 'worked'" class="worked-separator-wrap" aria-live="polite">
                   <button type="button" class="worked-separator" @click="toggleWorkedExpand(message)">
                     <span class="worked-separator-line" aria-hidden="true" />
                     <span class="worked-chevron" :class="{ 'worked-chevron-open': isWorkedExpanded(message) }">▶</span>
@@ -1013,7 +1065,7 @@ export function createThreadCommandOutputCache(
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanLifecycle, UiPlanStep, UiServerRequest } from '../../types/codex'
+import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanLifecycle, UiPlanStep, UiRequestUserInputQuestionSummary, UiServerRequest } from '../../types/codex'
 import { getFullThreadCommandOutput, updateThreadFileChanges } from '../../api/codexGateway'
 import { useFeedbackDiagnostics } from '../../composables/useFeedbackDiagnostics'
 import { useMobile } from '../../composables/useMobile'
@@ -1057,6 +1109,7 @@ const collapsedAutoCommandIds = ref<Set<string>>(new Set())
 const expandedCommandGroupIds = ref<Set<string>>(new Set())
 const expandedWorkedIds = ref<Set<string>>(new Set())
 const expandedFileChangeSummaryIds = ref<Set<string>>(new Set())
+const expandedRequestUserInputSummaryIds = ref<Set<string>>(new Set())
 const PLAN_CARD_OVERRIDE_STORAGE_KEY = 'codex-web-local.plan-card-open.v1'
 const PLAN_CARD_OVERRIDE_LIMIT = 200
 type PlanCardManualOverride = 'expanded' | 'collapsed'
@@ -1093,6 +1146,40 @@ const { isMobile } = useMobile()
 const { t, uiLanguage } = useUiLanguage()
 const { buildFeedbackMailto, feedbackMailtoBase, recordVisibleFailure } = useFeedbackDiagnostics()
 const feedbackMailto = feedbackMailtoBase()
+
+function isRequestUserInputSummaryMessage(message: UiMessage): boolean {
+  return message.messageType === 'requestUserInput.summary' && Boolean(message.requestUserInputSummary)
+}
+
+function isRequestUserInputSummaryExpanded(message: UiMessage): boolean {
+  return expandedRequestUserInputSummaryIds.value.has(messageIdentityKey(message))
+}
+
+function toggleRequestUserInputSummary(message: UiMessage): void {
+  const identity = messageIdentityKey(message)
+  const next = new Set(expandedRequestUserInputSummaryIds.value)
+  if (next.has(identity)) next.delete(identity)
+  else next.add(identity)
+  expandedRequestUserInputSummaryIds.value = next
+}
+
+function requestUserInputSummaryCountLabel(message: UiMessage): string {
+  const count = message.requestUserInputSummary?.questions.length ?? 0
+  return t('{count} questions', { count })
+}
+
+function requestUserInputSummaryStatusLabel(message: UiMessage): string {
+  return message.requestUserInputSummary?.status === 'answered' ? t('Answered') : t('Unanswered')
+}
+
+function requestUserInputQuestionAnswerLabel(
+  question: UiRequestUserInputQuestionSummary,
+  message: UiMessage,
+): string {
+  if (message.requestUserInputSummary?.status !== 'answered') return t('Not answered')
+  if (question.isSecret) return t('Hidden answer')
+  return question.answers.length > 0 ? question.answers.join(' · ') : t('No answer')
+}
 
 function prepareLiveErrorFeedback(event: MouseEvent, message: string): void {
   recordVisibleFailure(message)
@@ -3301,6 +3388,10 @@ watch(
         ...Object.keys(standaloneFileChangeSummaryByMessageIdentity.value),
       ]),
     )
+    expandedRequestUserInputSummaryIds.value = pruneCommandIdSet(
+      expandedRequestUserInputSummaryIds.value,
+      new Set(next.filter(isRequestUserInputSummaryMessage).map(messageIdentityKey)),
+    )
 
     await scheduleConversationScroll()
   },
@@ -3777,6 +3868,74 @@ onBeforeUnmount(() => {
 
 .message-text-flow {
   @apply flex flex-col gap-2;
+}
+
+.request-user-input-summary {
+  @apply flex max-w-[min(var(--chat-card-max,76ch),100%)] flex-col overflow-hidden rounded-xl border border-indigo-200 bg-indigo-50/80 text-slate-900;
+}
+
+.request-user-input-summary[data-status='unanswered'] {
+  @apply border-amber-200 bg-amber-50/80;
+}
+
+.request-user-input-summary-header {
+  @apply flex min-h-10 w-full cursor-pointer items-center gap-2 border-0 bg-transparent px-3 py-2 text-left;
+}
+
+.request-user-input-summary-header:focus-visible {
+  @apply outline-none ring-2 ring-inset ring-indigo-400;
+}
+
+.request-user-input-summary-title {
+  @apply shrink-0 text-sm font-semibold text-indigo-950;
+}
+
+.request-user-input-summary-count {
+  @apply min-w-0 flex-1 truncate text-xs text-slate-500;
+}
+
+.request-user-input-summary-badge {
+  @apply inline-flex shrink-0 items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800;
+}
+
+.request-user-input-summary-badge[data-status='unanswered'] {
+  @apply bg-amber-100 text-amber-900;
+}
+
+.request-user-input-summary-chevron {
+  @apply inline-flex shrink-0 text-[10px] text-slate-500 transition-transform;
+}
+
+.request-user-input-summary-chevron[data-expanded='true'] {
+  transform: rotate(90deg);
+}
+
+.request-user-input-summary-body {
+  @apply flex flex-col gap-2 border-t border-indigo-200/80 px-3 py-3;
+}
+
+.request-user-input-summary[data-status='unanswered'] .request-user-input-summary-body {
+  @apply border-amber-200/80;
+}
+
+.request-user-input-summary-question {
+  @apply rounded-lg border border-white/80 bg-white/70 px-3 py-2;
+}
+
+.request-user-input-summary-question-title {
+  @apply m-0 text-sm font-medium leading-5 text-slate-900;
+}
+
+.request-user-input-summary-question-text {
+  @apply mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-slate-600;
+}
+
+.request-user-input-summary-answer {
+  @apply mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 whitespace-pre-wrap break-words text-sm leading-5 text-slate-800;
+}
+
+.request-user-input-summary-answer-label {
+  @apply shrink-0 text-[11px] font-semibold uppercase tracking-wide text-indigo-600;
 }
 
 .plan-card {

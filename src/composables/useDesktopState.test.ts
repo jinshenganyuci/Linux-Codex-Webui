@@ -9,7 +9,7 @@ import {
   isThreadUnreadByLastRead,
   useDesktopState,
 } from './useDesktopState'
-import type { ReasoningEffort, UiModelCapability, UiProjectGroup, UiTurnProgress } from '../types/codex'
+import type { ReasoningEffort, UiModelCapability, UiProjectGroup, UiRequestUserInputSummary, UiTurnProgress } from '../types/codex'
 import type { WorkspaceRootsState } from '../api/codexGateway'
 
 const gatewayMocks = vi.hoisted(() => ({
@@ -32,6 +32,7 @@ const gatewayMocks = vi.hoisted(() => ({
   getThreadTurnItemsPage: vi.fn(),
   getThreadGroupsPage: vi.fn(),
   getOlderThreadMessages: vi.fn(),
+  getRequestUserInputHistory: vi.fn(),
   getThreadModelPreferences: vi.fn(),
   getThreadRuntimeStates: vi.fn(),
   getThreadQueueState: vi.fn(),
@@ -42,6 +43,7 @@ const gatewayMocks = vi.hoisted(() => ({
   normalizeAgentProgressSnapshot: vi.fn((value) => value),
   persistThreadTitle: vi.fn(),
   persistThreadModelPreference: vi.fn(),
+  persistRequestUserInputSummary: vi.fn(),
   patchNewChatDefaults: vi.fn(),
   renameThread: vi.fn(),
   replyToServerRequest: vi.fn(),
@@ -221,12 +223,14 @@ beforeEach(() => {
   gatewayMocks.getThreadTurnItemsPage.mockResolvedValue({ messages: [], nextCursor: null })
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
   gatewayMocks.getThreadModelPreferences.mockResolvedValue({})
+  gatewayMocks.getRequestUserInputHistory.mockResolvedValue([])
   gatewayMocks.getNewChatDefaults.mockResolvedValue({ version: 1, revision: 0, providers: {} })
   gatewayMocks.getThreadRuntimeStates.mockResolvedValue([])
   gatewayMocks.getAgentProgress.mockResolvedValue(null)
   gatewayMocks.getAgentResult.mockResolvedValue({ threadId: '', text: '', truncated: false })
   gatewayMocks.normalizeAgentProgressSnapshot.mockImplementation((value) => value)
   gatewayMocks.persistThreadModelPreference.mockImplementation(async (_threadId, preference) => preference)
+  gatewayMocks.persistRequestUserInputSummary.mockImplementation(async (summary) => summary)
   gatewayMocks.patchNewChatDefaults.mockImplementation(async (patch) => ({
     version: 1,
     revision: 1,
@@ -240,6 +244,125 @@ beforeEach(() => {
   gatewayMocks.setThreadQueueState.mockResolvedValue(undefined)
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
   gatewayMocks.getWorkspaceRootsState.mockRejectedValue(new Error('no workspace roots state'))
+})
+
+describe('planning clarification history', () => {
+  function installNotificationHandler(): {
+    read: () => ((notification: { method: string; params?: unknown }) => void)
+  } {
+    let handler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((nextHandler) => {
+      handler = nextHandler as typeof handler
+      return vi.fn()
+    })
+    return {
+      read: () => {
+        if (!handler) throw new Error('notification handler was not installed')
+        return handler
+      },
+    }
+  }
+
+  function requestNotification() {
+    return {
+      method: 'server/request',
+      params: {
+        id: 41,
+        generation: 9,
+        method: 'item/tool/requestUserInput',
+        receivedAtIso: '2026-08-25T10:00:00.000Z',
+        params: {
+          threadId: 'thread-a',
+          turnId: 'turn-a',
+          itemId: 'item-a',
+          questions: [{ id: 'scope', header: 'Scope', question: 'What should ship first?' }],
+        },
+      },
+    }
+  }
+
+  it('replaces the answered form with a persistent compact summary', async () => {
+    installTestWindow()
+    const notifications = installNotificationHandler()
+    gatewayMocks.replyToServerRequest.mockResolvedValue(undefined)
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startNotificationStream()
+    notifications.read()(requestNotification())
+
+    await expect(state.respondToPendingServerRequest({
+      id: 41,
+      generation: 9,
+      result: { answers: { scope: { answers: ['MVP'] } } },
+    })).resolves.toBe(true)
+
+    expect(state.selectedThreadServerRequests.value).toHaveLength(0)
+    expect(gatewayMocks.persistRequestUserInputSummary).not.toHaveBeenCalled()
+    expect(state.messages.value).toEqual([
+      expect.objectContaining({
+        messageType: 'requestUserInput.summary',
+        requestUserInputSummary: expect.objectContaining({ status: 'answered' }),
+      }),
+    ])
+  })
+
+  it('restores saved summaries independently of Codex thread history', async () => {
+    installTestWindow()
+    const saved: UiRequestUserInputSummary = {
+      id: 'request-user-input:9:41',
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      itemId: 'item-a',
+      requestId: 41,
+      generation: 9,
+      status: 'answered',
+      questions: [{ id: 'scope', header: 'Scope', question: 'What should ship first?', answers: ['MVP'], isSecret: false }],
+      requestedAtIso: '2026-08-25T10:00:00.000Z',
+      resolvedAtIso: '2026-08-25T10:00:10.000Z',
+    }
+    gatewayMocks.getRequestUserInputHistory.mockResolvedValue([saved])
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: '',
+      modelProvider: '',
+      messages: [{ id: 'user-a', role: 'user', text: 'Plan it', turnId: 'turn-a' }],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: { 'turn-a': 0 },
+    })
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    await state.loadMessages('thread-a')
+
+    await vi.waitFor(() => {
+      expect(state.messages.value.map((message) => message.id)).toEqual([
+        'user-a',
+        'request-user-input:9:41',
+      ])
+    })
+    expect(gatewayMocks.getRequestUserInputHistory).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves an invalidated form as unanswered', async () => {
+    installTestWindow()
+    const notifications = installNotificationHandler()
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startNotificationStream()
+    notifications.read()(requestNotification())
+    notifications.read()({
+      method: 'server/requests/invalidated',
+      params: { generation: 9, requestIds: [41], reason: 'turn interrupted' },
+    })
+
+    await vi.waitFor(() => {
+      expect(gatewayMocks.persistRequestUserInputSummary).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'request-user-input:9:41',
+        status: 'unanswered',
+      }))
+    })
+    expect(state.messages.value[0]?.requestUserInputSummary?.status).toBe('unanswered')
+  })
 })
 
 afterEach(() => {

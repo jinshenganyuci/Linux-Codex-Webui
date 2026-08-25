@@ -287,11 +287,37 @@ export type UiMessage = {
   isUnhandled?: boolean
   commandExecution?: CommandExecutionData
   plan?: UiPlanData
+  requestUserInputSummary?: UiRequestUserInputSummary
   turnId?: string
   turnIndex?: number
   isAutomationRun?: boolean
   automationDisplayName?: string | null
 }
+
+export type UiRequestUserInputQuestionSummary = {
+  id: string
+  header: string
+  question: string
+  answers: string[]
+  isSecret: boolean
+}
+
+export type UiRequestUserInputSummaryStatus = 'answered' | 'unanswered'
+
+export type UiRequestUserInputSummary = {
+  id: string
+  threadId: string
+  turnId: string
+  itemId: string
+  requestId: number
+  generation: number
+  status: UiRequestUserInputSummaryStatus
+  questions: UiRequestUserInputQuestionSummary[]
+  requestedAtIso: string
+  resolvedAtIso: string
+}
+
+export type UiRequestUserInputHistoryState = Record<string, UiRequestUserInputSummary[]>
 
 export type UiServerRequest = {
   id: number
