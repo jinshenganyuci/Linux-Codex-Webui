@@ -342,6 +342,7 @@ export type StoredQueuedMessage = {
   speedMode?: SpeedMode
   model?: string
   reasoningEffort?: ReasoningEffort
+  collaborationModeDeveloperInstructions?: string
   deliveryState?: 'claimed'
   claimedAtMs?: number
   turnId?: string
@@ -2321,7 +2322,10 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
   } catch (error) {
     throw normalizeCodexApiError(error, `Failed to permanently delete thread ${threadId}`, 'thread/delete')
   }
-  await deleteRequestUserInputHistory(threadId).catch(() => {})
+  await Promise.allSettled([
+    deleteRequestUserInputHistory(threadId),
+    deleteThreadCollaborationPreference(threadId),
+  ])
 }
 
 export async function renameThread(threadId: string, threadName: string): Promise<void> {
@@ -2637,6 +2641,7 @@ async function buildTurnStartParams(
   fileAttachments: FileAttachmentParam[] = [],
   collaborationMode?: CollaborationModeKind,
   serviceTier?: string | null,
+  collaborationModeDeveloperInstructions?: string,
 ): Promise<Record<string, unknown>> {
   const normalizedModel = model?.trim() ?? ''
   const localImageAttachments: FileAttachmentParam[] = []
@@ -2696,12 +2701,13 @@ async function buildTurnStartParams(
   }
   if (collaborationMode) {
     const collaborationModeSettings = await resolveCollaborationModeSettings(collaborationMode, normalizedModel, effort)
+    const developerInstructions = collaborationModeDeveloperInstructions?.trim() ?? ''
     params.collaborationMode = {
       mode: collaborationMode,
       settings: {
         model: collaborationModeSettings.model,
         reasoning_effort: collaborationModeSettings.reasoningEffort,
-        developer_instructions: null,
+        developer_instructions: developerInstructions || null,
       },
     }
   }
@@ -2718,6 +2724,7 @@ export async function startThreadTurn(
   fileAttachments: FileAttachmentParam[] = [],
   collaborationMode?: CollaborationModeKind,
   serviceTier?: string | null,
+  collaborationModeDeveloperInstructions?: string,
 ): Promise<string> {
   try {
     const params = await buildTurnStartParams(
@@ -2730,6 +2737,7 @@ export async function startThreadTurn(
       fileAttachments,
       collaborationMode,
       serviceTier,
+      collaborationModeDeveloperInstructions,
     )
     const payload = await callRpc<{ turn?: Turn }>('turn/start', params)
     return typeof payload?.turn?.id === 'string' ? payload.turn.id.trim() : ''
@@ -2748,6 +2756,7 @@ export async function startThreadWithTurn(
   fileAttachments: FileAttachmentParam[] = [],
   collaborationMode?: CollaborationModeKind,
   serviceTier?: string | null,
+  collaborationModeDeveloperInstructions?: string,
 ): Promise<StartedThreadTurn> {
   try {
     const thread = buildThreadStartParams(cwd, model, serviceTier)
@@ -2761,6 +2770,7 @@ export async function startThreadWithTurn(
       fileAttachments,
       collaborationMode,
       serviceTier,
+      collaborationModeDeveloperInstructions,
     )
     const response = await fetchWithTimeout('/codex-api/thread/start-turn', {
       method: 'POST',
@@ -3556,6 +3566,9 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
       : undefined
   const model = typeof record.model === 'string' ? record.model.trim() : ''
   const reasoningEffort = normalizeReasoningEffort(record.reasoningEffort)
+  const collaborationModeDeveloperInstructions = typeof record.collaborationModeDeveloperInstructions === 'string'
+    ? record.collaborationModeDeveloperInstructions.trim().slice(0, 8_000)
+    : ''
   const deliveryState = record.deliveryState === 'claimed' ? 'claimed' : ''
   const claimedAtMs = typeof record.claimedAtMs === 'number' && Number.isFinite(record.claimedAtMs)
     ? Math.max(0, Math.round(record.claimedAtMs))
@@ -3572,6 +3585,7 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
     ...(speedMode ? { speedMode } : {}),
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(collaborationModeDeveloperInstructions ? { collaborationModeDeveloperInstructions } : {}),
     ...(deliveryState ? { deliveryState } : {}),
     ...(deliveryState && claimedAtMs > 0 ? { claimedAtMs } : {}),
     ...(deliveryState && turnId ? { turnId } : {}),
@@ -4065,6 +4079,16 @@ export type SidebarLayoutPreferencesPatch = {
   sections?: Partial<SidebarSectionPreferences>
   collapsedProjects?: Record<string, boolean>
 }
+export type ThreadCollaborationPreferences = {
+  version: 1
+  revision: number
+  persisted: boolean
+  modes: Record<string, 'plan'>
+}
+export type ThreadCollaborationPreferencesPatch = {
+  initializeOnly?: boolean
+  modes?: Record<string, CollaborationModeKind>
+}
 
 export async function getThreadTitleCache(): Promise<ThreadTitleCache> {
   try {
@@ -4166,6 +4190,62 @@ export async function patchSidebarLayoutPreferences(
   return {
     applied: payload?.applied !== false,
     preferences: normalizeSidebarLayoutPreferences(payload?.data),
+  }
+}
+
+function normalizeThreadCollaborationPreferences(value: unknown): ThreadCollaborationPreferences {
+  const record = asRecord(value)
+  const rawModes = asRecord(record?.modes)
+  const modes: Record<string, 'plan'> = {}
+  for (const [rawThreadId, rawMode] of Object.entries(rawModes ?? {})) {
+    const threadId = rawThreadId.trim()
+    if (threadId && rawMode === 'plan') modes[threadId] = 'plan'
+  }
+  return {
+    version: 1,
+    revision: typeof record?.revision === 'number' && Number.isSafeInteger(record.revision) && record.revision >= 0
+      ? record.revision
+      : 0,
+    persisted: record?.persisted === true,
+    modes,
+  }
+}
+
+export async function getThreadCollaborationPreferences(): Promise<ThreadCollaborationPreferences> {
+  const response = await fetchWithTimeout('/codex-api/preferences/thread-collaboration')
+  const payload = await response.json().catch(() => null) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to load thread collaboration preferences'))
+  }
+  return normalizeThreadCollaborationPreferences(asRecord(payload)?.data)
+}
+
+export async function patchThreadCollaborationPreferences(
+  patch: ThreadCollaborationPreferencesPatch,
+): Promise<{ applied: boolean; preferences: ThreadCollaborationPreferences }> {
+  const response = await fetchWithTimeout('/codex-api/preferences/thread-collaboration', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  const payload = await response.json().catch(() => null) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to update thread collaboration preferences'))
+  }
+  const record = asRecord(payload)
+  return {
+    applied: record?.applied !== false,
+    preferences: normalizeThreadCollaborationPreferences(record?.data),
+  }
+}
+
+async function deleteThreadCollaborationPreference(threadId: string): Promise<void> {
+  const response = await fetchWithTimeout(`/codex-api/preferences/thread-collaboration?threadId=${encodeURIComponent(threadId)}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as unknown
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to delete thread collaboration preference'))
   }
 }
 

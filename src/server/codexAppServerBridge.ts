@@ -60,6 +60,12 @@ import {
   readSidebarPreferences,
 } from './sidebarPreferences.js'
 import {
+  deleteThreadCollaborationPreference,
+  normalizeThreadCollaborationPreferencesPatch,
+  patchThreadCollaborationPreferences,
+  readThreadCollaborationPreferences,
+} from './threadCollaborationPreferences.js'
+import {
   normalizeNewChatDefaultPatch,
   patchNewChatDefaults,
   readNewChatDefaults,
@@ -5799,6 +5805,7 @@ type StoredQueuedMessage = {
   speedMode?: 'standard' | 'fast'
   model?: string
   reasoningEffort?: ReasoningEffort
+  collaborationModeDeveloperInstructions?: string
   deliveryState?: 'claimed'
   claimedAtMs?: number
   turnId?: string
@@ -5839,6 +5846,7 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
   if (!id) return null
   const model = readNonEmptyString(record.model)
   const reasoningEffort = normalizeReasoningEffort(record.reasoningEffort)
+  const collaborationModeDeveloperInstructions = readNonEmptyString(record.collaborationModeDeveloperInstructions).slice(0, 8_000)
   const deliveryState = record.deliveryState === 'claimed' ? 'claimed' : ''
   const claimedAtMs = typeof record.claimedAtMs === 'number' && Number.isFinite(record.claimedAtMs)
     ? Math.max(0, Math.round(record.claimedAtMs))
@@ -5878,6 +5886,7 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
     ...(record.speedMode === 'fast' || record.speedMode === 'standard' ? { speedMode: record.speedMode } : {}),
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(collaborationModeDeveloperInstructions ? { collaborationModeDeveloperInstructions } : {}),
     ...(deliveryState ? { deliveryState } : {}),
     ...(deliveryState && claimedAtMs > 0 ? { claimedAtMs } : {}),
     ...(deliveryState && turnId ? { turnId } : {}),
@@ -8127,7 +8136,7 @@ export class BackendQueueProcessor {
         settings: {
           model: settings.model,
           reasoning_effort: settings.reasoningEffort,
-          developer_instructions: null,
+          developer_instructions: turn.message.collaborationModeDeveloperInstructions || null,
         },
       }
     } catch {
@@ -8743,6 +8752,38 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             data: result.preferences,
             applied: result.applied,
           })
+          return
+        }
+
+        setJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+
+      if (url.pathname === '/codex-api/preferences/thread-collaboration') {
+        if (req.method === 'GET') {
+          setJson(res, 200, { data: await readThreadCollaborationPreferences() })
+          return
+        }
+
+        if (req.method === 'PATCH') {
+          const patch = normalizeThreadCollaborationPreferencesPatch(await readJsonBody(req))
+          if (!patch) {
+            setJson(res, 400, { error: 'Invalid thread collaboration preference patch' })
+            return
+          }
+          const result = await patchThreadCollaborationPreferences(patch)
+          setJson(res, 200, { data: result.preferences, applied: result.applied })
+          return
+        }
+
+        if (req.method === 'DELETE') {
+          const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+          if (!threadId) {
+            setJson(res, 400, { error: 'Missing threadId' })
+            return
+          }
+          await deleteThreadCollaborationPreference(threadId)
+          setJson(res, 200, { ok: true })
           return
         }
 

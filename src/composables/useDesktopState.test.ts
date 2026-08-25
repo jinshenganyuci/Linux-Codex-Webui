@@ -34,6 +34,7 @@ const gatewayMocks = vi.hoisted(() => ({
   getOlderThreadMessages: vi.fn(),
   getRequestUserInputHistory: vi.fn(),
   getThreadModelPreferences: vi.fn(),
+  getThreadCollaborationPreferences: vi.fn(),
   getThreadRuntimeStates: vi.fn(),
   getThreadQueueState: vi.fn(),
   getThreadTitleCache: vi.fn(),
@@ -45,6 +46,7 @@ const gatewayMocks = vi.hoisted(() => ({
   persistThreadModelPreference: vi.fn(),
   persistRequestUserInputSummary: vi.fn(),
   patchNewChatDefaults: vi.fn(),
+  patchThreadCollaborationPreferences: vi.fn(),
   renameThread: vi.fn(),
   replyToServerRequest: vi.fn(),
   resumeThread: vi.fn(),
@@ -223,6 +225,12 @@ beforeEach(() => {
   gatewayMocks.getThreadTurnItemsPage.mockResolvedValue({ messages: [], nextCursor: null })
   gatewayMocks.getThreadQueueState.mockResolvedValue({})
   gatewayMocks.getThreadModelPreferences.mockResolvedValue({})
+  gatewayMocks.getThreadCollaborationPreferences.mockResolvedValue({
+    version: 1,
+    revision: 1,
+    persisted: true,
+    modes: {},
+  })
   gatewayMocks.getRequestUserInputHistory.mockResolvedValue([])
   gatewayMocks.getNewChatDefaults.mockResolvedValue({ version: 1, revision: 0, providers: {} })
   gatewayMocks.getThreadRuntimeStates.mockResolvedValue([])
@@ -239,6 +247,17 @@ beforeEach(() => {
         ...(patch.model ? { model: patch.model } : {}),
         ...(patch.reasoningEffort ? { reasoningEffort: patch.reasoningEffort } : {}),
       },
+    },
+  }))
+  gatewayMocks.patchThreadCollaborationPreferences.mockImplementation(async (patch) => ({
+    applied: true,
+    preferences: {
+      version: 1,
+      revision: 2,
+      persisted: true,
+      modes: Object.fromEntries(
+        Object.entries(patch.modes ?? {}).filter((entry) => entry[1] === 'plan'),
+      ),
     },
   }))
   gatewayMocks.setThreadQueueState.mockResolvedValue(undefined)
@@ -714,6 +733,81 @@ describe('collaboration mode selection', () => {
 
     expect(state.selectedCollaborationMode.value).toBe('plan')
   })
+
+  it('migrates the old browser cache only when the backend has no state', async () => {
+    installTestWindow({
+      'codex-web-local.selected-thread-id.v1': 'thread-a',
+      'codex-web-local.collaboration-mode-by-context.v1': JSON.stringify({ 'thread-a': 'plan' }),
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getThreadCollaborationPreferences.mockResolvedValue({
+      version: 1,
+      revision: 0,
+      persisted: false,
+      modes: {},
+    })
+    gatewayMocks.patchThreadCollaborationPreferences.mockImplementation(async (patch) => ({
+      applied: true,
+      preferences: {
+        version: 1,
+        revision: 1,
+        persisted: true,
+        modes: patch.modes ?? {},
+      },
+    }))
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+
+    expect(gatewayMocks.patchThreadCollaborationPreferences).toHaveBeenCalledWith({
+      initializeOnly: true,
+      modes: { 'thread-a': 'plan' },
+    })
+    expect(state.selectedCollaborationMode.value).toBe('plan')
+  })
+
+  it('uses backend state as authoritative across browsers', async () => {
+    installTestWindow({
+      'codex-web-local.selected-thread-id.v1': 'thread-a',
+      'codex-web-local.collaboration-mode-by-context.v1': JSON.stringify({ 'thread-a': 'plan' }),
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getThreadCollaborationPreferences.mockResolvedValue({
+      version: 1,
+      revision: 7,
+      persisted: true,
+      modes: { 'thread-b': 'plan' },
+    })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+
+    expect(gatewayMocks.patchThreadCollaborationPreferences).not.toHaveBeenCalled()
+    expect(state.selectedCollaborationMode.value).toBe('default')
+    state.primeSelectedThread('thread-b')
+    expect(state.selectedCollaborationMode.value).toBe('plan')
+    expect(window.localStorage.getItem('codex-web-local.collaboration-mode-by-context.v1'))
+      .toBe(JSON.stringify({ 'thread-b': 'plan' }))
+  })
+
+  it('writes each explicit thread mode change to the backend', async () => {
+    installTestWindow()
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.setSelectedCollaborationMode('plan')
+    await vi.waitFor(() => {
+      expect(gatewayMocks.patchThreadCollaborationPreferences).toHaveBeenCalledWith({
+        modes: { 'thread-a': 'plan' },
+      })
+    })
+
+    state.setSelectedCollaborationMode('default')
+    await vi.waitFor(() => {
+      expect(gatewayMocks.patchThreadCollaborationPreferences).toHaveBeenLastCalledWith({
+        modes: { 'thread-a': 'default' },
+      })
+    })
+  })
 })
 
 describe('immediate sent-message rendering', () => {
@@ -1162,6 +1256,40 @@ describe('immediate sent-message rendering', () => {
     expect(gatewayMocks.startThreadWithTurn.mock.calls[0]?.[7]).toBe('plan')
     expect(state.selectedThreadId.value).toBe('planned-thread')
     expect(state.selectedCollaborationMode.value).toBe('plan')
+    await vi.waitFor(() => {
+      expect(gatewayMocks.patchThreadCollaborationPreferences).toHaveBeenCalledWith({
+        modes: { 'planned-thread': 'plan' },
+      })
+    })
+  })
+
+  it('uses ask-first instructions for one new-thread turn without persisting Plan mode', async () => {
+    installTestWindow()
+    gatewayMocks.startThreadWithTurn.mockResolvedValue({
+      threadId: 'clarify-thread',
+      model: 'gpt-5.6-terra',
+      modelProvider: 'openai',
+      turnId: 'clarify-turn',
+    })
+    const instructions = 'Ask material questions before planning.'
+
+    const state = useDesktopState()
+    await state.sendMessageToNewThread(
+      'design the feature',
+      '/tmp/project',
+      [],
+      [],
+      [],
+      'plan',
+      instructions,
+      false,
+    )
+
+    expect(gatewayMocks.startThreadWithTurn.mock.calls[0]?.[7]).toBe('plan')
+    expect(gatewayMocks.startThreadWithTurn.mock.calls[0]?.[9]).toBe(instructions)
+    expect(state.selectedThreadId.value).toBe('clarify-thread')
+    expect(state.selectedCollaborationMode.value).toBe('default')
+    expect(gatewayMocks.patchThreadCollaborationPreferences).not.toHaveBeenCalled()
   })
 
   it('keeps the new-thread message visible with an error when creation fails', async () => {
@@ -2511,6 +2639,7 @@ describe('provider model selection', () => {
       [],
       'default',
       'fast',
+      undefined,
     )
   })
 
@@ -2552,6 +2681,7 @@ describe('provider model selection', () => {
       [],
       'default',
       null,
+      undefined,
     )
 
     await state.updateSelectedSpeedMode('standard')
@@ -3123,6 +3253,7 @@ describe('provider model selection', () => {
       [],
       'default',
       null,
+      undefined,
     )
     expect(gatewayMocks.startThread).not.toHaveBeenCalled()
     expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
@@ -3247,6 +3378,7 @@ describe('provider model selection', () => {
       [],
       'default',
       null,
+      undefined,
     )
   })
 
@@ -3382,6 +3514,7 @@ describe('provider model selection', () => {
       [],
       'default',
       null,
+      undefined,
     )
     await vi.waitFor(() => {
       expect(gatewayMocks.persistThreadModelPreference).toHaveBeenCalledWith('custom-thread', {

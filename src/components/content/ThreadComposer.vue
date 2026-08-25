@@ -295,6 +295,24 @@
                 :class="{ 'is-on': isPlanModeSelected }"
               />
             </button>
+            <button
+              class="thread-composer-attach-setting"
+              type="button"
+              role="switch"
+              :aria-checked="clarifyBeforePlanning"
+              :aria-label="clarifyBeforePlanning ? t('Disable ask first') : t('Enable ask first')"
+              :disabled="isComposerConfigDisabled"
+              @click="toggleClarifyBeforePlanning"
+            >
+              <span class="thread-composer-attach-setting-copy">
+                <span class="thread-composer-attach-setting-label">{{ t('Ask first, then plan') }}</span>
+                <span class="thread-composer-attach-setting-description">{{ t('Applies to the next message only') }}</span>
+              </span>
+              <span
+                class="thread-composer-attach-switch"
+                :class="{ 'is-on': clarifyBeforePlanning }"
+              />
+            </button>
             </div>
           </div>
 
@@ -372,6 +390,18 @@
         >
           <span class="thread-composer-plan-mode-indicator-dot" aria-hidden="true" />
           {{ t('Plan mode') }}
+        </button>
+
+        <button
+          v-if="!isDictationRecording && clarifyBeforePlanning"
+          class="thread-composer-plan-mode-indicator thread-composer-clarify-first-indicator"
+          type="button"
+          :aria-label="t('Disable ask first')"
+          :title="t('Applies to the next message only')"
+          @click="toggleClarifyBeforePlanning"
+        >
+          <span class="thread-composer-plan-mode-indicator-dot" aria-hidden="true" />
+          {{ t('Ask first') }}
         </button>
 
         <div
@@ -797,6 +827,7 @@ export type SubmitPayload = {
   mode: 'steer' | 'queue'
   collaborationModeOverride?: CollaborationModeKind
   persistCollaborationMode?: boolean
+  collaborationModeDeveloperInstructions?: string
 }
 
 export type ThreadComposerExposed = {
@@ -815,6 +846,12 @@ const emit = defineEmits<{
   'update:selected-codex-permission-mode': [mode: CodexPermissionMode]
 }>()
 const { t } = useUiLanguage()
+
+const CLARIFY_BEFORE_PLANNING_INSTRUCTIONS = [
+  'Stay in planning mode and do not modify files or execute the plan.',
+  'Before presenting the plan, use request_user_input to ask about every material ambiguity that could change the implementation.',
+  'If the request is already fully specified, proceed directly to the plan without asking a redundant question.',
+].join(' ')
 
 type SelectedImage = {
   id: string
@@ -841,6 +878,7 @@ const PASTED_TEXT_FILE_THRESHOLD = 2000
 const PROMPT_OPTION_PREFIX = 'prompt:'
 
 const draft = ref('')
+const clarifyBeforePlanning = ref(false)
 const selectedImages = ref<SelectedImage[]>([])
 const selectedSkills = ref<SkillItem[]>([])
 const savedPrompts = ref<ComposerPromptInfo[]>([])
@@ -1406,19 +1444,25 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
   }
 
   const submitText = planCommand?.prompt ?? text
+  const shouldClarifyBeforePlanning = clarifyBeforePlanning.value
+  const shouldUsePlanOverride = Boolean(planCommand) || shouldClarifyBeforePlanning
   emit('submit', {
     text: submitText,
     imageUrls: selectedImages.value.map((image) => image.url),
     fileAttachments: [...fileAttachments.value],
     skills: selectedSkills.value.map((s) => ({ name: s.name, path: s.path })),
-    mode: planCommand && props.isTurnInProgress ? 'queue' : mode,
-    ...(planCommand
+    mode: shouldUsePlanOverride && props.isTurnInProgress ? 'queue' : mode,
+    ...(shouldUsePlanOverride
       ? {
           collaborationModeOverride: 'plan' as const,
-          persistCollaborationMode: true,
+          ...(planCommand ? { persistCollaborationMode: true } : {}),
+          ...(shouldClarifyBeforePlanning
+            ? { collaborationModeDeveloperInstructions: CLARIFY_BEFORE_PLANNING_INSTRUCTIONS }
+            : {}),
         }
       : {}),
   })
+  clarifyBeforePlanning.value = false
   clearPersistedDraftForThread(props.activeThreadId)
   clearDraftState()
   isComposerExpanded.value = false
@@ -1607,6 +1651,13 @@ function onModelSelect(value: string): void {
 
 function toggleCollaborationMode(): void {
   emit('update:selected-collaboration-mode', isPlanModeSelected.value ? 'default' : 'plan')
+}
+
+function toggleClarifyBeforePlanning(): void {
+  if (isComposerConfigDisabled.value) return
+  clarifyBeforePlanning.value = !clarifyBeforePlanning.value
+  isAttachMenuOpen.value = false
+  void nextTick(() => inputRef.value?.focus())
 }
 
 function onReasoningEffortSelect(value: string): void {
@@ -3052,6 +3103,14 @@ watch(
 
 .thread-composer-plan-mode-indicator-dot {
   @apply h-1.5 w-1.5 rounded-full bg-sky-500;
+}
+
+.thread-composer-clarify-first-indicator {
+  @apply border-amber-200 bg-amber-50 text-amber-800 hover:border-amber-300 hover:bg-amber-100;
+}
+
+.thread-composer-clarify-first-indicator .thread-composer-plan-mode-indicator-dot {
+  @apply bg-amber-500;
 }
 
 .thread-composer-control :deep(.composer-dropdown-value) {

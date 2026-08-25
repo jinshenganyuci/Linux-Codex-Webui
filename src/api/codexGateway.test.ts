@@ -112,6 +112,34 @@ describe('startThreadTurn collaboration mode payloads', () => {
     ])
   })
 
+  it('uses explicit one-turn collaboration instructions without changing the visible prompt', async () => {
+    const { requests } = mockRpcFetch()
+    const instructions = 'Ask material clarifying questions before planning.'
+
+    await startThreadTurn(
+      'thread-1',
+      'design the migration',
+      [],
+      'gpt-5.6-sol',
+      'high',
+      undefined,
+      [],
+      'plan',
+      null,
+      instructions,
+    )
+
+    expect(requests[0]?.params.input).toEqual([{ type: 'text', text: 'design the migration' }])
+    expect(requests[0]?.params.collaborationMode).toEqual({
+      mode: 'plan',
+      settings: {
+        model: 'gpt-5.6-sol',
+        reasoning_effort: 'high',
+        developer_instructions: instructions,
+      },
+    })
+  })
+
   it('starts a new thread and first turn through one backend request', async () => {
     const requests: Array<{ url: string, body: Record<string, unknown> }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -402,6 +430,15 @@ describe('archived thread management', () => {
   it('lists archived threads and uses the official restore and delete methods', async () => {
     const requests: Array<{ method: string; params: Record<string, unknown> }> = []
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (
+        String(_input).startsWith('/codex-api/preferences/')
+        || String(_input).startsWith('/codex-api/request-user-input-history')
+      ) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
       const body = typeof init?.body === 'string'
         ? JSON.parse(init.body) as { method: string; params: Record<string, unknown> }
         : { method: '', params: {} }

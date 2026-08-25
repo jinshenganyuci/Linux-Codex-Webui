@@ -524,6 +524,14 @@
   @apply bg-sky-400;
 }
 
+:root.dark .thread-composer-clarify-first-indicator {
+  @apply border-amber-700/70 bg-amber-950/70 text-amber-200 hover:border-amber-600 hover:bg-amber-900/80;
+}
+
+:root.dark .thread-composer-clarify-first-indicator .thread-composer-plan-mode-indicator-dot {
+  @apply bg-amber-400;
+}
+
 :root.dark .thread-composer-file-mentions {
   @apply border-zinc-600 bg-zinc-800;
 }

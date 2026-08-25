@@ -961,6 +961,7 @@ describe('backend queue scheduling', () => {
             collaborationMode: 'default' | 'plan'
             model?: string
             reasoningEffort?: 'high' | 'max'
+            collaborationModeDeveloperInstructions?: string
           }
         }) => Promise<Record<string, unknown>>
       }).buildQueuedTurnParams.bind(processor)
@@ -999,6 +1000,7 @@ describe('backend queue scheduling', () => {
           collaborationMode: 'plan',
           model: 'gpt-5.5',
           reasoningEffort: 'high',
+          collaborationModeDeveloperInstructions: 'Ask material questions before planning.',
         },
       })
       expect(capturedParams).toMatchObject({
@@ -1009,6 +1011,7 @@ describe('backend queue scheduling', () => {
           settings: {
             model: 'gpt-5.5',
             reasoning_effort: 'high',
+            developer_instructions: 'Ask material questions before planning.',
           },
         },
       })

@@ -23,6 +23,7 @@
 13. While a turn is running in Steer mode, submit `/plan prepare the next migration`; confirm the stripped prompt is queued for the next turn with Plan mode instead of steering the active Default turn.
 14. Run the same inline `/plan <prompt>` flow from the new-chat composer and confirm the created thread opens with the Plan mode indicator still visible.
 15. Click the persistent Plan mode indicator and confirm it disables Plan mode without sending a message.
+16. Refresh the thread and open it in a second browser profile; confirm `/plan`'s persistent mode follows the thread in both browsers instead of depending on one browser's temporary state.
 
 #### Expected Results
 
@@ -33,6 +34,7 @@
 - Exact `/plan` mirrors native Codex: it is consumed locally, toggles the current chat mode, and never becomes a user message.
 - `/plan <prompt>` is a WebUI convenience: it strips the command, persists Plan mode for the chat, and sends exactly one Plan-mode turn; active turns queue this request for the next turn.
 - The Plan mode indicator remains visible without reopening the attachment menu and stays readable in light and dark themes and all required viewports.
+- Persistent mode changes are written once to the backend and restored cross-browser; the old browser cache is migration/fallback data only.
 - Skill selection attaches exactly one Skill even if the same Skill is selected again, and preserves all text outside the active `$` token.
 - Menus stay inside each tested viewport and remain readable in light and dark themes.
 

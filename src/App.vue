@@ -3021,6 +3021,7 @@ async function syncAfterMobileResume(): Promise<void> {
     await refreshAll({
       includeSelectedThreadMessages: true,
       awaitAncillaryRefreshes: true,
+      forceThreadPreferenceRefresh: true,
     })
     await syncThreadSelectionWithRoute()
   } finally {
@@ -3049,6 +3050,8 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
       payload.skills,
       payload.fileAttachments,
       payload.collaborationModeOverride,
+      payload.collaborationModeDeveloperInstructions,
+      payload.persistCollaborationMode,
     )
     return
   }
@@ -3060,6 +3063,8 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
     payload.fileAttachments,
     queueInsertIndex,
     payload.collaborationModeOverride,
+    undefined,
+    payload.collaborationModeDeveloperInstructions,
   )
 }
 
@@ -4178,6 +4183,8 @@ async function submitFirstMessageForNewThread(
   skills: Array<{ name: string; path: string }> = [],
   fileAttachments: Array<{ label: string; path: string; fsPath: string }> = [],
   collaborationModeOverride?: 'default' | 'plan',
+  collaborationModeDeveloperInstructions?: string,
+  persistCollaborationModeOverride?: boolean,
 ): Promise<void> {
   let didStartThreadRequest = false
   beginPendingNewThreadPreview(text, imageUrls, skills, fileAttachments)
@@ -4217,6 +4224,8 @@ async function submitFirstMessageForNewThread(
       skills,
       fileAttachments,
       collaborationModeOverride,
+      collaborationModeDeveloperInstructions,
+      persistCollaborationModeOverride,
     )
     if (!threadId) return
     await router.replace({ name: 'thread', params: { threadId } })

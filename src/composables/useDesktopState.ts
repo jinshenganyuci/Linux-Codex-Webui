@@ -22,6 +22,7 @@ import {
   getThreadTurnItemsPage,
   getThreadRuntimeStates,
   getThreadModelPreferences,
+  getThreadCollaborationPreferences,
   getRequestUserInputHistory,
   getBackgroundThreadListLimit,
   interruptThreadTurn,
@@ -42,6 +43,7 @@ import {
   persistThreadModelPreference,
   persistRequestUserInputSummary,
   patchNewChatDefaults,
+  patchThreadCollaborationPreferences,
   generateThreadTitle,
   resumeThread,
 
@@ -57,6 +59,7 @@ import {
   type ThreadQueueState,
   type ThreadModelPreference,
   type ThreadModelPreferenceState,
+  type ThreadCollaborationPreferences,
   type ThreadRuntimeState,
   type WorkspaceRootsState,
 } from '../api/codexGateway'
@@ -1620,6 +1623,7 @@ export function useDesktopState() {
     speedMode?: SpeedMode
     model?: string
     reasoningEffort?: ReasoningEffort
+    collaborationModeDeveloperInstructions?: string
     deliveryState?: 'claimed'
     claimedAtMs?: number
     turnId?: string
@@ -1632,6 +1636,7 @@ export function useDesktopState() {
     effort: ReasoningEffort | ''
     collaborationMode: CollaborationModeKind
     speedMode: SpeedMode
+    collaborationModeDeveloperInstructions?: string
     fallbackRetried: boolean
   }
   const queuedMessagesByThreadId = ref<Record<string, QueuedMessage[]>>({})
@@ -1804,6 +1809,8 @@ export function useDesktopState() {
   const fallbackRetryInFlightThreadIds = new Set<string>()
   let hasPersistedCodexPermissionMode = hasStoredCodexPermissionMode()
   let hasLoadedThreadModelPreferences = false
+  let hasLoadedThreadCollaborationPreferences = false
+  let threadCollaborationPreferencesLoadPromise: Promise<void> | null = null
   let hasLoadedNewChatDefaults = false
   let newChatDefaultsLoadPromise: Promise<void> | null = null
   let newThreadSelectionInitialized = false
@@ -1813,6 +1820,7 @@ export function useDesktopState() {
   const runtimeDefaultModelId = ref('')
   const runtimeDefaultReasoningEffort = ref<ReasoningEffort | ''>('')
   const threadModelPreferenceWriteChainById = new Map<string, Promise<void>>()
+  const threadCollaborationPreferenceWriteChainById = new Map<string, Promise<void>>()
   const requestUserInputHistoryLoadByThreadId = new Map<string, Promise<void>>()
   const loadedRequestUserInputHistoryThreadIds = new Set<string>()
   const respondingServerRequestKeys = new Set<string>()
@@ -2349,19 +2357,68 @@ export function useDesktopState() {
       nextMode,
     )
     saveSelectedCollaborationModeMap(selectedCollaborationModeByContext.value)
+    if (!isNewThreadContextId(contextId)) {
+      void queueThreadCollaborationPreferenceWrite(contextId, nextMode)
+    }
   }
 
-  function setSelectedCollaborationModeForThread(threadId: string, mode: CollaborationModeKind): void {
+  function setSelectedCollaborationModeForThread(
+    threadId: string,
+    mode: CollaborationModeKind,
+    options: { persist?: boolean } = {},
+  ): void {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return
     const nextMode = mode === 'plan' ? 'plan' : 'default'
     selectedCollaborationModeByContext.value = writeSelectedCollaborationModeForContext(
       selectedCollaborationModeByContext.value,
-      threadId,
+      normalizedThreadId,
       nextMode,
     )
-    if (threadId.trim() === selectedThreadId.value) {
+    if (normalizedThreadId === selectedThreadId.value) {
       selectedCollaborationMode.value = nextMode
     }
     saveSelectedCollaborationModeMap(selectedCollaborationModeByContext.value)
+    if (options.persist !== false) {
+      void queueThreadCollaborationPreferenceWrite(normalizedThreadId, nextMode)
+    }
+  }
+
+  function applyThreadCollaborationPreferences(preferences: ThreadCollaborationPreferences): void {
+    const next = createStringKeyedRecord<CollaborationModeKind>()
+    for (const [threadId, mode] of Object.entries(preferences.modes)) {
+      if (mode === 'plan') next[threadId] = 'plan'
+    }
+    selectedCollaborationModeByContext.value = next
+    selectedCollaborationMode.value = readSelectedCollaborationMode(next, selectedThreadId.value)
+    saveSelectedCollaborationModeMap(next)
+  }
+
+  async function queueThreadCollaborationPreferenceWrite(
+    threadId: string,
+    mode: CollaborationModeKind,
+  ): Promise<void> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return
+    const normalizedMode: CollaborationModeKind = mode === 'plan' ? 'plan' : 'default'
+    const previous = threadCollaborationPreferenceWriteChainById.get(normalizedThreadId) ?? Promise.resolve()
+    const run = previous
+      .catch(() => {})
+      .then(async () => {
+        await patchThreadCollaborationPreferences({ modes: { [normalizedThreadId]: normalizedMode } })
+      })
+      .catch((unknownError) => {
+        error.value = unknownError instanceof Error
+          ? unknownError.message
+          : 'Failed to save the thread collaboration preference'
+      })
+      .finally(() => {
+        if (threadCollaborationPreferenceWriteChainById.get(normalizedThreadId) === run) {
+          threadCollaborationPreferenceWriteChainById.delete(normalizedThreadId)
+        }
+      })
+    threadCollaborationPreferenceWriteChainById.set(normalizedThreadId, run)
+    await run
   }
 
   function setCodexRateLimit(nextSnapshot: UiRateLimitSnapshot | null): void {
@@ -2475,6 +2532,7 @@ export function useDesktopState() {
         pending.fileAttachments,
         pending.collaborationMode,
         serviceTierForSpeedMode(pending.speedMode, MODEL_FALLBACK_ID),
+        pending.collaborationModeDeveloperInstructions,
       )
 
       scheduleRateLimitRefresh()
@@ -2685,6 +2743,42 @@ export function useDesktopState() {
       selectedReasoningEffort.value = selectedPreference.reasoningEffort
     }
     hasLoadedThreadModelPreferences = true
+  }
+
+  async function loadThreadCollaborationPreferencesIfNeeded(force = false): Promise<void> {
+    if (hasLoadedThreadCollaborationPreferences && !force) return
+    if (threadCollaborationPreferencesLoadPromise) {
+      await threadCollaborationPreferencesLoadPromise
+      return
+    }
+
+    const load = (async () => {
+      try {
+        let preferences = await getThreadCollaborationPreferences()
+        if (!preferences.persisted) {
+          const migrationModes: Record<string, CollaborationModeKind> = {}
+          for (const [contextId, mode] of Object.entries(selectedCollaborationModeByContext.value)) {
+            if (!isNewThreadContextId(contextId) && !contextId.startsWith(NEW_THREAD_PROVIDER_MODEL_CONTEXT_PREFIX) && mode === 'plan') {
+              migrationModes[contextId] = 'plan'
+            }
+          }
+          preferences = (await patchThreadCollaborationPreferences({
+            initializeOnly: true,
+            modes: migrationModes,
+          })).preferences
+        }
+        applyThreadCollaborationPreferences(preferences)
+        hasLoadedThreadCollaborationPreferences = true
+      } catch {
+        // Keep the local cache usable while the supplementary preference endpoint is unavailable.
+      }
+    })().finally(() => {
+      if (threadCollaborationPreferencesLoadPromise === load) {
+        threadCollaborationPreferencesLoadPromise = null
+      }
+    })
+    threadCollaborationPreferencesLoadPromise = load
+    await load
   }
 
   async function loadNewChatDefaultsIfNeeded(): Promise<void> {
@@ -3043,18 +3137,6 @@ export function useDesktopState() {
       selectedModelIdByContext.value = nextSelectedModelMap
       selectedModelId.value = readProviderCompatibleSelectedModel(readModelIdForThread(selectedThreadId.value))
       saveSelectedModelMap(nextSelectedModelMap)
-    }
-    const nextSelectedCollaborationModeMap = pruneThreadContextStateMap(
-      selectedCollaborationModeByContext.value,
-      activeThreadIds,
-    )
-    if (nextSelectedCollaborationModeMap !== selectedCollaborationModeByContext.value) {
-      selectedCollaborationModeByContext.value = nextSelectedCollaborationModeMap
-      selectedCollaborationMode.value = readSelectedCollaborationMode(
-        nextSelectedCollaborationModeMap,
-        selectedThreadId.value,
-      )
-      saveSelectedCollaborationModeMap(nextSelectedCollaborationModeMap)
     }
     const nextReadState = pruneThreadStateMap(readStateByThreadId.value, activeThreadIds)
     if (nextReadState !== readStateByThreadId.value) {
@@ -6515,7 +6597,7 @@ export function useDesktopState() {
   }
 
   async function refreshAll(
-    options: { includeSelectedThreadMessages?: boolean; awaitAncillaryRefreshes?: boolean; providerChanged?: boolean; forceThreadRefresh?: boolean } = {},
+    options: { includeSelectedThreadMessages?: boolean; awaitAncillaryRefreshes?: boolean; providerChanged?: boolean; forceThreadRefresh?: boolean; forceThreadPreferenceRefresh?: boolean } = {},
   ) {
     error.value = ''
     codexCliMissingError.value = ''
@@ -6526,6 +6608,9 @@ export function useDesktopState() {
       await refreshCodexRuntimeConfig()
       await loadPersistedQueueStateIfNeeded()
       await loadThreadModelPreferencesIfNeeded()
+      await loadThreadCollaborationPreferencesIfNeeded(
+        options.forceThreadPreferenceRefresh === true || options.forceThreadRefresh === true,
+      )
       await loadNewChatDefaultsIfNeeded()
       await loadThreads({ force: options.forceThreadRefresh === true })
       if (includeSelectedThreadMessages) {
@@ -6618,6 +6703,7 @@ export function useDesktopState() {
     }
 
     removeArchivedThreadFromLoadedLists(normalizedThreadId)
+    setSelectedCollaborationModeForThread(normalizedThreadId, 'default', { persist: false })
     if (selectedThreadId.value === normalizedThreadId) {
       setSelectedThreadId(nextSelectedThreadId)
       if (nextSelectedThreadId) {
@@ -6815,6 +6901,7 @@ export function useDesktopState() {
     queueInsertIndex?: number,
     collaborationModeOverride?: CollaborationModeKind,
     speedModeOverride?: SpeedMode,
+    collaborationModeDeveloperInstructions?: string,
   ): Promise<void> {
     if (isUpdatingSpeedMode.value) return
 
@@ -6850,6 +6937,9 @@ export function useDesktopState() {
         speedMode,
         model: readModelIdForThread(threadId),
         reasoningEffort: readReasoningEffortForThread(threadId) || undefined,
+        ...(collaborationModeDeveloperInstructions?.trim()
+          ? { collaborationModeDeveloperInstructions: collaborationModeDeveloperInstructions.trim() }
+          : {}),
       })
       queuedMessagesByThreadId.value = {
         ...queuedMessagesByThreadId.value,
@@ -6874,6 +6964,7 @@ export function useDesktopState() {
         fileAttachments,
         collaborationModeOverride,
         speedMode,
+        collaborationModeDeveloperInstructions,
       ).catch((unknownError) => {
         optimisticTurnStartedAtByThreadId.delete(threadId)
         const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
@@ -6919,6 +7010,7 @@ export function useDesktopState() {
         fileAttachments,
         collaborationModeOverride,
         speedMode,
+        collaborationModeDeveloperInstructions,
       )
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false
@@ -6939,6 +7031,8 @@ export function useDesktopState() {
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
     collaborationModeOverride?: CollaborationModeKind,
+    collaborationModeDeveloperInstructions?: string,
+    persistCollaborationModeOverride?: boolean,
   ): Promise<string> {
     if (isUpdatingSpeedMode.value) return ''
 
@@ -6951,6 +7045,8 @@ export function useDesktopState() {
       : collaborationModeOverride === 'default'
         ? 'default'
         : selectedCollaborationMode.value
+    const shouldPersistCollaborationMode = persistCollaborationModeOverride
+      ?? !collaborationModeDeveloperInstructions?.trim()
     const speedMode = selectedSpeedMode.value
     if (!nextText && imageUrls.length === 0 && fileAttachments.length === 0) return ''
 
@@ -6972,6 +7068,7 @@ export function useDesktopState() {
           fileAttachments,
           selectedMode,
           serviceTierForSpeedMode(speedMode, selectedModel),
+          collaborationModeDeveloperInstructions,
         )
         threadId = startedThread.threadId
         startedTurnId = startedThread.turnId
@@ -6985,7 +7082,11 @@ export function useDesktopState() {
           })
           void queueThreadModelPreferenceWrite(threadId)
         }
-        setSelectedCollaborationModeForThread(threadId, selectedMode)
+        setSelectedCollaborationModeForThread(
+          threadId,
+          shouldPersistCollaborationMode ? selectedMode : 'default',
+          { persist: shouldPersistCollaborationMode && selectedMode === 'plan' },
+        )
       } catch (unknownError) {
         if (selectedModel && selectedModel !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
           await applyFallbackModelSelection()
@@ -7000,6 +7101,7 @@ export function useDesktopState() {
             fileAttachments,
             selectedMode,
             serviceTierForSpeedMode(speedMode, MODEL_FALLBACK_ID),
+            collaborationModeDeveloperInstructions,
           )
           threadId = fallbackThread.threadId
           startedTurnId = fallbackThread.turnId
@@ -7013,7 +7115,11 @@ export function useDesktopState() {
             })
             void queueThreadModelPreferenceWrite(threadId)
           }
-          setSelectedCollaborationModeForThread(threadId, selectedMode)
+          setSelectedCollaborationModeForThread(
+            threadId,
+            shouldPersistCollaborationMode ? selectedMode : 'default',
+            { persist: shouldPersistCollaborationMode && selectedMode === 'plan' },
+          )
         } else {
           throw unknownError
         }
@@ -7030,6 +7136,9 @@ export function useDesktopState() {
         effort: selectedEffort,
         collaborationMode: selectedMode,
         speedMode,
+        ...(collaborationModeDeveloperInstructions?.trim()
+          ? { collaborationModeDeveloperInstructions: collaborationModeDeveloperInstructions.trim() }
+          : {}),
         fallbackRetried: false,
       })
       blockInterruptUntilThreadIsPersisted(threadId)
@@ -7100,6 +7209,7 @@ export function useDesktopState() {
     fileAttachments: FileAttachment[] = [],
     collaborationModeOverride?: CollaborationModeKind,
     speedModeOverride?: SpeedMode,
+    collaborationModeDeveloperInstructions?: string,
   ): Promise<void> {
     const reasoningEffort = selectedReasoningEffort.value
     const speedMode = speedModeOverride ?? selectedSpeedMode.value
@@ -7128,6 +7238,9 @@ export function useDesktopState() {
       effort: reasoningEffort,
       collaborationMode,
       speedMode,
+      ...(collaborationModeDeveloperInstructions?.trim()
+        ? { collaborationModeDeveloperInstructions: collaborationModeDeveloperInstructions.trim() }
+        : {}),
       fallbackRetried: false,
     })
 
@@ -7167,6 +7280,7 @@ export function useDesktopState() {
           fileAttachments,
           collaborationMode,
           serviceTierForSpeedMode(speedMode, modelId),
+          collaborationModeDeveloperInstructions,
         )
       } catch (unknownError) {
         if (modelId && modelId !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
@@ -7179,6 +7293,9 @@ export function useDesktopState() {
             effort: reasoningEffort,
             collaborationMode,
             speedMode,
+            ...(collaborationModeDeveloperInstructions?.trim()
+              ? { collaborationModeDeveloperInstructions: collaborationModeDeveloperInstructions.trim() }
+              : {}),
             fallbackRetried: true,
           })
           startedTurnId = await startThreadTurn(
@@ -7191,6 +7308,7 @@ export function useDesktopState() {
             fileAttachments,
             collaborationMode,
             serviceTierForSpeedMode(speedMode, MODEL_FALLBACK_ID),
+            collaborationModeDeveloperInstructions,
           )
         } else {
           throw unknownError
@@ -7243,6 +7361,7 @@ export function useDesktopState() {
           && previous.speedMode === message.speedMode
           && previous.model === message.model
           && previous.reasoningEffort === message.reasoningEffort
+          && previous.collaborationModeDeveloperInstructions === message.collaborationModeDeveloperInstructions
           && areStringArraysEqual(previous.imageUrls, message.imageUrls)
           && areStringArraysEqual(previous.skills.map((skill) => `${skill.name}\u0000${skill.path}`), message.skills.map((skill) => `${skill.name}\u0000${skill.path}`))
           && areStringArraysEqual(previous.fileAttachments.map((file) => `${file.label}\u0000${file.path}\u0000${file.fsPath}`), message.fileAttachments.map((file) => `${file.label}\u0000${file.path}\u0000${file.fsPath}`))
@@ -8355,7 +8474,17 @@ export function useDesktopState() {
     if (!msg || msg.deliveryState === 'claimed') return
     removeQueuedMessage(messageId)
     setSelectedCollaborationMode(msg.collaborationMode)
-    void sendMessageToSelectedThread(msg.text, msg.imageUrls, msg.skills, 'steer', msg.fileAttachments, undefined, msg.collaborationMode, msg.speedMode)
+    void sendMessageToSelectedThread(
+      msg.text,
+      msg.imageUrls,
+      msg.skills,
+      'steer',
+      msg.fileAttachments,
+      undefined,
+      msg.collaborationMode,
+      msg.speedMode,
+      msg.collaborationModeDeveloperInstructions,
+    )
   }
 
   function primeSelectedThread(threadId: string, options: { persist?: boolean } = {}): void {
