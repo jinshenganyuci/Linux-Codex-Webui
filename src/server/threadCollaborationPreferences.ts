@@ -217,6 +217,13 @@ async function mutateThreadCollaborationPreferences(
       if (patch.initializeOnly === true && current.persisted) {
         return { applied: false, preferences: toPublicPreferences(current.state, true) }
       }
+      if (
+        patch.initializeOnly === true
+        && !current.persisted
+        && Object.keys(patch.modes ?? {}).length === 0
+      ) {
+        return { applied: false, preferences: toPublicPreferences(current.state, false) }
+      }
       const nextModes = { ...current.state.modes }
       for (const [threadId, mode] of Object.entries(patch.modes ?? {})) {
         if (mode === 'plan') {

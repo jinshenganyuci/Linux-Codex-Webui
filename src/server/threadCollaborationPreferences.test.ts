@@ -48,6 +48,15 @@ describe('thread collaboration preferences', () => {
     expect(ignored.preferences.modes).toEqual({ 'thread-a': 'plan' })
   })
 
+  it('does not let an empty browser cache claim migration ownership', async () => {
+    const result = await patchThreadCollaborationPreferences({ initializeOnly: true, modes: {} })
+    expect(result).toMatchObject({
+      applied: false,
+      preferences: { persisted: false, revision: 0, modes: {} },
+    })
+    await expect(stat(getThreadCollaborationPreferencesPath())).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('serializes concurrent thread changes and treats default as removal', async () => {
     await Promise.all([
       patchThreadCollaborationPreferences({ modes: { 'thread-a': 'plan' } }),

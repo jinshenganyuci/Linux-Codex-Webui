@@ -2762,10 +2762,12 @@ export function useDesktopState() {
               migrationModes[contextId] = 'plan'
             }
           }
-          preferences = (await patchThreadCollaborationPreferences({
-            initializeOnly: true,
-            modes: migrationModes,
-          })).preferences
+          if (Object.keys(migrationModes).length > 0) {
+            preferences = (await patchThreadCollaborationPreferences({
+              initializeOnly: true,
+              modes: migrationModes,
+            })).preferences
+          }
         }
         applyThreadCollaborationPreferences(preferences)
         hasLoadedThreadCollaborationPreferences = true

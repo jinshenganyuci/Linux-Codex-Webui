@@ -766,6 +766,23 @@ describe('collaboration mode selection', () => {
     expect(state.selectedCollaborationMode.value).toBe('plan')
   })
 
+  it('leaves backend migration open when this browser has no saved Plan threads', async () => {
+    installTestWindow({ 'codex-web-local.selected-thread-id.v1': 'thread-a' })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getThreadCollaborationPreferences.mockResolvedValue({
+      version: 1,
+      revision: 0,
+      persisted: false,
+      modes: {},
+    })
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+
+    expect(gatewayMocks.patchThreadCollaborationPreferences).not.toHaveBeenCalled()
+    expect(state.selectedCollaborationMode.value).toBe('default')
+  })
+
   it('uses backend state as authoritative across browsers', async () => {
     installTestWindow({
       'codex-web-local.selected-thread-id.v1': 'thread-a',
