@@ -10,7 +10,7 @@ import type {
 export const MAX_PLAN_SUMMARIES_PER_THREAD = 128
 export const MAX_PLAN_SUMMARIES_TOTAL = 2_048
 const MAX_PLAN_STEPS = 64
-const MAX_PLAN_TEXT_LENGTH = 32_768
+export const MAX_PLAN_SUMMARY_TEXT_LENGTH = 32_768
 const MAX_PLAN_SEGMENT_LENGTH = 4_096
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -58,7 +58,7 @@ function buildPlanText(explanation: string, steps: UiPlanStep[]): string {
     const marker = step.status === 'completed' ? 'x' : step.status === 'inProgress' ? '~' : ' '
     lines.push(`- [${marker}] ${step.step}`)
   }
-  return lines.join('\n').trim().slice(0, MAX_PLAN_TEXT_LENGTH)
+  return lines.join('\n').trim().slice(0, MAX_PLAN_SUMMARY_TEXT_LENGTH)
 }
 
 export function normalizePlanSummary(value: unknown): UiPlanSummary | null {
@@ -73,12 +73,19 @@ export function normalizePlanSummary(value: unknown): UiPlanSummary | null {
   const createdAtIso = readIso(record.createdAtIso, nowIso)
   const updatedAtIso = readIso(record.updatedAtIso, createdAtIso)
   const explanation = readTrimmedString(record.explanation)
-  const steps = (Array.isArray(record.steps) ? record.steps : [])
-    .map(normalizeStep)
-    .filter((step): step is UiPlanStep => step !== null)
-    .slice(0, MAX_PLAN_STEPS)
-  const suppliedText = readTrimmedString(record.text, MAX_PLAN_TEXT_LENGTH)
-  const text = suppliedText || buildPlanText(explanation, steps)
+  let remainingStepCharacters = Math.max(0, MAX_PLAN_SUMMARY_TEXT_LENGTH - explanation.length)
+  const steps: UiPlanStep[] = []
+  for (const rawStep of (Array.isArray(record.steps) ? record.steps : []).slice(0, MAX_PLAN_STEPS)) {
+    const step = normalizeStep(rawStep)
+    if (!step || remainingStepCharacters === 0) continue
+    const boundedStep = step.step.slice(0, remainingStepCharacters)
+    if (!boundedStep) continue
+    steps.push({ ...step, step: boundedStep })
+    remainingStepCharacters -= boundedStep.length
+  }
+  const suppliedText = readTrimmedString(record.text, MAX_PLAN_SUMMARY_TEXT_LENGTH)
+  const structuredText = buildPlanText(explanation, steps)
+  const text = structuredText || suppliedText
   if (!text && steps.length === 0) return null
 
   return {
@@ -172,6 +179,9 @@ function summaryMessage(summary: UiPlanSummary, turnIndex?: number): UiMessage {
 export function mergePlanSummaryMessages(messages: UiMessage[], summaries: UiPlanSummary[]): UiMessage[] {
   if (summaries.length === 0 || messages.length === 0) return messages
   const next = [...messages]
+  const loadedTurnIds = new Set(
+    messages.map((message) => message.turnId?.trim() ?? '').filter(Boolean),
+  )
   const existingSummaryTurnIds = new Set(
     messages
       .filter((message) => message.messageType === 'plan.summary')
@@ -180,6 +190,7 @@ export function mergePlanSummaryMessages(messages: UiMessage[], summaries: UiPla
   )
 
   for (const summary of [...summaries].sort((first, second) => first.createdAtIso.localeCompare(second.createdAtIso))) {
+    if (!loadedTurnIds.has(summary.turnId)) continue
     const nativePlanIndex = next.findIndex((message) => (
       message.messageType === 'plan' && message.turnId?.trim() === summary.turnId
     ))

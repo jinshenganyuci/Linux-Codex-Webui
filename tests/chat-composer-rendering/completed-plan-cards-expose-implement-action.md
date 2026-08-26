@@ -5,7 +5,7 @@ Completed plan cards show an `Implement plan` button that turns plan mode off an
 
 #### Prerequisites/Setup
 1. Dev server running at `http://127.0.0.1:4173`
-2. An existing thread contains a completed persisted plan card
+2. An existing thread contains a Codex-native persisted `item.type=plan` card (not a terminal `plan.summary` generated from `update_plan`)
 3. The thread composer is available for follow-up messages
 
 #### Steps
@@ -18,6 +18,7 @@ Completed plan cards show an `Implement plan` button that turns plan mode off an
 
 #### Expected Results
 - Completed plan cards render the `Implement plan` action even when the plan body is structured as headings/lists instead of checkbox steps
+- Terminal `plan.summary` cards never render `Implement plan`; they describe work already attempted or completed
 - Completed plan cards remain compact by default while keeping the action available after expansion
 - Clicking the button sends a simple implementation follow-up message instead of copying the whole plan body into chat
 - The next turn runs in default mode rather than plan mode

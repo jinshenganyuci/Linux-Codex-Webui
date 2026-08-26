@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { UiMessage, UiPlanSummary } from './types/codex'
 import {
   MAX_PLAN_SUMMARIES_PER_THREAD,
+  MAX_PLAN_SUMMARY_TEXT_LENGTH,
   mergePlanSummaryMessages,
   normalizePlanSummary,
   normalizePlanSummaryHistoryState,
@@ -46,6 +47,22 @@ describe('plan summary history normalization', () => {
     expect(rows[0]?.turnId).toBe('turn-1')
     expect(rows.at(-1)).toMatchObject({ turnId: 'turn-128', lifecycle: 'failed', revision: 3 })
     expect(normalizePlanSummaryHistoryState({ threads: { 'thread-a': rows } })).toEqual({ 'thread-a': rows })
+  })
+
+  it('bounds aggregate structured plan text instead of multiplying the per-step limit', () => {
+    const normalized = normalizePlanSummary({
+      ...summary('turn-large'),
+      explanation: 'e'.repeat(4_096),
+      steps: Array.from({ length: 64 }, (_, index) => ({
+        step: `${index}:${'x'.repeat(4_096)}`,
+        status: 'pending',
+      })),
+    })
+    expect(normalized).not.toBeNull()
+    const structuredCharacters = (normalized?.explanation?.length ?? 0)
+      + (normalized?.steps.reduce((sum, step) => sum + step.step.length, 0) ?? 0)
+    expect(structuredCharacters).toBeLessThanOrEqual(MAX_PLAN_SUMMARY_TEXT_LENGTH)
+    expect(normalized?.text.length).toBeLessThanOrEqual(MAX_PLAN_SUMMARY_TEXT_LENGTH)
   })
 })
 
