@@ -55,6 +55,12 @@ import {
 } from './requestUserInputHistory.js'
 import { buildRequestUserInputSummary } from '../requestUserInputHistory.js'
 import {
+  deletePlanSummaryHistory,
+  readPlanSummaryHistory,
+  writePlanSummary,
+} from './planSummaryHistory.js'
+import { planSummaryFromSnapshot } from '../planSummaryHistory.js'
+import {
   normalizeSidebarPreferencesPatch,
   patchSidebarPreferences,
   readSidebarPreferences,
@@ -8406,10 +8412,31 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const { appServer, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor, threadRuntimeState } = getSharedBridgeState()
   const threadTitleGenerator = new ThreadTitleGenerator()
   const activePlanSnapshots = new ActivePlanSnapshotStore()
+  const scheduledPlanSummaryRevisionByTurnId = new Map<string, number>()
   const notificationStreamId = randomUUID()
   let notificationSequence = 0
   const notificationReplayBuffer: BridgeNotification[] = []
   const notificationSubscribers = new Set<(value: BridgeNotification) => void>()
+  const scheduleTerminalPlanPersistence = (snapshot: ActivePlanSnapshot | null) => {
+    if (!snapshot || snapshot.lifecycle === 'live') return
+    const previousRevision = scheduledPlanSummaryRevisionByTurnId.get(snapshot.turnId) ?? -1
+    if (previousRevision >= snapshot.revision) return
+    scheduledPlanSummaryRevisionByTurnId.delete(snapshot.turnId)
+    scheduledPlanSummaryRevisionByTurnId.set(snapshot.turnId, snapshot.revision)
+    while (scheduledPlanSummaryRevisionByTurnId.size > 2_048) {
+      const oldestTurnId = scheduledPlanSummaryRevisionByTurnId.keys().next().value
+      if (typeof oldestTurnId !== 'string') break
+      scheduledPlanSummaryRevisionByTurnId.delete(oldestTurnId)
+    }
+    const summary = planSummaryFromSnapshot(snapshot)
+    if (!summary) return
+    void writePlanSummary(summary).catch((error) => {
+      if (scheduledPlanSummaryRevisionByTurnId.get(snapshot.turnId) === snapshot.revision) {
+        scheduledPlanSummaryRevisionByTurnId.delete(snapshot.turnId)
+      }
+      console.warn('[plan-summary-history] Failed to persist a terminal plan:', getErrorMessage(error, 'Unknown error'))
+    })
+  }
   const publishNotification = (notification: { method: string; params: unknown; generation?: number }) => {
     const atIso = new Date().toISOString()
     activePlanSnapshots.applyNotification(
@@ -8418,6 +8445,21 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       notification.generation ?? 0,
       atIso,
     )
+    if (notification.method === 'turn/completed') {
+      const params = asRecord(notification.params)
+      const turnId = params ? readStreamTurnId(params) : ''
+      if (turnId) scheduleTerminalPlanPersistence(activePlanSnapshots.getSnapshot(turnId))
+    } else if (notification.method === 'turn/started') {
+      const threadId = readNonEmptyString(asRecord(notification.params)?.threadId)
+        || readNonEmptyString(asRecord(asRecord(notification.params)?.turn)?.threadId)
+      if (threadId) {
+        for (const snapshot of activePlanSnapshots.getSnapshots()) {
+          if (snapshot.threadId === threadId && snapshot.lifecycle !== 'live') {
+            scheduleTerminalPlanPersistence(snapshot)
+          }
+        }
+      }
+    }
     const frame: BridgeNotification = {
       ...notification,
       atIso,
@@ -8726,6 +8768,38 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             return
           }
           await deleteRequestUserInputHistory(threadId)
+          setJson(res, 200, { ok: true })
+          return
+        }
+
+        setJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+
+      if (url.pathname === '/codex-api/plan-summary-history') {
+        if (req.method === 'GET') {
+          const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+          if (!threadId) {
+            setJson(res, 400, { error: 'Missing threadId' })
+            return
+          }
+          setJson(res, 200, { data: await readPlanSummaryHistory(threadId) })
+          return
+        }
+
+        if (req.method === 'POST') {
+          const saved = await writePlanSummary(await readJsonBody(req))
+          setJson(res, 200, { data: saved })
+          return
+        }
+
+        if (req.method === 'DELETE') {
+          const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+          if (!threadId) {
+            setJson(res, 400, { error: 'Missing threadId' })
+            return
+          }
+          await deletePlanSummaryHistory(threadId)
           setJson(res, 200, { ok: true })
           return
         }

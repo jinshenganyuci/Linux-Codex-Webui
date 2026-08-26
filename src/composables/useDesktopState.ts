@@ -4287,6 +4287,7 @@ export function useDesktopState() {
     if (!text.trim() && !explanation && steps.length === 0) return null
     const revisionValue = readNumber(record?.revision)
     const generationValue = readNumber(record?.generation)
+    const updatedAtIso = readString(record?.updatedAtIso) || new Date().toISOString()
     return {
       threadId,
       turnId,
@@ -4295,7 +4296,8 @@ export function useDesktopState() {
       explanation: explanation || undefined,
       steps,
       revision: typeof revisionValue === 'number' ? Math.max(0, Math.trunc(revisionValue)) : 0,
-      updatedAtIso: readString(record?.updatedAtIso) || new Date().toISOString(),
+      createdAtIso: readString(record?.createdAtIso) || updatedAtIso,
+      updatedAtIso,
       generation: typeof generationValue === 'number' ? Math.max(0, Math.trunc(generationValue)) : 0,
       lifecycle,
     }

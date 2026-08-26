@@ -82,6 +82,8 @@ import type {
   UiRateLimitWindow,
   UiRequestUserInputHistoryState,
   UiRequestUserInputSummary,
+  UiPlanSummary,
+  UiPlanSummaryHistoryState,
   UiThreadAutomation,
   UiThreadAutomationStatus,
   UiAgentProgressEvent,
@@ -99,6 +101,10 @@ import {
   normalizeRequestUserInputHistoryState,
   normalizeRequestUserInputSummary,
 } from '../requestUserInputHistory.js'
+import {
+  normalizePlanSummary,
+  normalizePlanSummaryHistoryState,
+} from '../planSummaryHistory.js'
 
 export type {
   ThreadHistoryDetail,
@@ -2324,6 +2330,7 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
   }
   await Promise.allSettled([
     deleteRequestUserInputHistory(threadId),
+    deletePlanSummaryHistory(threadId),
     deleteThreadCollaborationPreference(threadId),
   ])
 }
@@ -3114,6 +3121,43 @@ export async function persistRequestUserInputSummary(
   const saved = normalizeRequestUserInputSummary(asRecord(payload)?.data)
   if (!saved) throw new Error('Planning question history response was invalid')
   return saved
+}
+
+export async function getPlanSummaryHistory(threadId: string): Promise<UiPlanSummary[]> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return []
+  const response = await fetchWithTimeout(`/codex-api/plan-summary-history?threadId=${encodeURIComponent(normalizedThreadId)}`)
+  const payload = await response.json().catch(() => null) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to load plan summary history (${response.status})`))
+  }
+  const state: UiPlanSummaryHistoryState = normalizePlanSummaryHistoryState(asRecord(payload)?.data)
+  return state[normalizedThreadId] ?? []
+}
+
+export async function persistPlanSummary(summary: UiPlanSummary): Promise<UiPlanSummary> {
+  const response = await fetchWithTimeout('/codex-api/plan-summary-history', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(summary),
+  })
+  const payload = await response.json().catch(() => null) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to save plan summary history (${response.status})`))
+  }
+  const saved = normalizePlanSummary(asRecord(payload)?.data)
+  if (!saved) throw new Error('Plan summary history response was invalid')
+  return saved
+}
+
+async function deletePlanSummaryHistory(threadId: string): Promise<void> {
+  const response = await fetchWithTimeout(`/codex-api/plan-summary-history?threadId=${encodeURIComponent(threadId)}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as unknown
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to delete plan summary history (${response.status})`))
+  }
 }
 
 async function deleteRequestUserInputHistory(threadId: string): Promise<void> {

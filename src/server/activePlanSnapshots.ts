@@ -93,6 +93,7 @@ function cloneSnapshot(snapshot: StoredActivePlanSnapshot): ActivePlanSnapshot {
     explanation: snapshot.explanation,
     steps: snapshot.steps.map((step) => ({ ...step })),
     revision: snapshot.revision,
+    createdAtIso: snapshot.createdAtIso,
     updatedAtIso: snapshot.updatedAtIso,
     generation: snapshot.generation,
     lifecycle: snapshot.lifecycle,
@@ -155,6 +156,12 @@ export class ActivePlanSnapshotStore {
       .map(cloneSnapshot)
   }
 
+  getSnapshot(turnId: string): ActivePlanSnapshot | null {
+    this.prune(this.now())
+    const snapshot = this.snapshotsByTurnId.get(turnId)
+    return snapshot ? cloneSnapshot(snapshot) : null
+  }
+
   private applyFullPlan(
     threadId: string,
     turnId: string,
@@ -197,6 +204,7 @@ export class ActivePlanSnapshotStore {
       explanation: explanation || undefined,
       steps,
       revision: (previous?.revision ?? 0) + 1,
+      createdAtIso: previous?.createdAtIso ?? atIso ?? new Date(nowMs).toISOString(),
       updatedAtIso: atIso || new Date(nowMs).toISOString(),
       generation,
       lifecycle: 'live',
@@ -226,6 +234,7 @@ export class ActivePlanSnapshotStore {
       explanation: previous?.explanation,
       steps: previous?.steps.map((step) => ({ ...step })) ?? [],
       revision: (previous?.revision ?? 0) + 1,
+      createdAtIso: previous?.createdAtIso ?? atIso ?? new Date(nowMs).toISOString(),
       updatedAtIso: atIso || new Date(nowMs).toISOString(),
       generation,
       lifecycle: 'live',

@@ -1,4 +1,7 @@
 import { createServer } from 'node:http'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createCodexBridgeMiddleware } from './codexAppServerBridge'
 
@@ -115,6 +118,97 @@ describe('active plan snapshot bridge recovery', () => {
         server.close((error) => error ? reject(error) : resolve())
       })
       middleware.dispose()
+    }
+  })
+
+  it('persists a terminal snapshot and exposes it through the summary history API', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-plan-summary-bridge-'))
+    const previousCodexHome = process.env.CODEX_HOME
+    process.env.CODEX_HOME = codexHome
+    let notificationListener: ((value: { method: string; params: unknown; generation?: number }) => void) | null = null
+    const noOp = () => undefined
+    previousSharedBridge = globalScope[sharedBridgeKey]
+    globalScope[sharedBridgeKey] = {
+      version: 'experimental-api-v4-agent-progress',
+      appServer: {
+        rpc: async () => ({}),
+        onNotification: (listener: typeof notificationListener) => {
+          notificationListener = listener
+          return noOp
+        },
+        dispose: noOp,
+        disposeWhenIdle: async () => undefined,
+      },
+      terminalManager: { subscribe: () => noOp, dispose: noOp },
+      methodCatalog: {},
+      telegramBridge: {
+        configureAllowedUserIds: noOp,
+        configureToken: noOp,
+        start: noOp,
+        stop: noOp,
+      },
+      backendQueueProcessor: { dispose: noOp },
+      threadRuntimeState: { dispose: async () => undefined },
+    }
+
+    const middleware = createCodexBridgeMiddleware()
+    const server = createServer((req, res) => {
+      void middleware(req, res, () => {
+        res.statusCode = 404
+        res.end()
+      })
+    })
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject)
+        server.listen(0, '127.0.0.1', () => {
+          server.off('error', reject)
+          resolve()
+        })
+      })
+      notificationListener!({
+        method: 'turn/plan/updated',
+        generation: 7,
+        params: {
+          threadId: 'thread-a',
+          turnId: 'turn-a',
+          explanation: 'Persist at completion',
+          plan: [{ step: 'Ship', status: 'completed' }],
+        },
+      })
+      notificationListener!({
+        method: 'turn/completed',
+        generation: 7,
+        params: {
+          threadId: 'thread-a',
+          turn: { id: 'turn-a', status: 'completed' },
+        },
+      })
+
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('test server did not expose a TCP port')
+      const response = await fetch(`http://127.0.0.1:${address.port}/codex-api/plan-summary-history?threadId=thread-a`)
+      expect(response.status).toBe(200)
+      await expect(response.json()).resolves.toMatchObject({
+        data: {
+          'thread-a': [{
+            id: 'plan-summary:turn-a',
+            turnId: 'turn-a',
+            lifecycle: 'completed',
+            explanation: 'Persist at completion',
+            steps: [{ step: 'Ship', status: 'completed' }],
+          }],
+        },
+      })
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve())
+      })
+      middleware.dispose()
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = previousCodexHome
+      await rm(codexHome, { recursive: true, force: true })
     }
   })
 })

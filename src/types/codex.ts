@@ -266,10 +266,29 @@ export type ActivePlanSnapshot = {
   explanation?: string
   steps: UiPlanStep[]
   revision: number
+  createdAtIso: string
   updatedAtIso: string
   generation: number
   lifecycle: UiPlanLifecycle
 }
+
+export type UiTerminalPlanLifecycle = Exclude<UiPlanLifecycle, 'live'>
+
+export type UiPlanSummary = {
+  id: string
+  threadId: string
+  turnId: string
+  messageId: string
+  text: string
+  explanation?: string
+  steps: UiPlanStep[]
+  revision: number
+  lifecycle: UiTerminalPlanLifecycle
+  createdAtIso: string
+  updatedAtIso: string
+}
+
+export type UiPlanSummaryHistoryState = Record<string, UiPlanSummary[]>
 
 export type UiMessage = {
   id: string
