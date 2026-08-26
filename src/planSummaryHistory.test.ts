@@ -97,7 +97,10 @@ describe('mergePlanSummaryMessages', () => {
       messageType: 'plan',
       turnId: 'turn-a',
     }
-    expect(mergePlanSummaryMessages([...messages, nativePlan], [summary('turn-a')]))
-      .not.toContainEqual(expect.objectContaining({ messageType: 'plan.summary' }))
+    const merged = mergePlanSummaryMessages([...messages, nativePlan], [summary('turn-a')])
+    expect(merged).not.toContainEqual(expect.objectContaining({ messageType: 'plan.summary' }))
+    expect(merged.find((message) => message.id === 'native-plan')).toMatchObject({
+      plan: { lifecycle: 'completed', isStreaming: false },
+    })
   })
 })

@@ -24,6 +24,7 @@ import {
   getThreadModelPreferences,
   getThreadCollaborationPreferences,
   getRequestUserInputHistory,
+  getPlanSummaryHistory,
   getBackgroundThreadListLimit,
   interruptThreadTurn,
   pickCodexRateLimitSnapshot,
@@ -82,6 +83,8 @@ import type {
   UiPlanData,
   UiPlanLifecycle,
   UiPlanStep,
+  UiPlanSummary,
+  UiTerminalPlanLifecycle,
   UiProjectGroup,
   UiRateLimitSnapshot,
   UiRequestUserInputSummary,
@@ -98,6 +101,12 @@ import {
   mergeRequestUserInputSummaryMessages,
   upsertRequestUserInputSummary,
 } from '../requestUserInputHistory'
+import {
+  mergePlanSummaryMessages,
+  normalizePlanSummary,
+  planSummaryFromSnapshot,
+  upsertPlanSummary,
+} from '../planSummaryHistory'
 import { getPathParent, isProjectlessChatPath, normalizePathForUi, toProjectName } from '../pathUtils.js'
 import {
   collectThreadRuntimeStateIds,
@@ -159,7 +168,7 @@ const TURN_START_FOLLOW_UP_SYNC_DELAY_MS = 3000
 const RECENT_THREAD_MESSAGE_LOAD_REUSE_MS = 2000
 const MAX_CACHED_THREAD_HISTORIES = 20
 const MAX_RECENT_PAGINATED_RECONCILIATIONS = 100
-const MAX_LIVE_PLAN_MESSAGES_PER_THREAD = 64
+const MAX_LIVE_PLAN_MESSAGES_PER_THREAD = 1
 const RECENT_AGENT_PROGRESS_LOAD_REUSE_MS = 30_000
 const AGENT_PROGRESS_RETRY_BASE_DELAY_MS = 5_000
 const AGENT_PROGRESS_RETRY_MAX_DELAY_MS = 60_000
@@ -868,6 +877,38 @@ function mergeMessages(
   const merged = [...mergedFromPrevious, ...appended]
 
   return areMessageArraysEqual(previous, merged) ? previous : merged
+}
+
+function mergeLivePlanMessagesIntoTimeline(messages: UiMessage[], livePlans: UiMessage[]): UiMessage[] {
+  if (livePlans.length === 0) return messages
+  const next = [...messages]
+  for (const livePlan of livePlans) {
+    const identity = messageIdentityKey(livePlan)
+    if (next.some((message) => messageIdentityKey(message) === identity)) continue
+    const turnId = livePlan.turnId?.trim() ?? ''
+    const sameTurnIndexes = turnId
+      ? next
+        .map((message, index) => message.turnId?.trim() === turnId ? index : -1)
+        .filter((index) => index >= 0)
+      : []
+    if (sameTurnIndexes.length === 0) {
+      next.push(livePlan)
+      continue
+    }
+
+    const createdAtMs = Date.parse(livePlan.timestampIso ?? '')
+    let insertAt = sameTurnIndexes[sameTurnIndexes.length - 1] + 1
+    if (Number.isFinite(createdAtMs)) {
+      const laterIndex = sameTurnIndexes.find((index) => {
+        const timestampMs = Date.parse(next[index]?.timestampIso ?? '')
+        return Number.isFinite(timestampMs) && timestampMs > createdAtMs
+      })
+      if (laterIndex !== undefined) insertAt = laterIndex
+    }
+    const turnIndex = livePlan.turnIndex ?? next[sameTurnIndexes[0]]?.turnIndex
+    next.splice(insertAt, 0, typeof turnIndex === 'number' ? { ...livePlan, turnIndex } : livePlan)
+  }
+  return next
 }
 
 function areUiFileChangesEqual(first?: UiFileChange[], second?: UiFileChange[]): boolean {
@@ -1604,6 +1645,7 @@ export function useDesktopState() {
   const liveCommandsByThreadId = ref<Record<string, UiMessage[]>>({})
   const liveFileChangeMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
   const requestUserInputSummariesByThreadId = ref<Record<string, UiRequestUserInputSummary[]>>({})
+  const planSummariesByThreadId = ref<Record<string, UiPlanSummary[]>>({})
   const agentProgressByThreadId = ref<Record<string, UiTurnProgress>>({})
   const notificationConnectionState = ref<UiNotificationConnectionState>('connecting')
   const inProgressById = ref<Record<string, boolean>>({})
@@ -1823,6 +1865,8 @@ export function useDesktopState() {
   const threadCollaborationPreferenceWriteChainById = new Map<string, Promise<void>>()
   const requestUserInputHistoryLoadByThreadId = new Map<string, Promise<void>>()
   const loadedRequestUserInputHistoryThreadIds = new Set<string>()
+  const planSummaryHistoryLoadByThreadId = new Map<string, Promise<void>>()
+  const loadedPlanSummaryHistoryThreadIds = new Set<string>()
   const respondingServerRequestKeys = new Set<string>()
 
 
@@ -1985,6 +2029,67 @@ export function useDesktopState() {
     await load
   }
 
+  function setPlanSummariesForThread(threadId: string, summaries: UiPlanSummary[]): void {
+    planSummariesByThreadId.value = summaries.length > 0
+      ? { ...planSummariesByThreadId.value, [threadId]: summaries }
+      : omitKey(planSummariesByThreadId.value, threadId)
+  }
+
+  function upsertPlanSummaryForThread(summary: UiPlanSummary): void {
+    const current = planSummariesByThreadId.value[summary.threadId] ?? []
+    const existing = current.find((entry) => entry.turnId === summary.turnId)
+    if (
+      existing
+      && (
+        existing.revision > summary.revision
+        || (
+          existing.revision === summary.revision
+          && existing.updatedAtIso > summary.updatedAtIso
+        )
+      )
+    ) return
+    setPlanSummariesForThread(summary.threadId, upsertPlanSummary(current, summary))
+  }
+
+  async function loadPlanSummaryHistoryForThread(
+    threadId: string,
+    options: { force?: boolean } = {},
+  ): Promise<void> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return
+    if (options.force !== true && loadedPlanSummaryHistoryThreadIds.has(normalizedThreadId)) return
+    const existing = planSummaryHistoryLoadByThreadId.get(normalizedThreadId)
+    if (existing) return await existing
+
+    const load = getPlanSummaryHistory(normalizedThreadId)
+      .then((summaries) => {
+        let merged = planSummariesByThreadId.value[normalizedThreadId] ?? []
+        for (const summary of summaries) {
+          const current = merged.find((entry) => entry.turnId === summary.turnId)
+          if (
+            current
+            && (
+              current.revision > summary.revision
+              || (current.revision === summary.revision && current.updatedAtIso > summary.updatedAtIso)
+            )
+          ) continue
+          merged = upsertPlanSummary(merged, summary)
+        }
+        setPlanSummariesForThread(normalizedThreadId, merged)
+        loadedPlanSummaryHistoryThreadIds.add(normalizedThreadId)
+      })
+      .catch(() => {
+        // Plan summaries supplement native history; failure must not block the thread.
+      })
+      .finally(() => {
+        if (planSummaryHistoryLoadByThreadId.get(normalizedThreadId) === load) {
+          planSummaryHistoryLoadByThreadId.delete(normalizedThreadId)
+        }
+      })
+    planSummaryHistoryLoadByThreadId.set(normalizedThreadId, load)
+    await load
+  }
+
   async function recordRequestUserInputSummary(
     request: UiServerRequest,
     status: 'answered' | 'unanswered',
@@ -2027,7 +2132,13 @@ export function useDesktopState() {
       visiblePersisted,
       requestUserInputSummariesByThreadId.value[threadId] ?? [],
     )
-    const combined = [...withQuestionHistory, ...livePlan, ...liveCommands, ...liveFileChanges, ...liveAgent]
+    const withPlanSummaries = mergePlanSummaryMessages(
+      withQuestionHistory,
+      (planSummariesByThreadId.value[threadId] ?? [])
+        .filter((summary) => !livePlanTurnIds.has(summary.turnId)),
+    )
+    const withLivePlans = mergeLivePlanMessagesIntoTimeline(withPlanSummaries, livePlan)
+    const combined = [...withLivePlans, ...liveCommands, ...liveFileChanges, ...liveAgent]
 
     const summary = turnSummaryByThreadId.value[threadId]
     if (!summary) return combined
@@ -4053,52 +4164,78 @@ export function useDesktopState() {
 
   function upsertLivePlanMessage(threadId: string, nextMessage: UiMessage): void {
     const previous = livePlanMessagesByThreadId.value[threadId] ?? []
-    const next = upsertMessage(previous, nextMessage)
+    const nextTurnId = nextMessage.turnId?.trim() ?? ''
+    for (const message of previous) {
+      const turnId = message.turnId?.trim() ?? ''
+      if (turnId && nextTurnId && turnId !== nextTurnId) {
+        finalizeLivePlanMessage(threadId, turnId, 'incomplete', nextMessage.timestampIso ?? new Date().toISOString())
+      }
+    }
+    const current = (livePlanMessagesByThreadId.value[threadId] ?? [])
+      .filter((message) => !nextTurnId || message.turnId?.trim() === nextTurnId)
+    const next = upsertMessage(current, nextMessage)
     setLivePlanMessagesForThread(threadId, next)
   }
 
-  function markLivePlanLifecycle(
+  function planSummaryFromLiveMessage(
+    threadId: string,
+    message: UiMessage,
+    lifecycle: UiTerminalPlanLifecycle,
+    updatedAtIso: string,
+  ): UiPlanSummary | null {
+    const turnId = message.turnId?.trim() ?? ''
+    if (!threadId || !turnId) return null
+    return normalizePlanSummary({
+      id: `plan-summary:${turnId}`,
+      threadId,
+      turnId,
+      messageId: message.id || `${turnId}:plan`,
+      text: message.text,
+      explanation: message.plan?.explanation,
+      steps: message.plan?.steps ?? [],
+      revision: message.plan?.revision ?? 0,
+      lifecycle,
+      createdAtIso: message.timestampIso ?? updatedAtIso,
+      updatedAtIso,
+    })
+  }
+
+  function finalizeLivePlanMessage(
     threadId: string,
     turnId: string,
-    lifecycle: UiPlanLifecycle,
+    lifecycle: UiTerminalPlanLifecycle,
     updatedAtIso: string,
   ): void {
     const previous = livePlanMessagesByThreadId.value[threadId] ?? []
-    let changed = false
-    const next = previous.map((message) => {
-      if (message.turnId !== turnId || !message.plan) return message
-      changed = true
-      return {
-        ...message,
-        timestampIso: message.timestampIso ?? updatedAtIso,
-        plan: {
-          ...message.plan,
-          isStreaming: lifecycle === 'live',
-          lifecycle,
-          updatedAtIso,
-        },
-      }
-    })
-    if (changed) setLivePlanMessagesForThread(threadId, next)
+    const matched = previous.find((message) => message.turnId?.trim() === turnId)
+    if (matched) {
+      const summary = planSummaryFromLiveMessage(threadId, matched, lifecycle, updatedAtIso)
+      if (summary) upsertPlanSummaryForThread(summary)
+    }
+    const next = previous.filter((message) => message.turnId?.trim() !== turnId)
+    if (next.length !== previous.length) setLivePlanMessagesForThread(threadId, next)
+  }
+
+  function finalizeAllLivePlans(
+    threadId: string,
+    lifecycle: UiTerminalPlanLifecycle,
+    updatedAtIso: string,
+  ): void {
+    const previous = [...(livePlanMessagesByThreadId.value[threadId] ?? [])]
+    for (const message of previous) {
+      const turnId = message.turnId?.trim() ?? ''
+      if (turnId) finalizeLivePlanMessage(threadId, turnId, lifecycle, updatedAtIso)
+    }
   }
 
   function markPreviousLivePlansIncomplete(threadId: string, activeTurnId: string, updatedAtIso: string): void {
-    const previous = livePlanMessagesByThreadId.value[threadId] ?? []
-    let changed = false
-    const next = previous.map((message) => {
-      if (message.turnId === activeTurnId || !message.plan || message.plan.lifecycle !== 'live') return message
-      changed = true
-      return {
-        ...message,
-        plan: {
-          ...message.plan,
-          isStreaming: false,
-          lifecycle: 'incomplete' as const,
-          updatedAtIso,
-        },
+    const previous = [...(livePlanMessagesByThreadId.value[threadId] ?? [])]
+    for (const message of previous) {
+      const turnId = message.turnId?.trim() ?? ''
+      if (turnId && turnId !== activeTurnId) {
+        finalizeLivePlanMessage(threadId, turnId, 'incomplete', updatedAtIso)
       }
-    })
-    if (changed) setLivePlanMessagesForThread(threadId, next)
+    }
   }
 
   function reconcileLivePlansWithPersisted(
@@ -4203,10 +4340,10 @@ export function useDesktopState() {
   function clearCompletedTurnLiveState(threadId: string, options: { preservePlans?: boolean } = {}): void {
     if (!threadId) return
     liveDeltaBuffer.discardThread(threadId)
-    // update_plan notifications are not guaranteed to be persisted as thread items.
-    // Keep the terminal live card until history reconciliation confirms that a
-    // persisted plan for the same turn can take over without a visual gap.
-    if (options.preservePlans === false) clearLivePlansForThread(threadId)
+    if (options.preservePlans !== false) {
+      finalizeAllLivePlans(threadId, 'incomplete', new Date().toISOString())
+    }
+    clearLivePlansForThread(threadId)
     clearLiveReasoningForThread(threadId)
     setTurnActivityForThread(threadId, null)
     if (threadId === selectedThreadId.value) {
@@ -4308,6 +4445,12 @@ export function useDesktopState() {
     for (const rawSnapshot of rawSnapshots) {
       const snapshot = normalizeActivePlanSnapshot(rawSnapshot)
       if (!snapshot) continue
+      if (snapshot.lifecycle !== 'live') {
+        const summary = planSummaryFromSnapshot(snapshot)
+        if (summary) upsertPlanSummaryForThread(summary)
+        finalizeLivePlanMessage(snapshot.threadId, snapshot.turnId, snapshot.lifecycle, snapshot.updatedAtIso)
+        continue
+      }
       const existing = (livePlanMessagesByThreadId.value[snapshot.threadId] ?? [])
         .find((message) => messageIdentityKey(message) === `${snapshot.turnId}\u0000${snapshot.messageId}`)
       const existingRevision = existing?.plan?.revision
@@ -4324,7 +4467,7 @@ export function useDesktopState() {
         id: snapshot.messageId,
         role: 'assistant',
         text: snapshot.text || buildPlanMessageText(plan),
-        timestampIso: snapshot.updatedAtIso,
+        timestampIso: snapshot.createdAtIso,
         messageType: 'plan.live',
         plan,
         turnId: snapshot.turnId,
@@ -5571,12 +5714,12 @@ export function useDesktopState() {
     let completionEndsActiveRun = false
     if (completedTurn) {
       const rawCompletedStatus = readString(asRecord(asRecord(notification.params)?.turn)?.status).toLowerCase()
-      const completedPlanLifecycle: UiPlanLifecycle = turnErrorMessage || rawCompletedStatus.includes('fail') || rawCompletedStatus.includes('error')
+      const completedPlanLifecycle: UiTerminalPlanLifecycle = turnErrorMessage || rawCompletedStatus.includes('fail') || rawCompletedStatus.includes('error')
         ? 'failed'
         : rawCompletedStatus.includes('interrupt') || rawCompletedStatus.includes('cancel')
           ? 'interrupted'
           : 'completed'
-      markLivePlanLifecycle(
+      finalizeLivePlanMessage(
         completedTurn.threadId,
         completedTurn.turnId,
         completedPlanLifecycle,
@@ -6166,6 +6309,7 @@ export function useDesktopState() {
     const loadPromise = (async () => {
       try {
       void loadRequestUserInputHistoryForThread(threadId)
+      void loadPlanSummaryHistoryForThread(threadId)
       const historyMode = await resolveThreadHistoryMode(threadId)
       if (loadGeneration !== messageLoadGeneration) return
       invalidateThreadHistoryCache(threadId, historyMode)
@@ -8388,8 +8532,11 @@ export function useDesktopState() {
     shouldAutoScrollOnNextAgentEvent = false
     persistedMessagesByThreadId.value = {}
     requestUserInputSummariesByThreadId.value = {}
+    planSummariesByThreadId.value = {}
     loadedRequestUserInputHistoryThreadIds.clear()
     requestUserInputHistoryLoadByThreadId.clear()
+    loadedPlanSummaryHistoryThreadIds.clear()
+    planSummaryHistoryLoadByThreadId.clear()
     respondingServerRequestKeys.clear()
     loadedMessagesByThreadId.value = {}
     loadedVersionByThreadId.value = {}

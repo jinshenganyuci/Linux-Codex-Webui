@@ -172,12 +172,6 @@ function summaryMessage(summary: UiPlanSummary, turnIndex?: number): UiMessage {
 export function mergePlanSummaryMessages(messages: UiMessage[], summaries: UiPlanSummary[]): UiMessage[] {
   if (summaries.length === 0 || messages.length === 0) return messages
   const next = [...messages]
-  const nativePlanTurnIds = new Set(
-    messages
-      .filter((message) => message.messageType === 'plan')
-      .map((message) => message.turnId?.trim() ?? '')
-      .filter(Boolean),
-  )
   const existingSummaryTurnIds = new Set(
     messages
       .filter((message) => message.messageType === 'plan.summary')
@@ -186,7 +180,27 @@ export function mergePlanSummaryMessages(messages: UiMessage[], summaries: UiPla
   )
 
   for (const summary of [...summaries].sort((first, second) => first.createdAtIso.localeCompare(second.createdAtIso))) {
-    if (nativePlanTurnIds.has(summary.turnId) || existingSummaryTurnIds.has(summary.turnId)) continue
+    const nativePlanIndex = next.findIndex((message) => (
+      message.messageType === 'plan' && message.turnId?.trim() === summary.turnId
+    ))
+    if (nativePlanIndex >= 0) {
+      const nativePlan = next[nativePlanIndex]
+      next.splice(nativePlanIndex, 1, {
+        ...nativePlan,
+        plan: {
+          ...(nativePlan.plan ?? {
+            explanation: summary.explanation,
+            steps: summary.steps,
+          }),
+          isStreaming: false,
+          lifecycle: summary.lifecycle,
+          revision: summary.revision,
+          updatedAtIso: summary.updatedAtIso,
+        },
+      })
+      continue
+    }
+    if (existingSummaryTurnIds.has(summary.turnId)) continue
     const sameTurnIndexes = next
       .map((message, index) => message.turnId === summary.turnId ? index : -1)
       .filter((index) => index >= 0)

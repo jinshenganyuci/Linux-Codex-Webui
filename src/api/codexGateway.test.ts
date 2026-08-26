@@ -433,6 +433,7 @@ describe('archived thread management', () => {
       if (
         String(_input).startsWith('/codex-api/preferences/')
         || String(_input).startsWith('/codex-api/request-user-input-history')
+        || String(_input).startsWith('/codex-api/plan-summary-history')
       ) {
         return new Response(JSON.stringify({ ok: true }), {
           status: 200,

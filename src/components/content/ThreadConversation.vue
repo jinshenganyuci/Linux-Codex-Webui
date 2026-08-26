@@ -1249,7 +1249,9 @@ function isCommandMessage(message: UiMessage): boolean {
 }
 
 function isPlanMessage(message: UiMessage): boolean {
-  return message.messageType === 'plan' || message.messageType === 'plan.live'
+  return message.messageType === 'plan'
+    || message.messageType === 'plan.live'
+    || message.messageType === 'plan.summary'
 }
 
 function planOverrideIdentity(message: UiMessage): string {
@@ -1364,7 +1366,7 @@ function buildPlanMessageText(explanation: string, steps: UiPlanStep[]): string 
 
 function showImplementPlanButton(message: UiMessage): boolean {
   return isPlanMessage(message)
-    && message.messageType !== 'plan.live'
+    && message.messageType === 'plan'
     && message.role === 'assistant'
     && Boolean(message.turnId)
 }

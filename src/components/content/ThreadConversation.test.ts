@@ -237,6 +237,18 @@ describe('ThreadConversation plan lifecycle presentation', () => {
     expect(html).not.toContain('Inspect unique plan step')
   })
 
+  it('renders a persisted terminal summary as a compact card without an implement action', async () => {
+    const message: UiMessage = {
+      ...planMessage('turn-summary', 'completed'),
+      id: 'plan-summary:turn-summary',
+      messageType: 'plan.summary',
+    }
+    const html = await renderConversation([message])
+    expect(html).toContain('data-lifecycle="completed"')
+    expect(html).toContain('data-collapsed="true"')
+    expect(html).not.toContain('plan-card-implement-button')
+  })
+
   it('keeps a failed plan open until a newer user turn exists', async () => {
     const failedPlan = planMessage('turn-failed', 'failed')
     const failedHtml = await renderConversation([failedPlan])

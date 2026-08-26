@@ -33,6 +33,7 @@ const gatewayMocks = vi.hoisted(() => ({
   getThreadGroupsPage: vi.fn(),
   getOlderThreadMessages: vi.fn(),
   getRequestUserInputHistory: vi.fn(),
+  getPlanSummaryHistory: vi.fn(),
   getThreadModelPreferences: vi.fn(),
   getThreadCollaborationPreferences: vi.fn(),
   getThreadRuntimeStates: vi.fn(),
@@ -232,6 +233,7 @@ beforeEach(() => {
     modes: {},
   })
   gatewayMocks.getRequestUserInputHistory.mockResolvedValue([])
+  gatewayMocks.getPlanSummaryHistory.mockResolvedValue([])
   gatewayMocks.getNewChatDefaults.mockResolvedValue({ version: 1, revision: 0, providers: {} })
   gatewayMocks.getThreadRuntimeStates.mockResolvedValue([])
   gatewayMocks.getAgentProgress.mockResolvedValue(null)
@@ -4173,7 +4175,7 @@ describe('notification recovery', () => {
     state.stopPolling()
   })
 
-  it('keeps a failed live plan available until history or a newer turn takes over', () => {
+  it('moves a failed live plan into its own turn and keeps it there when a newer turn starts', async () => {
     installTestWindow()
     let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
     gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
@@ -4181,8 +4183,35 @@ describe('notification recovery', () => {
       return vi.fn()
     })
     gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: '',
+      modelProvider: '',
+      messages: [
+        {
+          id: 'user-failed',
+          role: 'user',
+          text: 'publish',
+          turnId: 'turn-failed',
+          turnIndex: 0,
+          timestampIso: '2026-08-20T00:00:00.000Z',
+        },
+        {
+          id: 'answer-failed',
+          role: 'assistant',
+          text: 'registry rejected',
+          turnId: 'turn-failed',
+          turnIndex: 0,
+          timestampIso: '2026-08-20T00:00:03.000Z',
+        },
+      ],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: { 'turn-failed': 0 },
+    })
     const state = useDesktopState()
     state.primeSelectedThread('thread-failed-plan')
+    await state.loadMessages('thread-failed-plan')
     state.startPolling()
     notificationHandler!({
       method: 'turn/started',
@@ -4208,19 +4237,27 @@ describe('notification recovery', () => {
       },
     })
 
-    const failedPlan = state.messages.value.find((message) => message.messageType === 'plan.live')
+    const failedPlan = state.messages.value.find((message) => message.messageType === 'plan.summary')
     expect(failedPlan).toMatchObject({
       turnId: 'turn-failed',
-      messageType: 'plan.live',
+      turnIndex: 0,
+      messageType: 'plan.summary',
       plan: { lifecycle: 'failed', isStreaming: false },
     })
+    expect(state.messages.value.map((message) => message.id)).toEqual([
+      'user-failed',
+      'plan-summary:turn-failed',
+      'turn-summary:turn-failed',
+      'answer-failed',
+    ])
 
     notificationHandler!({
       method: 'turn/started',
       atIso: '2026-08-20T00:00:03.000Z',
       params: { threadId: 'thread-failed-plan', turn: { id: 'turn-next', status: 'inProgress' } },
     })
-    expect(state.messages.value.find((message) => message.messageType === 'plan.live')?.plan?.lifecycle).toBe('failed')
+    expect(state.messages.value.filter((message) => message.messageType === 'plan.live')).toHaveLength(0)
+    expect(state.messages.value.find((message) => message.messageType === 'plan.summary')?.plan?.lifecycle).toBe('failed')
     state.stopPolling()
   })
 
@@ -4235,15 +4272,33 @@ describe('notification recovery', () => {
     gatewayMocks.getThreadDetail.mockResolvedValue({
       model: '',
       modelProvider: '',
-      messages: [],
+      messages: [
+        {
+          id: 'user-plan',
+          role: 'user',
+          text: 'observe',
+          turnId: 'turn-plan',
+          turnIndex: 0,
+          timestampIso: '2026-08-24T00:00:00.000Z',
+        },
+        {
+          id: 'answer-plan',
+          role: 'assistant',
+          text: 'done',
+          turnId: 'turn-plan',
+          turnIndex: 0,
+          timestampIso: '2026-08-24T00:00:03.000Z',
+        },
+      ],
       inProgress: false,
       activeTurnId: '',
       hasMoreOlder: false,
-      turnIndexByTurnId: {},
+      turnIndexByTurnId: { 'turn-plan': 0 },
     })
 
     const state = useDesktopState()
     state.primeSelectedThread('thread-completed-plan')
+    await state.loadMessages('thread-completed-plan')
     state.startPolling()
     notificationHandler!({
       method: 'turn/started',
@@ -4272,27 +4327,35 @@ describe('notification recovery', () => {
       },
     })
 
-    expect(state.messages.value.find((message) => message.messageType === 'plan.live')).toEqual(
+    expect(state.messages.value.find((message) => message.messageType === 'plan.summary')).toEqual(
       expect.objectContaining({
         turnId: 'turn-plan',
-        messageType: 'plan.live',
+        turnIndex: 0,
+        messageType: 'plan.summary',
         plan: expect.objectContaining({ lifecycle: 'completed', isStreaming: false }),
       }),
     )
+    expect(state.messages.value.map((message) => message.id)).toEqual([
+      'user-plan',
+      'plan-summary:turn-plan',
+      'turn-summary:turn-plan',
+      'answer-plan',
+    ])
 
     await state.loadMessages('thread-completed-plan', { force: true })
 
-    expect(state.messages.value.find((message) => message.messageType === 'plan.live')).toEqual(
+    expect(state.messages.value.find((message) => message.messageType === 'plan.summary')).toEqual(
       expect.objectContaining({
         turnId: 'turn-plan',
-        messageType: 'plan.live',
+        messageType: 'plan.summary',
         plan: expect.objectContaining({ lifecycle: 'completed', isStreaming: false }),
       }),
     )
+    expect(state.messages.value.filter((message) => message.messageType === 'plan.live')).toHaveLength(0)
     state.stopPolling()
   })
 
-  it('bounds terminal live plans retained for one thread', () => {
+  it('never accumulates terminal plans in the live tail and keeps only the current live turn', () => {
     installTestWindow()
     let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
     gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
@@ -4327,11 +4390,104 @@ describe('notification recovery', () => {
       })
     }
 
-    const retainedPlans = state.messages.value.filter((message) => message.messageType === 'plan.live')
-    expect(retainedPlans).toHaveLength(64)
-    expect(retainedPlans[0]?.turnId).toBe('turn-1')
-    expect(retainedPlans.at(-1)?.turnId).toBe('turn-64')
+    expect(state.messages.value.filter((message) => message.messageType === 'plan.live')).toHaveLength(0)
+    notificationHandler!({
+      method: 'turn/started',
+      atIso: '2026-08-24T00:03:00.000Z',
+      params: { threadId: 'thread-many-plans', turn: { id: 'turn-current', status: 'inProgress' } },
+    })
+    notificationHandler!({
+      method: 'turn/plan/updated',
+      atIso: '2026-08-24T00:03:01.000Z',
+      params: {
+        threadId: 'thread-many-plans',
+        turnId: 'turn-current',
+        plan: [{ step: 'Current plan', status: 'inProgress' }],
+      },
+    })
+    const livePlans = state.messages.value.filter((message) => message.messageType === 'plan.live')
+    expect(livePlans).toHaveLength(1)
+    expect(livePlans[0]?.turnId).toBe('turn-current')
     state.stopPolling()
+  })
+
+  it('restores terminal summaries after refresh and inserts each one only in its loaded turn', async () => {
+    installTestWindow()
+    gatewayMocks.getPlanSummaryHistory.mockResolvedValue([
+      {
+        id: 'plan-summary:turn-a',
+        threadId: 'thread-restored-plans',
+        turnId: 'turn-a',
+        messageId: 'turn-a:plan',
+        text: '- [x] First',
+        steps: [{ step: 'First', status: 'completed' }],
+        revision: 3,
+        lifecycle: 'completed',
+        createdAtIso: '2026-08-24T00:00:01.000Z',
+        updatedAtIso: '2026-08-24T00:00:02.000Z',
+      },
+      {
+        id: 'plan-summary:turn-unloaded',
+        threadId: 'thread-restored-plans',
+        turnId: 'turn-unloaded',
+        messageId: 'turn-unloaded:plan',
+        text: '- [x] Hidden',
+        steps: [{ step: 'Hidden', status: 'completed' }],
+        revision: 2,
+        lifecycle: 'completed',
+        createdAtIso: '2026-08-23T00:00:01.000Z',
+        updatedAtIso: '2026-08-23T00:00:02.000Z',
+      },
+    ])
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: '',
+      modelProvider: '',
+      messages: [
+        {
+          id: 'user-a',
+          role: 'user',
+          text: 'first',
+          turnId: 'turn-a',
+          turnIndex: 8,
+          timestampIso: '2026-08-24T00:00:00.000Z',
+        },
+        {
+          id: 'answer-a',
+          role: 'assistant',
+          text: 'done',
+          turnId: 'turn-a',
+          turnIndex: 8,
+          timestampIso: '2026-08-24T00:00:03.000Z',
+        },
+        {
+          id: 'user-b',
+          role: 'user',
+          text: 'second',
+          turnId: 'turn-b',
+          turnIndex: 9,
+          timestampIso: '2026-08-24T00:01:00.000Z',
+        },
+      ],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: { 'turn-a': 8, 'turn-b': 9 },
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-restored-plans')
+    await state.loadMessages('thread-restored-plans')
+
+    await vi.waitFor(() => {
+      expect(gatewayMocks.getPlanSummaryHistory).toHaveBeenCalledTimes(1)
+      expect(state.messages.value.map((message) => message.id)).toEqual([
+        'user-a',
+        'plan-summary:turn-a',
+        'answer-a',
+        'user-b',
+      ])
+    })
+    expect(state.messages.value.filter((message) => message.messageType === 'plan.summary')).toHaveLength(1)
   })
 
   it('skips duplicate initial-ready history and forces the selected thread when replay is unavailable', async () => {
