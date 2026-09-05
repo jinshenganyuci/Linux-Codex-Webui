@@ -50,7 +50,7 @@ async function fixture() {
   cleanups.push(async () => {
     server.closeAllConnections()
     await new Promise<void>(resolve => server.close(() => resolve()))
-    middleware.dispose()
+    await middleware.disposeGracefully()
     if (previous === undefined) delete scope.__codexRemoteSharedBridge__
     else scope.__codexRemoteSharedBridge__ = previous
     await rm(home, { recursive: true, force: true })
@@ -62,6 +62,13 @@ async function fixture() {
 }
 
 describe('native queue single-owner migration', () => {
+  it('deletes through the bridge and broadcasts confirmed deletion', async () => {
+    const test = await fixture()
+    const response = await test.request('/codex-api/rpc', 'POST', { method: 'thread/delete', params: { threadId: 'thread' } })
+    expect(response.status).toBe(200)
+    expect(test.rpc).toHaveBeenCalledWith('thread/delete', { threadId: 'thread' })
+    expect((await test.request('/codex-api/rpc', 'POST', { method: 'thread/delete', params: {} })).status).toBe(400)
+  })
   it('keeps existing legacy messages and refuses a non-empty migration', async () => {
     const test = await fixture()
     expect((await test.legacy()).status).toBe(200)

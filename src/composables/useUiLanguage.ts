@@ -28,6 +28,8 @@ const zhCN: Record<string, string> = {
   'Permanently delete thread?': '永久删除线程？',
   'This permanently deletes "{title}" and cannot be undone.': '这会永久删除“{title}”，且无法撤销。',
   'Delete permanently': '永久删除',
+  'Deleting…': '正在删除…',
+  'Deletion was not confirmed. Check the conversation and retry.': '删除未确认成功，请核对聊天后重试。',
   'Restored "{title}"': '已恢复“{title}”',
   'Permanently deleted "{title}"': '已永久删除“{title}”',
   'Failed to load archived threads': '加载已归档线程失败',

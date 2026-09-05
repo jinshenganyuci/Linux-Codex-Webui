@@ -649,6 +649,7 @@
           <p class="rename-thread-subtitle">
             {{ t('This permanently deletes "{title}" and cannot be undone.', { title: permanentlyDeleteCandidate.title }) }}
           </p>
+          <p v-if="permanentlyDeleteError" class="rename-thread-subtitle" role="alert">{{ permanentlyDeleteError }}</p>
           <div class="rename-thread-actions">
             <button
               class="rename-thread-button"
@@ -664,7 +665,7 @@
               :disabled="isPermanentlyDeletingThread || isSavingPinnedThreadState"
               @click="confirmPermanentlyDeleteThread"
             >
-              {{ t('Delete permanently') }}
+              {{ t(isPermanentlyDeletingThread ? 'Deleting…' : 'Delete permanently') }}
             </button>
           </div>
         </div>
@@ -1021,6 +1022,7 @@ const renameThreadDraft = ref('')
 const renameThreadInputRef = ref<HTMLInputElement | null>(null)
 const permanentlyDeleteCandidate = ref<Pick<UiThread, 'id' | 'title'> | null>(null)
 const isPermanentlyDeletingThread = ref(false)
+const permanentlyDeleteError = ref('')
 const automationByThreadId = ref<Record<string, UiThreadAutomation[]>>({})
 const automationByProjectName = ref<Record<string, UiThreadAutomation[]>>({})
 const automationDialogVisible = ref(false)
@@ -1931,6 +1933,7 @@ async function archiveThreadFromMenu(threadId: string): Promise<void> {
 }
 
 function openPermanentlyDeleteDialog(thread: UiThread): void {
+  permanentlyDeleteError.value = ''
   permanentlyDeleteCandidate.value = { id: thread.id, title: thread.title }
   closeThreadMenu()
 }
@@ -1951,15 +1954,17 @@ async function confirmPermanentlyDeleteThread(): Promise<void> {
 
   const wasPinned = isPinned(candidate.id)
   isPermanentlyDeletingThread.value = true
+  permanentlyDeleteError.value = ''
   try {
-    if (wasPinned && !(await togglePin(candidate.id))) return
     const deleted = await new Promise<boolean>((resolve) => {
       emit('permanently-delete', { threadId: candidate.id, onComplete: resolve })
     })
-    if (!deleted && wasPinned && !isPinned(candidate.id)) {
-      await togglePin(candidate.id)
+    if (deleted) {
+      permanentlyDeleteCandidate.value = null
+      if (wasPinned && isPinned(candidate.id)) void togglePin(candidate.id)
+    } else {
+      permanentlyDeleteError.value = t('Deletion was not confirmed. Check the conversation and retry.')
     }
-    permanentlyDeleteCandidate.value = null
   } finally {
     isPermanentlyDeletingThread.value = false
   }

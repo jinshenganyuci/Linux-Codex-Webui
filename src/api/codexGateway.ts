@@ -2334,11 +2334,6 @@ export async function permanentlyDeleteThread(threadId: string): Promise<void> {
   } catch (error) {
     throw normalizeCodexApiError(error, `Failed to permanently delete thread ${threadId}`, 'thread/delete')
   }
-  await Promise.allSettled([
-    deleteRequestUserInputHistory(threadId),
-    deletePlanSummaryHistory(threadId),
-    deleteThreadCollaborationPreference(threadId),
-  ])
 }
 
 export async function renameThread(threadId: string, threadName: string): Promise<void> {

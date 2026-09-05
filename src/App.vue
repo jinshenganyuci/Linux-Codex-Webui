@@ -1178,6 +1178,7 @@ const {
   toggleSelectedThreadTerminal,
   archiveThreadById,
   permanentlyDeleteThreadById,
+  isThreadDeleted,
   forkThreadById,
   renameThreadById,
   forkThreadFromTurn,
@@ -2476,7 +2477,13 @@ function onArchiveThread(threadId: string): void {
 }
 
 function onPermanentlyDeleteThread(request: { threadId: string; onComplete: (deleted: boolean) => void }): void {
-  void permanentlyDeleteThreadById(request.threadId).then(request.onComplete)
+  void permanentlyDeleteThreadById(request.threadId).then(async deleted => {
+    request.onComplete(deleted)
+    if (deleted && route.name === 'thread' && routeThreadId.value === request.threadId) {
+      await router.replace({ name: 'home' })
+      if (isMobile.value) setSidebarCollapsed(true)
+    }
+  })
 }
 
 async function onForkThread(threadId: string): Promise<void> {
@@ -4009,10 +4016,16 @@ async function syncThreadSelectionWithRoute(): Promise<void> {
       if (route.name === 'thread') {
         const threadId = routeThreadId.value
         if (!threadId) continue
+        if (isThreadDeleted(threadId)) {
+          await router.replace({ name: 'home' })
+          if (isMobile.value) setSidebarCollapsed(true)
+          continue
+        }
 
         if (selectedThreadId.value !== threadId) {
           const result = await selectThread(threadId)
           if (result === 'not-found') {
+            if (routeThreadId.value === threadId) await router.replace({ name: 'home' })
             continue
           }
         } else {

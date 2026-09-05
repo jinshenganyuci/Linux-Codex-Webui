@@ -52,3 +52,5 @@ Return to the [manual test index](../../tests.md).
 | [Bold URL trailing punctuation parsing](bold-url-trailing-punctuation-parsing.md) |
 | [围栏代码块复制按钮](fenced-code-block-copy.md) |
 | [新聊天使用实际发送模型自动生成标题](new-thread-model-generated-title.md) |
+| [手机附件预览与删除热区分离](attachment-preview-delete-targets.md) |
+| [实时用户消息去重与插话顺序](live-user-message-reconciliation.md) |

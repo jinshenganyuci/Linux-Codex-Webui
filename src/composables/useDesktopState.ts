@@ -197,9 +197,10 @@ function isCodexCliMissingError(error: unknown): boolean {
 }
 
 function isThreadNotFoundError(error: unknown): boolean {
-  if (error instanceof CodexApiError && error.status === 404) return true
+  if (error instanceof CodexApiError && error.status === 404
+    && ['thread/read', 'thread/resume', 'thread/turns/list'].includes(error.method ?? '')) return true
   const message = error instanceof Error ? error.message : String(error ?? '')
-  return /\b404\b|thread.*not found|conversation.*not found|no such thread|no rollout found for thread id/i.test(message)
+  return /thread.*not found|conversation.*not found|no such thread|no rollout found for thread id/i.test(message)
 }
 
 function isNoActiveTurnError(error: unknown): boolean {
@@ -1777,6 +1778,9 @@ export function useDesktopState() {
   let threadHistoryAccessSequence = 0
   let visibleMessageLoadOwnerThreadId = ''
   let messageLoadGeneration = 0
+  const deletedThreadIds = ref(new Set<string>())
+  const deletingThreads = new Map<string, Promise<boolean>>()
+  const isThreadDeleted = (threadId: string) => deletedThreadIds.value.has(threadId)
   let refreshSkillsPromise: Promise<void> | null = null
   const modelCatalogPromiseByKey = new Map<string, Promise<UiModelCapability[]>>()
   let hasLoadedSkills = false
@@ -2270,6 +2274,7 @@ export function useDesktopState() {
   }
 
   function setSelectedThreadId(nextThreadId: string, options: { persist?: boolean } = {}): void {
+    if (isThreadDeleted(nextThreadId)) return
     if (selectedThreadId.value === nextThreadId) {
       if (nativeThreadControls.state.threadId !== nextThreadId) void nativeThreadControls.select(nextThreadId)
       return
@@ -3657,6 +3662,7 @@ export function useDesktopState() {
   }
 
   function setPersistedMessagesForThread(threadId: string, nextMessages: UiMessage[]): void {
+    if (isThreadDeleted(threadId)) return
     nextMessages = prepareTimelineMessages(threadId, nextMessages, true)
     const previous = persistedMessagesByThreadId.value[threadId] ?? []
     if (!areMessageArraysEqual(previous, nextMessages)) {
@@ -6014,6 +6020,7 @@ export function useDesktopState() {
   }
 
   function applyThreadGroups(groups: UiProjectGroup[], rootsState: WorkspaceRootsState | null): void {
+    groups = groups.map(group => ({ ...group, threads: group.threads.filter(thread => !isThreadDeleted(thread.id)) }))
     const visibleGroups = filterGroupsByWorkspaceRoots(groups, rootsState)
     const hasWorkspaceRootsState = Boolean(
       rootsState && (rootsState.order.length > 0 || rootsState.projectOrder.length > 0 || (rootsState.remoteProjects ?? []).length > 0),
@@ -6155,7 +6162,7 @@ export function useDesktopState() {
   }
 
   async function loadMessages(threadId: string, options: { silent?: boolean; force?: boolean } = {}) {
-    if (!threadId) {
+    if (!threadId || isThreadDeleted(threadId) || deletingThreads.has(threadId)) {
       return
     }
     const recentLoadFailure =
@@ -6189,7 +6196,7 @@ export function useDesktopState() {
       void loadRequestUserInputHistoryForThread(threadId)
       void loadPlanSummaryHistoryForThread(threadId)
       const historyMode = await resolveThreadHistoryMode(threadId)
-      if (loadGeneration !== messageLoadGeneration) return
+      if (loadGeneration !== messageLoadGeneration || isThreadDeleted(threadId)) return
       invalidateThreadHistoryCache(threadId, historyMode)
       const alreadyLoaded = loadedMessagesByThreadId.value[threadId] === true
       const version = currentThreadVersion(threadId)
@@ -6227,7 +6234,7 @@ export function useDesktopState() {
           }
         : await getThreadHistoryDetail(threadId, historyMode)
 
-      if (loadGeneration !== messageLoadGeneration) return
+      if (loadGeneration !== messageLoadGeneration || isThreadDeleted(threadId)) return
 
       if (detail.modelProvider) {
         setThreadModelProviderId(threadId, detail.modelProvider)
@@ -6329,7 +6336,7 @@ export function useDesktopState() {
         void loadAgentProgressSnapshot(threadId)
       }
       } catch (unknownError) {
-        if (loadGeneration !== messageLoadGeneration) return
+        if (loadGeneration !== messageLoadGeneration || isThreadDeleted(threadId)) return
         const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
         if (selectedThreadId.value === threadId) {
           setTurnErrorForThread(threadId, message, { transient: true })
@@ -6668,6 +6675,7 @@ export function useDesktopState() {
   }
 
   async function selectThread(threadId: string): Promise<SelectThreadResult> {
+    if (isThreadDeleted(threadId)) return 'not-found'
     setSelectedThreadId(threadId)
 
     try {
@@ -6682,6 +6690,10 @@ export function useDesktopState() {
       const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
       error.value = message
       const result = isThreadNotFoundError(unknownError) ? 'not-found' : 'error'
+      if (result === 'not-found') {
+        markThreadDeleted(threadId)
+        return result
+      }
       if (threadId.trim()) {
         setTurnErrorForThread(threadId, message, { transient: true })
       }
@@ -6715,29 +6727,48 @@ export function useDesktopState() {
     }
   }
 
-  async function permanentlyDeleteThreadById(threadId: string): Promise<boolean> {
-    const normalizedThreadId = threadId.trim()
-    if (!normalizedThreadId) return false
-
-    const nextSelectedThreadId = findAdjacentThreadId(flattenThreads(projectGroups.value), normalizedThreadId)
-
-    try {
-      await permanentlyDeleteThread(normalizedThreadId)
-    } catch (unknownError) {
-      error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
-      return false
+  function markThreadDeleted(threadId: string): void {
+    if (!threadId || isThreadDeleted(threadId)) return
+    const deleted = new Set(deletedThreadIds.value)
+    deleted.add(threadId)
+    if (deleted.size > 1000) deleted.delete(deleted.values().next().value!)
+    deletedThreadIds.value = deleted
+    pendingThreadMessageRefresh.delete(threadId)
+    pendingCompletedTurnReconciliationByThreadId.delete(threadId)
+    clearDelayedTurnSync(threadId)
+    liveDeltaBuffer.discardThread(threadId)
+    removeArchivedThreadFromLoadedLists(threadId)
+    if (selectedThreadId.value === threadId) {
+      messageLoadGeneration += 1
+      isLoadingMessages.value = false
+      error.value = ''
+      setSelectedThreadId('')
     }
-
-    removeArchivedThreadFromLoadedLists(normalizedThreadId)
-    setSelectedCollaborationModeForThread(normalizedThreadId, 'default', { persist: false })
-    if (selectedThreadId.value === normalizedThreadId) {
-      setSelectedThreadId(nextSelectedThreadId)
-      if (nextSelectedThreadId) {
-        void loadMessages(nextSelectedThreadId, { silent: true })
-      }
-    }
+    evictThreadHistoryCache(threadId)
     pruneThreadScopedState(flattenThreads(projectGroups.value))
-    return true
+  }
+
+  function permanentlyDeleteThreadById(threadId: string): Promise<boolean> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return Promise.resolve(false)
+    if (isThreadDeleted(normalizedThreadId)) return Promise.resolve(true)
+    const existing = deletingThreads.get(normalizedThreadId)
+    if (existing) return existing
+    const promise = (async () => {
+      try {
+        await permanentlyDeleteThread(normalizedThreadId)
+        markThreadDeleted(normalizedThreadId)
+        return true
+      } catch (unknownError) {
+        if (isThreadDeleted(normalizedThreadId)) return true
+        error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+        return false
+      } finally {
+        deletingThreads.delete(normalizedThreadId)
+      }
+    })()
+    deletingThreads.set(normalizedThreadId, promise)
+    return promise
   }
 
   async function renameThreadById(threadId: string, threadName: string) {
@@ -8206,6 +8237,12 @@ export function useDesktopState() {
     hasReceivedNotificationReady = false
     void loadPendingServerRequestsFromBridge()
     stopNotificationStream = subscribeCodexNotifications((notification) => {
+      const notificationThreadId = extractThreadIdFromNotification(notification)
+      if (notification.method === 'codex-ui/thread-deleted' || notification.method === 'thread/deleted') {
+        if (notificationThreadId) markThreadDeleted(notificationThreadId)
+        return
+      }
+      if (notificationThreadId && isThreadDeleted(notificationThreadId)) return
       publishNativeExtensionEvent(notification)
       if (notification.method.startsWith('thread/realtime/')) return
       if (notification.method === 'ready' && !nativeThreadControls.state.threadId && selectedThreadId.value) void nativeThreadControls.select(selectedThreadId.value)
@@ -8542,6 +8579,7 @@ export function useDesktopState() {
     toggleSelectedThreadTerminal,
     archiveThreadById,
     permanentlyDeleteThreadById,
+    isThreadDeleted,
     renameThreadById,
     forkThreadById,
     forkThreadFromTurn,

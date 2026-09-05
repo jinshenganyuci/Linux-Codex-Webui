@@ -3786,7 +3786,56 @@ describe('findAdjacentThreadId', () => {
 })
 
 describe('permanent thread deletion', () => {
-  it('deletes directly without archiving and selects the adjacent thread after success', async () => {
+  it('invalidates a deleted-thread load and rejects late notifications and selections', async () => {
+    installTestWindow()
+    const pending = deferred<Record<string, unknown>>()
+    let notify!: (notification: { method: string; params: unknown }) => void
+    gatewayMocks.subscribeCodexNotifications.mockImplementation(handler => { notify = handler; return vi.fn() })
+    gatewayMocks.getThreadHistoryDetail.mockReturnValueOnce(pending.promise)
+    const state = useDesktopState()
+    state.primeSelectedThread('deleted')
+    state.startNotificationStream()
+    const loading = state.loadMessages('deleted')
+    await vi.waitFor(() => expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalled())
+    expect(await state.permanentlyDeleteThreadById('deleted')).toBe(true)
+    pending.reject(new Error('thread not loaded'))
+    await loading
+    notify({ method: 'item/completed', params: { threadId: 'deleted', turnId: 'turn', item: { id: 'late', type: 'agentMessage', text: 'late' } } })
+    expect(await state.selectThread('deleted')).toBe('not-found')
+    expect(state.selectedThreadId.value).toBe('')
+    expect(state.messages.value).toEqual([])
+    expect(state.error.value).toBe('')
+    state.stopPolling()
+  })
+
+  it('deduplicates deletion and leaves a newly selected conversation untouched', async () => {
+    installTestWindow()
+    const pending = deferred<void>()
+    gatewayMocks.permanentlyDeleteThread.mockReturnValueOnce(pending.promise)
+    const state = useDesktopState()
+    state.primeSelectedThread('deleted')
+    const first = state.permanentlyDeleteThreadById('deleted')
+    expect(state.permanentlyDeleteThreadById('deleted')).toBe(first)
+    state.primeSelectedThread('other')
+    pending.resolve()
+    await first
+    expect(state.selectedThreadId.value).toBe('other')
+    expect(state.isThreadDeleted('deleted')).toBe(true)
+  })
+
+  it('handles a deletion from another client without reopening the deleted thread', () => {
+    installTestWindow()
+    let notify!: (notification: { method: string; params: unknown }) => void
+    gatewayMocks.subscribeCodexNotifications.mockImplementation(handler => { notify = handler; return vi.fn() })
+    const state = useDesktopState()
+    state.primeSelectedThread('deleted')
+    state.startNotificationStream()
+    notify({ method: 'codex-ui/thread-deleted', params: { threadId: 'deleted' } })
+    state.primeSelectedThread('deleted')
+    expect(state.selectedThreadId.value).toBe('')
+    state.stopPolling()
+  })
+  it('deletes directly without archiving and clears selection after success', async () => {
     installTestWindow()
     gatewayMocks.getThreadGroupsPage.mockReset().mockResolvedValue({
       groups: [{
@@ -3830,7 +3879,7 @@ describe('permanent thread deletion', () => {
       'first-thread',
       'next-thread',
     ])
-    expect(state.selectedThreadId.value).toBe('next-thread')
+    expect(state.selectedThreadId.value).toBe('')
     expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledOnce()
   })
 

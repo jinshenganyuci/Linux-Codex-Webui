@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { RuntimeCatalog, codexVersionFromUserAgent } from './runtimeCatalog.js'
 import { MethodCatalog } from './rpcMethodCatalog.js'
 import { isVolatileRealtimeNotification } from '../nativeExtensions.js'
+import { createThreadDeletion } from './threadDeletion.js'
 import { createExtensionInfoReader, NativeRealtimeSessions, RealtimeSessionConflict } from './nativeExtensionRuntime.js'
 import { NATIVE_QUEUE_METHODS, normalizeNativeSettings, type NativeThreadSettings } from '../nativeThreadControls.js'
 import { WEBUI_BUILD_INFO } from './runtimeIdentity.js'
@@ -8520,6 +8521,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     for (const listener of notificationSubscribers) listener(frame)
   }
   const unsubscribeAppServerNotifications = appServer.onNotification(publishNotification)
+  const threadDeletion = createThreadDeletion({
+    remove: threadId => appServer.rpc('thread/delete', { threadId }),
+    cleanups: [deleteRequestUserInputHistory, deletePlanSummaryHistory, deleteThreadCollaborationPreference, deleteThreadModelPreference],
+    notify: threadId => publishNotification({ method: 'codex-ui/thread-deleted', params: { threadId } }),
+    onError: (threadId, error) => console.warn('[thread-delete-cleanup]', threadId, getErrorMessage(error, 'Cleanup failed')),
+  })
   const unsubscribeTerminalNotifications = terminalManager.subscribe(publishNotification)
   let threadSearchIndex: ThreadSearchIndex | null = null
   let threadSearchIndexPromise: Promise<ThreadSearchIndex> | null = null
@@ -9017,6 +9024,19 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             model: readNonEmptyString(params?.model),
           })
           setJson(res, 200, { result: { title } })
+          return
+        }
+
+        if (body.method === 'thread/delete') {
+          const threadId = readNonEmptyString(asRecord(body.params)?.threadId)
+          if (!threadId) { setJson(res, 400, { error: 'Missing threadId' }); return }
+          const result = await threadDeletion.remove(threadId)
+          setJson(res, 200, { result })
+          return
+        }
+        if (['thread/read', 'thread/resume', 'thread/goal/get', 'thread/turns/list', 'thread/items/list'].includes(body.method)
+          && threadDeletion.isDeleted(readNonEmptyString(asRecord(body.params)?.threadId))) {
+          setJson(res, 410, { error: 'thread not found: deleted' })
           return
         }
 
@@ -10810,6 +10830,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   }
 
   middleware.dispose = () => {
+    threadDeletion.dispose()
     clearInterval(realtimeLeaseTimer)
     void realtimeSessions.dispose()
     extensionInfo.invalidate()
@@ -10824,6 +10845,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     appServer.dispose()
   }
   middleware.disposeGracefully = async () => {
+    threadDeletion.dispose()
+    await threadDeletion.drain()
     clearInterval(realtimeLeaseTimer)
     await realtimeSessions.dispose()
     extensionInfo.invalidate()
