@@ -19,7 +19,7 @@
       @touchstart.passive="onConversationUserScrollIntent"
       @wheel.passive="onConversationUserScrollIntent"
     >
-      <template v-for="message in messages" :key="messageIdentityKey(message)">
+      <template v-for="message in messages" :key="message.renderKey || messageIdentityKey(message)">
       <li
         v-if="!hiddenGroupedCommandIds.has(messageIdentityKey(message)) && !hiddenFileChangeMessageIds.has(messageIdentityKey(message))"
         class="conversation-item"

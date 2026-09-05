@@ -74,7 +74,7 @@ import {
   type WorkspaceRootsState,
 } from '../api/codexGateway'
 import { CodexApiError } from '../api/codexErrors'
-import { normalizeFileChangeStatus, toUiFileChanges } from '../api/normalizers/v2'
+import { normalizeFileChangeStatus, toUiFileChanges, normalizePaginatedThreadItemsV2 } from '../api/normalizers/v2'
 import type {
   ActivePlanSnapshot,
   CollaborationModeKind,
@@ -133,6 +133,7 @@ import {
   createThreadListLoader,
   removeThreadFromGroups,
 } from './desktop/threadListLoader'
+import { assignTimelineOrder, orderedTimeline, reconcileTimeline } from './desktop/messageTimeline'
 
 export { capUtf8Tail } from './desktop/liveDeltaBuffer'
 export { removeThreadFromGroups } from './desktop/threadListLoader'
@@ -801,6 +802,7 @@ function arePlanDataEqual(first?: UiPlanData, second?: UiPlanData): boolean {
 
 
 function areMessageFieldsEqual(first: UiMessage, second: UiMessage): boolean {
+  if (first.renderKey !== second.renderKey || first.timelineOrder !== second.timelineOrder) return false
   return (
     first.id === second.id &&
     first.role === second.role &&
@@ -845,39 +847,8 @@ function mergeMessages(
   incoming: UiMessage[],
   options: { preserveMissing?: boolean } = {},
 ): UiMessage[] {
-  const previousById = new Map(previous.map((message) => [messageIdentityKey(message), message]))
-  const incomingById = new Map(incoming.map((message) => [messageIdentityKey(message), message]))
-
-  const mergedIncoming = incoming.map((incomingMessage) => {
-    const previousMessage = previousById.get(messageIdentityKey(incomingMessage))
-    if (previousMessage && areMessageFieldsEqual(previousMessage, incomingMessage)) {
-      return previousMessage
-    }
-    return incomingMessage
-  })
-
-  if (options.preserveMissing !== true) {
-    return areMessageArraysEqual(previous, mergedIncoming) ? previous : mergedIncoming
-  }
-
-  const mergedFromPrevious = previous
-    .map((previousMessage) => {
-      const nextMessage = incomingById.get(messageIdentityKey(previousMessage))
-      if (!nextMessage) {
-        return previousMessage
-      }
-      if (areMessageFieldsEqual(previousMessage, nextMessage)) {
-        return previousMessage
-      }
-      return nextMessage
-    })
-    .filter((message) => !isOptimisticUserMessage(message) || !hasEquivalentUserMessage(message, incoming))
-
-  const previousIdSet = new Set(previous.map(messageIdentityKey))
-  const appended = mergedIncoming.filter((message) => !previousIdSet.has(messageIdentityKey(message)))
-  const merged = [...mergedFromPrevious, ...appended]
-
-  return areMessageArraysEqual(previous, merged) ? previous : merged
+  const reconciled = reconcileTimeline(previous, incoming, options.preserveMissing === true, areMessageFieldsEqual)
+  return areMessageArraysEqual(previous, reconciled) ? previous : reconciled
 }
 
 function mergeLivePlanMessagesIntoTimeline(messages: UiMessage[], livePlans: UiMessage[]): UiMessage[] {
@@ -972,30 +943,7 @@ function hasOptimisticUserMessages(messages: UiMessage[]): boolean {
   return messages.some(isOptimisticUserMessage)
 }
 
-function hasEquivalentUserMessage(target: UiMessage, messages: UiMessage[]): boolean {
-  if (target.role !== 'user') return false
-  const targetText = normalizeMessageText(target.text)
-  const targetImages = Array.isArray(target.images) ? target.images : []
-  const targetFileCount = countNonImageFileAttachments(target)
-  const targetSkillCount = Array.isArray(target.skills) ? target.skills.length : 0
-
-  return messages.some((message) => {
-    if (message === target || message.role !== 'user' || isOptimisticUserMessage(message)) return false
-    const messageText = normalizeMessageText(message.text)
-    const messageImages = Array.isArray(message.images) ? message.images : []
-    const messageFileCount = countNonImageFileAttachments(message)
-    const messageSkillCount = Array.isArray(message.skills) ? message.skills.length : 0
-    return (
-      messageText === targetText &&
-      areStringArraysEqual(messageImages, targetImages) &&
-      messageFileCount === targetFileCount &&
-      messageSkillCount === targetSkillCount
-    )
-  })
-}
-
 function removeRedundantLiveAgentMessages(previous: UiMessage[], incoming: UiMessage[]): UiMessage[] {
-  const incomingMessageIds = new Set(incoming.map(messageIdentityKey))
   const incomingAssistantTexts = new Set(
     incoming
       .filter((message) => message.role === 'assistant')
@@ -1009,7 +957,6 @@ function removeRedundantLiveAgentMessages(previous: UiMessage[], incoming: UiMes
 
   const next = previous.filter((message) => {
     if (message.messageType !== 'agentMessage.live') return true
-    if (incomingMessageIds.has(messageIdentityKey(message))) return false
     const normalized = normalizeMessageText(message.text)
     if (normalized.length === 0) return false
     return !incomingAssistantTexts.has(messageTextIdentityKey(message))
@@ -2130,8 +2077,9 @@ export function useDesktopState() {
     const liveAgent = liveAgentMessagesByThreadId.value[threadId] ?? []
     const liveCommands = liveCommandsByThreadId.value[threadId] ?? []
     const liveFileChanges = liveFileChangeMessagesByThreadId.value[threadId] ?? []
+    const timeline = orderedTimeline(visiblePersisted, [...liveCommands, ...liveFileChanges, ...liveAgent])
     const withQuestionHistory = mergeRequestUserInputSummaryMessages(
-      visiblePersisted,
+      timeline,
       requestUserInputSummariesByThreadId.value[threadId] ?? [],
     )
     const withPlanSummaries = mergePlanSummaryMessages(
@@ -2140,7 +2088,7 @@ export function useDesktopState() {
         .filter((summary) => !livePlanTurnIds.has(summary.turnId)),
     )
     const withLivePlans = mergeLivePlanMessagesIntoTimeline(withPlanSummaries, livePlan)
-    const combined = [...withLivePlans, ...liveCommands, ...liveFileChanges, ...liveAgent]
+    const combined = withLivePlans
 
     const summary = turnSummaryByThreadId.value[threadId]
     if (!summary) return combined
@@ -3691,7 +3639,25 @@ export function useDesktopState() {
       : omitKey(queueHandoffReleaseIdsByThreadId.value, threadId)
   }
 
+  let timelineSequence = 0
+  function prepareTimelineMessages(threadId: string, nextMessages: UiMessage[], history = false): UiMessage[] {
+    const known = [
+      ...(persistedMessagesByThreadId.value[threadId] ?? []),
+      ...(liveCommandsByThreadId.value[threadId] ?? []),
+      ...(liveFileChangeMessagesByThreadId.value[threadId] ?? []),
+      ...(liveAgentMessagesByThreadId.value[threadId] ?? []),
+    ]
+    const reconciled = reconcileTimeline(known, nextMessages, false, areMessageFieldsEqual)
+    const firstLive = known.filter(message => message.messageType?.endsWith('.live') && message.timelineOrder !== undefined)
+      .sort((first, second) => first.timelineOrder! - second.timelineOrder!)[0]
+    if (history && firstLive && reconciled.length && reconciled.every(message => message.timelineOrder === undefined)) {
+      return assignTimelineOrder([...reconciled, firstLive], () => ++timelineSequence).slice(0, -1)
+    }
+    return assignTimelineOrder(reconciled, () => ++timelineSequence)
+  }
+
   function setPersistedMessagesForThread(threadId: string, nextMessages: UiMessage[]): void {
+    nextMessages = prepareTimelineMessages(threadId, nextMessages, true)
     const previous = persistedMessagesByThreadId.value[threadId] ?? []
     if (!areMessageArraysEqual(previous, nextMessages)) {
       persistedMessagesByThreadId.value = {
@@ -3975,10 +3941,13 @@ export function useDesktopState() {
     imageUrls: string[] = [],
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
+    turnId?: string,
   ): string {
     const existing = persistedMessagesByThreadId.value[threadId] ?? []
     const nextMessage: UiMessage = {
-      id: `optimistic-user:${threadId}:${Date.now()}`,
+      id: `optimistic-user:${threadId}:${Date.now()}:${++timelineSequence}`,
+      timelineOrder: timelineSequence,
+      ...(turnId ? { turnId } : {}),
       role: 'user',
       text,
       timestampIso: new Date().toISOString(),
@@ -4028,6 +3997,7 @@ export function useDesktopState() {
   }
 
   function setLiveAgentMessagesForThread(threadId: string, nextMessages: UiMessage[]): void {
+    nextMessages = prepareTimelineMessages(threadId, nextMessages)
     const previous = liveAgentMessagesByThreadId.value[threadId] ?? []
     if (areMessageArraysEqual(previous, nextMessages)) return
     liveAgentMessagesByThreadId.value = {
@@ -4043,6 +4013,7 @@ export function useDesktopState() {
   }
 
   function setLiveFileChangeMessagesForThread(threadId: string, nextMessages: UiMessage[]): void {
+    nextMessages = prepareTimelineMessages(threadId, nextMessages)
     const previous = liveFileChangeMessagesByThreadId.value[threadId] ?? []
     if (areMessageArraysEqual(previous, nextMessages)) return
     liveFileChangeMessagesByThreadId.value = {
@@ -5421,7 +5392,7 @@ export function useDesktopState() {
 
   function upsertLiveCommand(threadId: string, msg: UiMessage): void {
     const previous = liveCommandsByThreadId.value[threadId] ?? []
-    const next = upsertMessage(previous, msg)
+    const next = prepareTimelineMessages(threadId, upsertMessage(previous, msg))
     if (next === previous) return
     liveCommandsByThreadId.value = { ...liveCommandsByThreadId.value, [threadId]: next }
   }
@@ -5580,6 +5551,14 @@ export function useDesktopState() {
     const bindNotificationTurn = (message: UiMessage): UiMessage => (
       notificationTurnId && !message.turnId ? { ...message, turnId: notificationTurnId } : message
     )
+    if (notificationThreadId && notificationTurnId && ['item/started', 'item/completed'].includes(notification.method)) {
+      const item = asRecord(notificationParams?.item)
+      if (item?.type === 'userMessage') {
+        const incoming = normalizePaginatedThreadItemsV2([{ turnId: notificationTurnId, item }])
+        const previous = persistedMessagesByThreadId.value[notificationThreadId] ?? []
+        setPersistedMessagesForThread(notificationThreadId, mergeMessages(previous, incoming, { preserveMissing: true }))
+      }
+    }
     const notificationErrorState = readNotificationErrorState(notification)
     if (!notificationErrorState && notificationThreadId) {
       clearTransientTurnErrorForThread(notificationThreadId)
@@ -5884,6 +5863,7 @@ export function useDesktopState() {
     const shouldRefreshMessages =
       method === 'turn/started' ||
       method === 'turn/completed' ||
+      (method === 'item/completed' && asRecord(asRecord(notification.params)?.item)?.type === 'userMessage') ||
       method === 'error'
     const shouldRefreshThreads =
       method.startsWith('thread/') ||
@@ -6496,9 +6476,9 @@ export function useDesktopState() {
         ...replacementMessages,
         ...withoutTurn.slice(insertAt),
       ]
-      nextPersisted = nextPersisted.filter((message) => (
-        !isOptimisticUserMessage(message) || !hasEquivalentUserMessage(message, nextPersisted)
-      ))
+      const pendingIds = new Set(mergeMessages(previousPersisted, collectedMessages, { preserveMissing: true })
+        .filter(isOptimisticUserMessage).map(message => message.id))
+      nextPersisted = nextPersisted.filter(message => !isOptimisticUserMessage(message) || pendingIds.has(message.id))
     } else {
       nextPersisted = mergeMessages(previousPersisted, collectedMessages, { preserveMissing: true })
     }
@@ -7016,13 +6996,23 @@ export function useDesktopState() {
           expectedTurnId = runtime.find(row => row.threadId === threadId && row.isRunning)?.turnId ?? ''
         }
         if (!expectedTurnId) throw new Error('当前回合尚未确认或已经结束，请等待状态更新后重新发送。')
-        optimisticId = appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments)
+        optimisticId = appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments, expectedTurnId)
         await steerThreadTurn(threadId, expectedTurnId, nextText, imageUrls, skills, fileAttachments)
         shouldAutoScrollOnNextAgentEvent = selectedThreadId.value === threadId
         pendingThreadMessageRefresh.add(threadId)
+        if (eventSyncTimer === null && typeof window !== 'undefined') {
+          eventSyncTimer = window.setTimeout(() => {
+            eventSyncTimer = null
+            void syncFromNotifications()
+          }, EVENT_SYNC_DEBOUNCE_MS)
+        }
       } catch (unknownError) {
-        if (optimisticId) setPersistedMessagesForThread(threadId, (persistedMessagesByThreadId.value[threadId] ?? []).filter(message => message.id !== optimisticId))
-        error.value = unknownError instanceof Error ? unknownError.message : '插话失败，不会自动重发。'
+        const uncertain = unknownError instanceof CodexApiError && (
+          ['timeout', 'network_error', 'aborted', 'invalid_response'].includes(unknownError.code)
+          || (unknownError.status ?? 0) >= 500
+        )
+        if (optimisticId && !uncertain) setPersistedMessagesForThread(threadId, (persistedMessagesByThreadId.value[threadId] ?? []).filter(message => message.id !== optimisticId))
+        error.value = uncertain ? '插话接收结果尚未确认，请核对对话；不会自动重发。' : unknownError instanceof Error ? unknownError.message : '插话失败，不会自动重发。'
         throw unknownError
       } finally { pendingNativeSteers.delete(threadId) }
       return

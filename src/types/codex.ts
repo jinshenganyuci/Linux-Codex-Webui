@@ -297,6 +297,8 @@ export type UiPlanSummaryHistoryState = Record<string, UiPlanSummary[]>
 
 export type UiMessage = {
   id: string
+  renderKey?: string
+  timelineOrder?: number
   role: 'user' | 'assistant' | 'system'
   text: string
   /** ISO timestamp used for the visible user/assistant message date. */

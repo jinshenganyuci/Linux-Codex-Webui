@@ -3865,6 +3865,35 @@ describe('permanent thread deletion', () => {
   })
 })
 
+describe('live user message reconciliation', () => {
+  it('keeps steer after live replies, promotes it in place, and preserves repeated text', async () => {
+    installTestWindow()
+    let notify!: (notification: { method: string; params: unknown }) => void
+    gatewayMocks.subscribeCodexNotifications.mockImplementation(handler => { notify = handler; return vi.fn() })
+    nativeGatewayMocks.getNativeCapabilities.mockResolvedValue({ ...EMPTY_NATIVE_CAPABILITIES, steer: true })
+    gatewayMocks.steerThreadTurn.mockResolvedValue('turn')
+    const state = useDesktopState()
+    state.primeSelectedThread('thread')
+    state.startNotificationStream()
+    notify({ method: 'turn/started', params: { threadId: 'thread', turn: { id: 'turn', status: 'inProgress', items: [] } } })
+    const receive = (id: string, type: string, text: string) => notify({ method: 'item/completed', params: { threadId: 'thread', turnId: 'turn', item: type === 'userMessage' ? { id, type, content: [{ type: 'text', text }] } : { id, type, text } } })
+    receive('first', 'userMessage', '继续')
+    receive('reply', 'agentMessage', 'old reply')
+    await state.sendMessageToSelectedThread('继续')
+    const pending = state.messages.value.find(message => message.messageType === 'userMessage.optimistic')!
+    expect(state.messages.value.map(message => message.text)).toEqual(['继续', 'old reply', '继续'])
+    receive('second', 'userMessage', '继续')
+    receive('second', 'userMessage', '继续')
+    const users = state.messages.value.filter(message => message.role === 'user')
+    expect(users).toHaveLength(2)
+    expect(users[1].renderKey).toContain(pending.id)
+    expect(state.messages.value.map(message => message.text)).toEqual(['继续', 'old reply', '继续'])
+    expect(window.setTimeout).toHaveBeenCalled()
+    expect(gatewayMocks.steerThreadTurn).toHaveBeenCalledTimes(1)
+    state.stopPolling()
+  })
+})
+
 describe('live output bounds', () => {
   it('keeps UTF-8 output within the configured byte ceiling', () => {
     const result = capUtf8Tail('你好世界hello', 10)
