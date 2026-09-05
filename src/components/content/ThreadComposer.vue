@@ -2772,11 +2772,11 @@ watch(
 }
 
 .thread-composer-attachment {
-  @apply relative h-14 w-14 overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50;
+  @apply inline-flex items-center gap-1;
 }
 
 .thread-composer-attachment-preview {
-  @apply block h-full w-full border-0 bg-transparent p-0 cursor-zoom-in;
+  @apply block h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50 p-0 cursor-zoom-in;
 }
 
 .thread-composer-attachment-image {
@@ -2784,7 +2784,7 @@ watch(
 }
 
 .thread-composer-attachment-remove {
-  @apply absolute right-0.5 top-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border-0 bg-black/70 text-xs leading-none text-white;
+  @apply inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-0 bg-black/70 text-base leading-none text-white;
 }
 
 .thread-composer-image-modal-backdrop {

@@ -3441,3 +3441,12 @@ html.dark .runtime-notice,
 html.dark .runtime-item { background: rgb(24 30 43); color: rgb(226 232 240); border-color: rgb(148 163 184 / 25%); }
 html.dark .runtime-notice[data-action="true"] { border-color: rgb(251 191 36 / 55%); }
 html.dark .runtime-item a { color: rgb(165 180 252); }
+:root.dark .thread-composer-attachment-preview {
+  background: #27272a;
+  border-color: #52525b;
+}
+
+:root.dark .thread-composer-attachment-remove {
+  background: #3f3f46;
+  color: #fafafa;
+}
