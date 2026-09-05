@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [原生请求关闭、非阻塞澄清与新运行消息](codex-01534-native-events.md) |
 | [Composer slash-command and dollar-skill autocomplete](composer-slash-command-and-skill-autocomplete.md) |
 | [Planning clarification summaries persist after answering](planning-clarification-summary-persistence.md) |
 | [Codex thread deep links render as local web thread URLs](codex-thread-deep-links-render-as-local-web-thread-urls.md) |

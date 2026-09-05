@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [首批升级的打包隔离与错误持久化](codex-01534-packaged-isolation.md) |
 | [Feature: CLI no longer requires codex login on startup](cli-no-longer-requires-codex-login-on-startup.md) |
 | [Raw auth/provider error messages](raw-auth-provider-error-messages.md) |
 | [ChatGPT auth tokens refresh for external auth](chatgpt-auth-tokens-refresh-for-external-auth.md) |

@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [Codex 0.153.4 运行身份与 Astra 能力来源](codex-01534-runtime-and-astra.md) |
 | [Feature: Persistent per-thread model and reasoning selection](per-thread-model-selection.md) |
 | [Feature: Codex.app Thread Provider Filter Patch (fix-codex-thread-filter.sh)](codex-app-thread-provider-filter-patch-fix-codex-thread-filter-sh.md) |
 | [Default send mode, chat width, and Codex-only provider](default-send-chat-width-and-codex-only-provider.md) |
