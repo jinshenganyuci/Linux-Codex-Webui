@@ -317,8 +317,16 @@
           </div>
 
           <template v-if="!isDictationRecording">
+            <button
+              v-if="!isMobile && nativePermissionsAvailable"
+              type="button"
+              class="thread-composer-control thread-composer-permission-control"
+              :disabled="disabled"
+              title="本会话的原生权限；不修改全局默认"
+              @click="emit('open-native-permissions')"
+            >{{ nativePermissionProfile || '会话权限' }}</button>
             <ComposerDropdown
-              v-if="!isMobile"
+              v-else-if="!isMobile"
               class="thread-composer-control thread-composer-permission-control"
               :model-value="selectedCodexPermissionMode"
               :options="permissionModeOptions"
@@ -575,8 +583,8 @@
                 @click="openMobileSettingsView('permission')"
               >
                 <span class="thread-composer-mobile-settings-row-copy">
-                  <span class="thread-composer-mobile-settings-row-label">{{ t('Codex permissions') }}</span>
-                  <span class="thread-composer-mobile-settings-row-value">{{ selectedPermissionLabel }}</span>
+                  <span class="thread-composer-mobile-settings-row-label">{{ nativePermissionsAvailable ? '会话权限' : t('Codex permissions') }}</span>
+                  <span class="thread-composer-mobile-settings-row-value">{{ nativePermissionsAvailable ? nativePermissionProfile || '待 CLI 确认' : selectedPermissionLabel }}</span>
                 </span>
                 <IconTablerChevronRight class="thread-composer-mobile-settings-row-chevron" />
               </button>
@@ -795,6 +803,8 @@ const props = defineProps<{
   selectedSpeedMode: SpeedMode
   isFastModeSupported?: boolean
   selectedCodexPermissionMode: CodexPermissionMode
+  nativePermissionsAvailable?: boolean
+  nativePermissionProfile?: string | null
   skills?: SkillItem[]
   threadTokenUsage?: UiThreadTokenUsage | null
   codexQuota?: UiRateLimitSnapshot | null
@@ -807,6 +817,7 @@ const props = defineProps<{
   hasQueueAbove?: boolean
   sendWithEnter?: boolean
   inProgressSubmitMode?: 'steer' | 'queue'
+  awaitSubmitAcknowledgement?: boolean
   dictationClickToToggle?: boolean
   dictationAutoSend?: boolean
   dictationLanguage?: string
@@ -830,6 +841,7 @@ export type SubmitPayload = {
   collaborationModeOverride?: CollaborationModeKind
   persistCollaborationMode?: boolean
   collaborationModeDeveloperInstructions?: string
+  acknowledge?: (accepted: boolean) => void
 }
 
 export type ThreadComposerExposed = {
@@ -846,6 +858,7 @@ const emit = defineEmits<{
   'update:selected-reasoning-effort': [effort: ReasoningEffort | '']
   'update:selected-speed-mode': [mode: SpeedMode]
   'update:selected-codex-permission-mode': [mode: CodexPermissionMode]
+  'open-native-permissions': []
 }>()
 const { t } = useUiLanguage()
 
@@ -880,6 +893,7 @@ const PASTED_TEXT_FILE_THRESHOLD = 2000
 const PROMPT_OPTION_PREFIX = 'prompt:'
 
 const draft = ref('')
+const awaitingSubmissionThreads = ref(new Set<string>())
 const clarifyBeforePlanning = ref(false)
 const selectedImages = ref<SelectedImage[]>([])
 const selectedSkills = ref<SkillItem[]>([])
@@ -1068,6 +1082,7 @@ const composerAutocompleteAriaLabel = computed(() => (
 ))
 
 const canSubmit = computed(() => {
+  if (awaitingSubmissionThreads.value.has(props.activeThreadId)) return false
   if (props.disabled) return false
   if (props.isUpdatingSpeedMode) return false
   if (!props.activeThreadId) return false
@@ -1456,12 +1471,23 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
   const submitText = planCommand?.prompt ?? text
   const shouldClarifyBeforePlanning = clarifyBeforePlanning.value
   const shouldUsePlanOverride = Boolean(planCommand) || shouldClarifyBeforePlanning
+  const submittedThreadId = props.activeThreadId
+  const submittedDraft = JSON.stringify(getCurrentDraftPayload())
+  const awaitAcknowledgement = props.awaitSubmitAcknowledgement === true
+  if (awaitAcknowledgement) awaitingSubmissionThreads.value.add(submittedThreadId)
+  let acknowledged = false
   emit('submit', {
     text: submitText,
     imageUrls: selectedImages.value.map((image) => image.url),
     fileAttachments: [...fileAttachments.value],
     skills: selectedSkills.value.map((s) => ({ name: s.name, path: s.path })),
     mode: shouldUsePlanOverride && props.isTurnInProgress ? 'queue' : mode,
+    ...(awaitAcknowledgement ? { acknowledge: (accepted: boolean) => {
+      if (acknowledged) return
+      acknowledged = true
+      awaitingSubmissionThreads.value.delete(submittedThreadId)
+      if (accepted) finishSubmittedDraft(submittedThreadId, submittedDraft)
+    } } : {}),
     ...(shouldUsePlanOverride
       ? {
           collaborationModeOverride: 'plan' as const,
@@ -1472,6 +1498,16 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
         }
       : {}),
   })
+  if (awaitAcknowledgement) return
+  finishSubmittedDraft(submittedThreadId, submittedDraft)
+}
+
+function finishSubmittedDraft(threadId: string, submittedDraft: string): void {
+  if (props.activeThreadId !== threadId) {
+    if (JSON.stringify(loadPersistedDraftForThread(threadId)) === submittedDraft) clearPersistedDraftForThread(threadId)
+    return
+  }
+  if (JSON.stringify(getCurrentDraftPayload()) !== submittedDraft) return
   clarifyBeforePlanning.value = false
   clearPersistedDraftForThread(props.activeThreadId)
   clearDraftState()
@@ -1788,6 +1824,11 @@ function setMobileSettingsBackgroundLocked(locked: boolean): void {
 }
 
 function openMobileSettingsView(view: MobileSettingsView): void {
+  if (view === 'permission' && props.nativePermissionsAvailable) {
+    closeMobileSettings()
+    emit('open-native-permissions')
+    return
+  }
   mobileSettingsView.value = view
   void nextTick(() => {
     if (view === 'root') {

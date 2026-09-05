@@ -1,6 +1,8 @@
 import { isServerRequestId, serverRequestIdentity, isBlockingServerRequest } from '../serverRequests'
 import { computed, ref } from 'vue'
 import { RuntimeNoticeStore } from '../runtimeNotices'
+import { createNativeThreadController } from './desktop/nativeThreadController'
+import { getNativeCapabilities, getNativeThreadState } from '../api/nativeThreadGateway'
 import { normalizeRuntimeItem } from '../runtimeItems'
 import type { UiRuntimeNotice } from '../types/codex'
 import {
@@ -55,6 +57,8 @@ import {
   startThreadWithTurn,
   subscribeCodexNotifications,
   startThreadTurn,
+  steerThreadTurn,
+  buildNativeTurnInput,
   type CodexRuntimeConfig,
   type NewChatDefaultPatch,
   type NewChatDefaultPreference,
@@ -1672,6 +1676,8 @@ export function useDesktopState() {
     speedMode: SpeedMode
   }
   const queuedMessagesByThreadId = ref<Record<string, QueuedMessage[]>>({})
+  const nativeThreadControls = createNativeThreadController()
+  const pendingNativeSteers = new Set<string>()
   const queueProcessingByThreadId = ref<Record<string, boolean>>({})
   const queueRefreshTimerByThreadId = new Map<string, number>()
   const queueHandoffReleaseIdsByThreadId = ref<Record<string, string[]>>({})
@@ -2315,7 +2321,10 @@ export function useDesktopState() {
   }
 
   function setSelectedThreadId(nextThreadId: string, options: { persist?: boolean } = {}): void {
-    if (selectedThreadId.value === nextThreadId) return
+    if (selectedThreadId.value === nextThreadId) {
+      if (nativeThreadControls.state.threadId !== nextThreadId) void nativeThreadControls.select(nextThreadId)
+      return
+    }
     const previousThreadId = selectedThreadId.value
     selectedThreadId.value = nextThreadId
     if (options.persist !== false) {
@@ -2340,6 +2349,7 @@ export function useDesktopState() {
     )
     activeReasoningItemIdByThreadId.delete(nextThreadId)
     shouldAutoScrollOnNextAgentEvent = false
+    void nativeThreadControls.select(nextThreadId)
   }
 
   function setSelectedModelIdForThread(
@@ -2585,6 +2595,7 @@ export function useDesktopState() {
     error.value = ''
 
     try {
+      if (selectedThreadId.value && (await getNativeCapabilities()).threadSettings) return
       const contextId = selectedThreadId.value.trim() || NEW_THREAD_COLLABORATION_MODE_CONTEXT
       const tier = availableModelCapabilities.value[readModelIdForThread(contextId)]?.fastServiceTier
       if (tier) await setCodexSpeedMode(nextMode, tier)
@@ -3963,7 +3974,7 @@ export function useDesktopState() {
     imageUrls: string[] = [],
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
-  ): void {
+  ): string {
     const existing = persistedMessagesByThreadId.value[threadId] ?? []
     const nextMessage: UiMessage = {
       id: `optimistic-user:${threadId}:${Date.now()}`,
@@ -3976,6 +3987,7 @@ export function useDesktopState() {
       messageType: 'userMessage.optimistic',
     }
     setPersistedMessagesForThread(threadId, [...existing, nextMessage])
+    return nextMessage.id
   }
 
   function beginPendingNewThreadPreview(
@@ -6950,6 +6962,15 @@ export function useDesktopState() {
     const isInProgress = inProgressById.value[threadId] === true
 
     if (isInProgress && mode === 'queue') {
+      const capabilities = await getNativeCapabilities()
+      const nativeState = await getNativeThreadState(threadId)
+      if (nativeState.mode === 'native') {
+        if (!capabilities.queue) throw new Error('当前 CLI 不支持已启用的原生队列，不会转交旧队列或自动重发。')
+        if (collaborationModeDeveloperInstructions?.trim()) throw new Error('原生队列不保存一次性规划指令，请等待当前回合结束后发送。')
+        const input = await buildNativeTurnInput(nextText, imageUrls, skills, fileAttachments)
+        await nativeThreadControls.enqueue(input, threadId)
+        return
+      }
       const queue = queuedMessagesByThreadId.value[threadId] ?? []
       const id = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const nextQueue = [...queue]
@@ -6979,6 +7000,30 @@ export function useDesktopState() {
         [threadId]: nextQueue,
       }
       persistQueueState()
+      return
+    }
+
+    if (isInProgress && (await getNativeCapabilities()).steer) {
+      if (collaborationModeDeveloperInstructions?.trim()) throw new Error('原生插话只追加输入；一次性规划指令请等当前回合结束后发送。')
+      if (pendingNativeSteers.has(threadId)) throw new Error('正在提交插话，请稍后再试。')
+      pendingNativeSteers.add(threadId)
+      let optimisticId = ''
+      try {
+        let expectedTurnId = activeTurnIdByThreadId.value[threadId] ?? ''
+        if (!expectedTurnId) {
+          const runtime = await getThreadRuntimeStates([threadId])
+          expectedTurnId = runtime.find(row => row.threadId === threadId && row.isRunning)?.turnId ?? ''
+        }
+        if (!expectedTurnId) throw new Error('当前回合尚未确认或已经结束，请等待状态更新后重新发送。')
+        optimisticId = appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments)
+        await steerThreadTurn(threadId, expectedTurnId, nextText, imageUrls, skills, fileAttachments)
+        shouldAutoScrollOnNextAgentEvent = selectedThreadId.value === threadId
+        pendingThreadMessageRefresh.add(threadId)
+      } catch (unknownError) {
+        if (optimisticId) setPersistedMessagesForThread(threadId, (persistedMessagesByThreadId.value[threadId] ?? []).filter(message => message.id !== optimisticId))
+        error.value = unknownError instanceof Error ? unknownError.message : '插话失败，不会自动重发。'
+        throw unknownError
+      } finally { pendingNativeSteers.delete(threadId) }
       return
     }
 
@@ -8170,6 +8215,8 @@ export function useDesktopState() {
     hasReceivedNotificationReady = false
     void loadPendingServerRequestsFromBridge()
     stopNotificationStream = subscribeCodexNotifications((notification) => {
+      if (notification.method === 'ready' && !nativeThreadControls.state.threadId && selectedThreadId.value) void nativeThreadControls.select(selectedThreadId.value)
+      nativeThreadControls.observe(notification)
       if (notification.method === 'connection/status') {
         const status = readString(asRecord(notification.params)?.status) as UiNotificationConnectionState | null
         if (status && ['connecting', 'connected', 'reconnecting', 'unavailable'].includes(status)) {
@@ -8271,6 +8318,7 @@ export function useDesktopState() {
   }
 
   function stopPolling(): void {
+    nativeThreadControls.dispose()
     agentProgressLoadGeneration += 1
     runtimeRequestGeneration += 1
     threadRuntimePolling.stop()
@@ -8440,6 +8488,13 @@ export function useDesktopState() {
   }
 
   return {
+    nativeThreadControls,
+    selectedNativeActiveTurnId: computed(() => activeTurnIdByThreadId.value[selectedThreadId.value] ?? ''),
+    selectedNativeSettingsPatch: computed(() => ({
+      model: selectedModelId.value,
+      ...(selectedReasoningEffort.value ? { effort: selectedReasoningEffort.value } : {}),
+      serviceTier: serviceTierForSpeedMode(selectedSpeedMode.value, selectedModelId.value),
+    })),
     projectGroups,
     projectDisplayNameById,
     selectedThread,

@@ -7,6 +7,7 @@ export type NativeCapabilities = {
   goals: boolean
   queue: boolean
   permissions: boolean
+  turnSettingsReason?: string
 }
 
 export const EMPTY_NATIVE_CAPABILITIES: NativeCapabilities = {

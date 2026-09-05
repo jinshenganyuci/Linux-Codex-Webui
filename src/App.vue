@@ -913,6 +913,13 @@
                     @delete="removeQueuedMessage"
                     @reorder="onReorderQueuedMessage"
                   />
+                  <NativeThreadControls
+                    :controller="nativeThreadControls"
+                    :settings-patch="selectedNativeSettingsPatch"
+                    :active-turn-id="selectedNativeActiveTurnId"
+                    :is-running="isSelectedThreadInProgress"
+                    :legacy-queue-count="selectedThreadQueuedMessages.length"
+                  />
                   <ThreadTerminalPanel
                     v-if="selectedThreadTerminalOpen && selectedThreadId && composerCwd"
                     ref="threadTerminalPanelRef"
@@ -931,6 +938,10 @@
                   />
                   <ThreadComposer
                     ref="threadComposerRef"
+                    await-submit-acknowledgement
+                    :native-permissions-available="nativeThreadControls.state.capabilities.permissions"
+                    :native-permission-profile="nativeThreadControls.state.settings?.permissionProfile"
+                    @open-native-permissions="onOpenNativePermissions"
                     :active-thread-id="composerThreadContextId"
                     :cwd="composerCwd"
                     :collaboration-modes="availableCollaborationModes"
@@ -1001,6 +1012,7 @@ import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import ThreadPendingRequestPanel from './components/content/ThreadPendingRequestPanel.vue'
 import QueuedMessages from './components/content/QueuedMessages.vue'
+import NativeThreadControls from './components/content/NativeThreadControls.vue'
 import RateLimitStatus from './components/content/RateLimitStatus.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import HeaderGitBranchDropdown from './components/content/HeaderGitBranchDropdown.vue'
@@ -1108,6 +1120,9 @@ type DirectoryTryItemPayload = {
 }
 
 const {
+  nativeThreadControls,
+  selectedNativeActiveTurnId,
+  selectedNativeSettingsPatch,
   projectGroups,
   projectDisplayNameById,
   selectedThread,
@@ -3035,6 +3050,8 @@ async function syncAfterMobileResume(): Promise<void> {
 
 function onSubmitThreadMessage(payload: SubmitPayload): void {
   const text = payload.text
+  const submittedThreadId = selectedThreadId.value
+  if (nativeThreadControls.state.threadId === submittedThreadId) nativeThreadControls.state.error = ''
   if (payload.persistCollaborationMode && payload.collaborationModeOverride) {
     setSelectedCollaborationMode(payload.collaborationModeOverride)
   }
@@ -3069,7 +3086,11 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
     payload.collaborationModeOverride,
     undefined,
     payload.collaborationModeDeveloperInstructions,
-  )
+  ).then(() => payload.acknowledge?.(true)).catch((error: unknown) => {
+    desktopError.value = error instanceof Error ? error.message : '消息未确认接收，请检查后重试。'
+    if (nativeThreadControls.state.threadId === submittedThreadId) nativeThreadControls.state.error = desktopError.value
+    payload.acknowledge?.(false)
+  })
 }
 
 function onEditQueuedMessage(messageId: string): void {
@@ -3794,6 +3815,12 @@ function onSelectSpeedMode(mode: SpeedMode): void {
 
 function onSelectCodexPermissionMode(mode: CodexPermissionMode): void {
   void updateSelectedCodexPermissionMode(mode)
+}
+
+async function onOpenNativePermissions(): Promise<void> {
+  if (!nativeThreadControls.state.expanded) await nativeThreadControls.expand()
+  await nextTick()
+  document.querySelector<HTMLElement>('[data-testid="native-permission-picker"] .composer-dropdown-trigger')?.focus()
 }
 
 function onInterruptTurn(): void {

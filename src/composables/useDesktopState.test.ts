@@ -12,6 +12,10 @@ import {
 } from './useDesktopState'
 import type { ReasoningEffort, UiModelCapability, UiProjectGroup, UiRequestUserInputSummary, UiTurnProgress } from '../types/codex'
 import type { WorkspaceRootsState } from '../api/codexGateway'
+import { EMPTY_NATIVE_CAPABILITIES } from '../nativeThreadControls'
+
+const nativeGatewayMocks = vi.hoisted(() => ({ getNativeCapabilities: vi.fn(), getNativeThreadState: vi.fn(), invalidateNativeCapabilities: vi.fn() }))
+vi.mock('../api/nativeThreadGateway', () => nativeGatewayMocks)
 
 const gatewayMocks = vi.hoisted(() => ({
   archiveThread: vi.fn(),
@@ -60,6 +64,8 @@ const gatewayMocks = vi.hoisted(() => ({
   startThread: vi.fn(),
   startThreadWithTurn: vi.fn(),
   startThreadTurn: vi.fn(),
+  steerThreadTurn: vi.fn(),
+  buildNativeTurnInput: vi.fn(),
   subscribeCodexNotifications: vi.fn(),
 }))
 
@@ -185,6 +191,8 @@ function installTestWindow(initialStorage: Record<string, string> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  nativeGatewayMocks.getNativeCapabilities.mockResolvedValue({ ...EMPTY_NATIVE_CAPABILITIES })
+  nativeGatewayMocks.getNativeThreadState.mockResolvedValue({ mode: 'legacy', settings: null })
   gatewayMocks.archiveThread.mockResolvedValue(undefined)
   gatewayMocks.permanentlyDeleteThread.mockResolvedValue(undefined)
   gatewayMocks.getThreadDetail.mockResolvedValue({
@@ -4709,6 +4717,67 @@ describe('notification recovery', () => {
 
     expect(gatewayMocks.getThreadDetail.mock.calls.filter((call) => call[0] === 'selected-thread')).toHaveLength(selectedCalls)
     expect(gatewayMocks.getThreadDetail.mock.calls.some((call) => call[0] === 'background-running')).toBe(false)
+  })
+})
+
+describe('native steering integration', () => {
+  async function runningThread() {
+    installTestWindow()
+    let notify!: (notification: { method: string; params: unknown }) => void
+    gatewayMocks.subscribeCodexNotifications.mockImplementation(handler => { notify = handler; return vi.fn() })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [{ projectName: 'Project', threads: [thread('native-thread', '/tmp/project', { inProgress: true })] }], nextCursor: null })
+    gatewayMocks.getThreadDetail.mockResolvedValue({ model: '', modelProvider: '', messages: [], inProgress: true, activeTurnId: 'native-turn', hasMoreOlder: false, turnIndexByTurnId: {} })
+    gatewayMocks.getThreadRuntimeStates.mockResolvedValue([{ threadId: 'native-thread', turnId: 'native-turn', state: 'running', isRunning: true, source: 'local', startedAtIso: new Date().toISOString(), completedAtIso: null, owner: null }])
+    const state = useDesktopState()
+    state.primeSelectedThread('native-thread')
+    await state.loadThreads()
+    state.startPolling()
+    notify({ method: 'turn/started', params: { threadId: 'native-thread', turn: { id: 'native-turn', status: 'inProgress' } } })
+    return state
+  }
+
+  it('uses turn/steer without resuming or starting a replacement turn', async () => {
+    nativeGatewayMocks.getNativeCapabilities.mockResolvedValue({ ...EMPTY_NATIVE_CAPABILITIES, steer: true })
+    gatewayMocks.steerThreadTurn.mockResolvedValue('native-turn')
+    const state = await runningThread()
+    gatewayMocks.resumeThread.mockClear()
+    await state.sendMessageToSelectedThread('native insertion')
+    expect(gatewayMocks.steerThreadTurn).toHaveBeenCalledExactlyOnceWith('native-thread', 'native-turn', 'native insertion', [], [], [])
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+    expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
+    expect(state.selectedNativeActiveTurnId.value).toBe('native-turn')
+    expect(state.selectedThread.value?.inProgress).toBe(true)
+    state.stopPolling()
+  })
+
+  it('keeps the current run alive when an insertion is rejected and never replays it', async () => {
+    nativeGatewayMocks.getNativeCapabilities.mockResolvedValue({ ...EMPTY_NATIVE_CAPABILITIES, steer: true })
+    gatewayMocks.steerThreadTurn.mockRejectedValue(new Error('expectedTurnId mismatch'))
+    const state = await runningThread()
+    await expect(state.sendMessageToSelectedThread('rejected insertion')).rejects.toThrow('expectedTurnId')
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+    expect(state.selectedThread.value?.inProgress).toBe(true)
+    expect(state.messages.value.some(message => message.text === 'rejected insertion')).toBe(false)
+    state.stopPolling()
+  })
+
+  it('does not send through a legacy queue after downgrading a native-owned thread', async () => {
+    nativeGatewayMocks.getNativeThreadState.mockResolvedValue({ mode: 'native', settings: null })
+    const state = await runningThread()
+    await expect(state.sendMessageToSelectedThread('keep ownership', [], [], 'queue')).rejects.toThrow('不会转交旧队列')
+    expect(gatewayMocks.setThreadQueueState).not.toHaveBeenCalled()
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+    state.stopPolling()
+  })
+
+  it('stages speed changes for an existing native thread without changing global defaults', async () => {
+    nativeGatewayMocks.getNativeCapabilities.mockResolvedValue({ ...EMPTY_NATIVE_CAPABILITIES, threadSettings: true })
+    const state = await runningThread()
+    state.selectedSpeedMode.value = 'fast'
+    await state.updateSelectedSpeedMode('standard')
+    expect(state.selectedSpeedMode.value).toBe('standard')
+    expect(gatewayMocks.setCodexSpeedMode).not.toHaveBeenCalled()
+    state.stopPolling()
   })
 })
 

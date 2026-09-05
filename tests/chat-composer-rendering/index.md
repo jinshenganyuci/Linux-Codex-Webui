@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [第二批原生插话、设置、Goal、队列与权限](native-thread-controls.md) |
 | [原生请求关闭、非阻塞澄清与新运行消息](codex-01534-native-events.md) |
 | [Composer slash-command and dollar-skill autocomplete](composer-slash-command-and-skill-autocomplete.md) |
 | [Planning clarification summaries persist after answering](planning-clarification-summary-persistence.md) |

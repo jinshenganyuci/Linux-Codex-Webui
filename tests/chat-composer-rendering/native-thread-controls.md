@@ -29,3 +29,22 @@
 - 预期：拒绝另开回合；CLI 已自动领取的消息不重新发送。原生排队消息只存输入，执行设置继承 CLI 会话，不伪造逐条覆盖。
 - 性能：每线程 mutation 锁上限 64 个活跃线程，归属最多 4096 个线程；无新增原生轮询/调度器。列表读取最多 8 MiB；通知合并 120 ms，列表只在选中原生队列、操作后或原生通知时刷新。
 - 清理：待两种队列为空且会话空闲后切回兼容队列；不要删除含待执行输入的队列或归属文件，不操作 13510。
+
+## 界面与作用域验收
+
+- 前置条件：当前工作树在 4173，独立 HOME；保留真实 TestChat 的 README 工具读取和 `PHASE2_READY_20260905` 回复。安装好的 Playwright 直接复用，无需重新安装依赖。
+- 操作：运行 `PHASE2_THREAD_ID=<隔离线程 ID> node scripts/verify-codex-phase2.cjs`。脚本先读取真实回复，随后以浏览器请求拦截和合成通知测试原生控件，不把夹具写操作发送给真实 CLI。
+- 预期：1280×900、375×812、768×1024 的明暗主题均无页面异常、无水平溢出；原生面板不超过半屏，仍能看到输入框。文件链接 `hrefOk/titleOk/textOk` 均通过，截图在 `output/playwright/testchat-phase2-<theme>-<width>-cjs.png`、`phase2-native-<theme>-<width>.png`。
+- 操作：展开原生控制，将模型/推理/速度选择分别应用到当前回合与后续会话；模拟 `applied`、`targetUnavailable`；切换已有会话 Fast 选项。
+- 预期：请求作用域及精确 turnId 正确；目标不可用不显示成功；`applied` 不声称已改变进行中的推理。已有原生会话的速度选择暂存到本地，发送或显式应用时使用，不通过 config/batchWrite 修改全局默认；新会话默认和旧 CLI 路径保持兼容。
+- 操作：未启用 `[features].step_model_switching` 时读取能力；仅在隔离配置中启用后启动新 app-server 再重试。
+- 预期：Schema 含 turn/settings/update 也不等于功能可用；未启用时按钮禁用并解释原因。不会由 WebUI 自动启用开发中开关；`experimentalFeature/enablement/set` 返回 200 也不能替代实际 feature/list 检查。
+- 操作：运行中从附件菜单选择插话，制造过期 expectedTurnId/409，再成功发送；请求期间修改草稿或切换会话。
+- 预期：拒绝信息明确可见，保留草稿和附件，原回合继续，不新增 turn/start/resume；仅确认接收才清除相同草稿，不清空后来输入或其他会话草稿。
+- 操作：创建 Goal、改预算、暂停、刷新、双标签通知同步至 budgetLimited，再双击确认清除；同时保留已有 update_plan 卡。
+- 预期：原生目标和计划卡独立；仅改预算不提交 objective、不重置用量；刷新恢复 objective/budget/status/usage。用量不是完成百分比，清除不删除历史或计划。
+- 操作：原生队列添加、编辑、上/下移、删除、刷新、开始；其中一条带图片/skill 输入，模拟 CLI 自动领取与手动开始竞争。
+- 预期：编辑保留非文本输入；顺序刷新一致，手动开始失败后重新读取真实队列，不自动重放或转交旧队列。原生 CLI 0.153.4 会自动续跑，空闲时 add 也可能在手动 start 之前自动领取。
+- 操作：权限列表包含 allowed=false 的配置；选择 allowed=true 项，刷新并查看 CLI 已确认设置。
+- 预期：禁止项不出现在可选列表；通过 thread/settings/update 仅更新会话后续权限，不提升当前步骤权限、不修改全局 TOML。桌面和手机入口均指向原生权限控件。
+- 清理：脚本自动关闭自建浏览器，夹具状态仅存在于测试进程；保留 4173 供复查，不启动或重启 13510/5173。

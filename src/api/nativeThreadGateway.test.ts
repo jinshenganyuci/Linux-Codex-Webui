@@ -48,6 +48,7 @@ describe('native thread protocol', () => {
     expect(requests[0].params).toEqual({ threadId: 'thread', turnId: 'turn', model: 'gpt-6-astra', effort: 'ultra', serviceTier: null })
     expect(requests[1].method).toBe('thread/settings/update')
     await expect(updateNativeSettings('thread', { permissions: ':workspace' }, 'turn')).rejects.toThrow('后续回合')
+    await expect(updateNativeSettings('thread', { model: 'gpt-6-astra' }, '')).rejects.toThrow('缺少当前回合')
     expect(requests).toHaveLength(2)
   })
 
@@ -63,6 +64,17 @@ describe('native thread protocol', () => {
     respond(() => ({ data: [{ id: ':workspace', allowed: true }, { id: ':danger', allowed: false }], nextCursor: 'again' }))
     await expect(getNativePermissionProfiles()).rejects.toThrow('重复分页')
     expect(requests).toHaveLength(2)
+  })
+
+  it('requires the live step-model feature, not merely a settings method in the schema', async () => {
+    let enabled = false
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => new Response(JSON.stringify(input === '/codex-api/meta/methods'
+      ? { data: ['turn/settings/update', 'thread/settings/update'] }
+      : { result: { data: [{ name: 'step_model_switching', enabled }], nextCursor: null } }))))
+    expect(await getNativeCapabilities()).toMatchObject({ turnSettings: false, threadSettings: true, turnSettingsReason: expect.stringContaining('step_model_switching') })
+    enabled = true
+    invalidateNativeCapabilities()
+    expect(await getNativeCapabilities()).toMatchObject({ turnSettings: true, threadSettings: true })
   })
 
   it('reconciles uncertain queue adds without sending a second add', async () => {

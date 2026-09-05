@@ -32,6 +32,42 @@
   color-scheme: dark;
 }
 
+.native-thread-controls {
+  margin: 0 0 6px;
+  padding: 8px 12px;
+  border: 1px solid #e4e4e7;
+  border-radius: var(--ui-radius-card);
+  background: #fafafa;
+  color: #27272a;
+  font-size: 12px;
+  min-width: 0;
+}
+.native-controls-heading, .native-controls-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.native-thread-controls { max-height: min(48vh, 440px); overflow-y: auto; overscroll-behavior: contain; }
+.native-controls-heading { flex-wrap: nowrap; }
+.native-thread-controls button { padding: 4px 8px; border: 1px solid #d4d4d8; border-radius: var(--ui-radius-control); background: #fff; color: inherit; cursor: pointer; }
+.native-thread-controls button:disabled { opacity: .45; cursor: not-allowed; }
+.native-thread-controls button:focus-visible, .native-thread-controls input:focus-visible, .native-thread-controls textarea:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; }
+.native-controls-heading > button { flex-shrink: 0; }
+.native-goal-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-controls-body > section, .native-queue li { padding: 10px 0; border-top: 1px solid #e4e4e7; }
+.native-thread-controls h3 { margin: 4px 0 8px; font-weight: 600; }
+.native-thread-controls p { margin: 5px 0; overflow-wrap: anywhere; }
+.native-controls-muted { color: #71717a; }
+.native-controls-error { color: #b91c1c; }
+.native-controls-message { color: #166534; }
+.native-controls-field { display: grid; gap: 4px; margin: 8px 0; }
+.native-thread-controls textarea, .native-thread-controls input { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px 8px; background: #fff; border: 1px solid #d4d4d8; border-radius: var(--ui-radius-control); color: inherit; }
+.native-thread-controls textarea { resize: vertical; }
+.native-queue ol { list-style-position: inside; padding: 0; }
+.native-thread-controls .composer-dropdown { max-width: 100%; }
+:root.dark .native-thread-controls { background: #18181b; color: #e4e4e7; border-color: #3f3f46; }
+:root.dark .native-thread-controls button, :root.dark .native-thread-controls input, :root.dark .native-thread-controls textarea { background: #27272a; border-color: #52525b; color: #f4f4f5; }
+:root.dark .native-controls-body > section, :root.dark .native-queue li { border-color: #3f3f46; }
+:root.dark .native-controls-muted { color: #a1a1aa; }
+:root.dark .native-controls-error { color: #fca5a5; }
+:root.dark .native-controls-message { color: #86efac; }
+
 :root.dark body {
   @apply bg-zinc-900 text-zinc-100;
 }

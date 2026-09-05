@@ -5,13 +5,29 @@ import {
   nativeCapabilities, normalizeNativeGoal, validateGoalPatch,
   type NativeCapabilities, type NativeGoal, type NativeGoalStatus,
   type NativePermissionProfile, type NativeQueueMode, type NativeSettingsPatch, type NativeSubmission,
+  normalizeNativeSettings, type NativeThreadSettings,
 } from '../nativeThreadControls'
 
 let capabilitiesPromise: Promise<NativeCapabilities> | null = null
 
 export function getNativeCapabilities(): Promise<NativeCapabilities> {
   if (!capabilitiesPromise) {
-    const pending = fetchRpcMethodCatalog().then(nativeCapabilities)
+    const pending = fetchRpcMethodCatalog().then(async methods => {
+      const capabilities = nativeCapabilities(methods)
+      if (capabilities.turnSettings) {
+        try {
+          const features = await allPages<{ name: string; enabled: boolean }>('experimentalFeature/list', {})
+          if (!features.some(feature => feature.name === 'step_model_switching' && feature.enabled === true)) {
+            capabilities.turnSettings = false
+            capabilities.turnSettingsReason = '当前 CLI 未启用开发中的 step_model_switching；运行中设置不可用，不会擅自修改配置。'
+          }
+        } catch {
+          capabilities.turnSettings = false
+          capabilities.turnSettingsReason = '无法确认运行中设置所需的实验开关，请重新读取。'
+        }
+      }
+      return capabilities
+    })
     capabilitiesPromise = pending
     void pending.catch(() => { if (capabilitiesPromise === pending) capabilitiesPromise = null })
   }
@@ -40,7 +56,8 @@ export async function clearNativeGoal(threadId: string): Promise<void> { await r
 
 export async function updateNativeSettings(threadId: string, patch: NativeSettingsPatch, turnId?: string): Promise<'applied' | 'targetUnavailable' | 'saved'> {
   if (!threadId.trim()) throw new Error('缺少目标会话。')
-  if (turnId) {
+  if (turnId !== undefined) {
+    if (!turnId.trim()) throw new Error('缺少当前回合 ID，不会改为更新会话设置。')
     if (patch.permissions !== undefined) throw new Error('权限只能应用于后续回合。')
     const response = await rpcCall<{ status: string }>('turn/settings/update', { ...patch, threadId, turnId })
     if (response.status !== 'applied' && response.status !== 'targetUnavailable') throw new Error('运行设置返回未知状态，请刷新核对。')
@@ -52,11 +69,14 @@ export async function updateNativeSettings(threadId: string, patch: NativeSettin
 
 async function allPages<T>(method: string, params: Record<string, unknown>): Promise<T[]> {
   const rows: T[] = []
+  let totalBytes = 0
   const seen = new Set<string>()
   let cursor: string | null = null
   for (let page = 0; page < 20; page += 1) {
     const result: { data: T[]; nextCursor?: string | null } = await rpcCall(method, { ...params, cursor, limit: 100 })
     if (!Array.isArray(result.data)) throw new Error(`${method} 返回无效列表。`)
+    totalBytes += new TextEncoder().encode(JSON.stringify(result.data)).byteLength
+    if (totalBytes > 8 * 1024 * 1024) throw new Error(`${method} 超出列表字节上限，请通过 CLI 管理大型队列。`)
     rows.push(...result.data)
     if (rows.length > 2000) throw new Error(`${method} 超出列表安全上限。`)
     if (!result.nextCursor) return rows
@@ -81,9 +101,11 @@ export async function getNativeQueue(threadId: string): Promise<NativeSubmission
 
 export async function addNativeQueueInput(threadId: string, clientUserMessageId: string, input: Array<Record<string, unknown>>): Promise<NativeSubmission> {
   try {
-    return (await rpcCall<{ queuedSubmission: NativeSubmission }>('thread/queue/add', { threadId, clientUserMessageId, input })).queuedSubmission
+    const submission = (await rpcCall<{ queuedSubmission?: NativeSubmission }>('thread/queue/add', { threadId, clientUserMessageId, input })).queuedSubmission
+    if (!submission?.id || submission.clientUserMessageId !== clientUserMessageId || !Array.isArray(submission.input)) throw new CodexApiError('原生队列返回了不完整的确认。', { code: 'invalid_response', method: 'thread/queue/add' })
+    return submission
   } catch (error) {
-    if (error instanceof CodexApiError && ['timeout', 'network_error', 'aborted'].includes(error.code)) {
+    if (error instanceof CodexApiError && (['timeout', 'network_error', 'aborted', 'invalid_response'].includes(error.code) || (error.code === 'http_error' && (error.status ?? 0) >= 500))) {
       const received = (await getNativeQueue(threadId).catch(() => [])).find(row => row.clientUserMessageId === clientUserMessageId)
       if (received) return received
       throw new Error('队列提交结果不确定，可能已被接收或开始执行。请核对队列和对话，不会自动重发。')
@@ -97,12 +119,14 @@ export async function deleteNativeQueueInput(threadId: string, queuedSubmissionI
 export async function reorderNativeQueue(threadId: string, queuedSubmissionIds: string[]): Promise<void> { await rpcCall('thread/queue/reorder', { threadId, queuedSubmissionIds }) }
 export async function startNativeQueueInput(threadId: string, queuedSubmissionId: string): Promise<void> { await rpcCall('thread/queue/start', { threadId, queuedSubmissionId }) }
 
-export async function getNativeQueueMode(threadId: string): Promise<NativeQueueMode> {
+export async function getNativeThreadState(threadId: string): Promise<{ mode: NativeQueueMode; settings: NativeThreadSettings | null }> {
   const response = await fetchWithTimeout(`/codex-api/native-queue-mode?threadId=${encodeURIComponent(threadId)}`)
   const payload = await response.json().catch(() => null)
   if (!response.ok || !['legacy', 'native'].includes(payload?.data?.mode)) throw new Error(extractErrorMessage(payload, '无法读取队列归属。'))
-  return payload.data.mode
+  return { mode: payload.data.mode, settings: normalizeNativeSettings(payload.data.settings) }
 }
+
+export async function getNativeQueueMode(threadId: string): Promise<NativeQueueMode> { return (await getNativeThreadState(threadId)).mode }
 
 export async function setNativeQueueMode(threadId: string, mode: NativeQueueMode): Promise<void> {
   const response = await fetchWithTimeout('/codex-api/native-queue-mode', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId, mode }) })
