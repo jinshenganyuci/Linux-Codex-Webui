@@ -562,7 +562,7 @@ export class ThreadRuntimeState {
 
   observeRpcResult(method: string, params: unknown, result: unknown, pendingTurnId = ''): void {
     this.observeThreadPayload(result)
-    if (method !== 'turn/start') return
+    if (method !== 'turn/start' && method !== 'thread/queue/start') return
 
     const threadId = readNotificationThreadId(params)
     const turnId = readTurnId(asRecord(result)?.turn)

@@ -42,7 +42,7 @@ describe('active plan snapshot bridge recovery', () => {
     const noOp = () => undefined
     previousSharedBridge = globalScope[sharedBridgeKey]
     globalScope[sharedBridgeKey] = {
-      version: 'experimental-api-v4-agent-progress',
+      version: 'experimental-api-v5-native-thread-controls',
       appServer: {
         rpc: async () => ({}),
         onNotification: (listener: typeof notificationListener) => {
@@ -129,7 +129,7 @@ describe('active plan snapshot bridge recovery', () => {
     const noOp = () => undefined
     previousSharedBridge = globalScope[sharedBridgeKey]
     globalScope[sharedBridgeKey] = {
-      version: 'experimental-api-v4-agent-progress',
+      version: 'experimental-api-v5-native-thread-controls',
       appServer: {
         rpc: async () => ({}),
         onNotification: (listener: typeof notificationListener) => {

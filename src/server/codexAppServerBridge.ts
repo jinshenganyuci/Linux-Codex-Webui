@@ -2,6 +2,7 @@ import { isServerRequestId, serverRequestIdentity, isBlockingServerRequest } fro
 import { spawn, spawnSync } from 'node:child_process'
 import { RuntimeCatalog, codexVersionFromUserAgent } from './runtimeCatalog.js'
 import { MethodCatalog } from './rpcMethodCatalog.js'
+import { NATIVE_QUEUE_METHODS, normalizeNativeSettings, type NativeThreadSettings } from '../nativeThreadControls.js'
 import { WEBUI_BUILD_INFO } from './runtimeIdentity.js'
 import { RuntimeNoticeStore } from '../runtimeNotices.js'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
@@ -5925,6 +5926,50 @@ function normalizeThreadQueueState(value: unknown): ThreadQueueState {
 }
 
 let threadQueueMutationChain: Promise<unknown> = Promise.resolve()
+const nativeQueueMutationChains = new Map<string, Promise<unknown>>()
+const NATIVE_QUEUE_OWNERS_KEY = 'linux-codex-webui-native-queue-threads'
+
+class NativeQueueConflict extends Error {}
+
+async function withThreadQueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const run = threadQueueMutationChain.then(operation)
+  threadQueueMutationChain = run.catch(() => {})
+  return run
+}
+
+async function withNativeQueueMutation<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
+  if (!threadId || threadId.length > 256) throw new NativeQueueConflict('缺少有效会话 ID。')
+  if (!nativeQueueMutationChains.has(threadId) && nativeQueueMutationChains.size >= 64) throw new NativeQueueConflict('队列操作过多，请稍后重试。')
+  const run = (nativeQueueMutationChains.get(threadId) ?? Promise.resolve()).then(operation)
+  const settled = run.catch(() => {})
+  nativeQueueMutationChains.set(threadId, settled)
+  void settled.then(() => { if (nativeQueueMutationChains.get(threadId) === settled) nativeQueueMutationChains.delete(threadId) })
+  return run
+}
+
+async function readNativeQueueOwners(): Promise<Set<string>> {
+  let raw: string
+  try { raw = await readFile(join(getCodexHomeDir(), 'webui-native-queue-owners.json'), 'utf8') } catch (error) {
+    if (getErrorCode(error) === 'ENOENT') return new Set()
+    throw error
+  }
+  const value = asRecord(JSON.parse(raw))?.[NATIVE_QUEUE_OWNERS_KEY]
+  if (value === undefined) return new Set()
+  if (!Array.isArray(value) || value.length > 4096 || value.some(threadId => typeof threadId !== 'string')) throw new NativeQueueConflict('队列归属记录无效，已停止自动切换。')
+  return new Set(value as string[])
+}
+
+async function writeNativeQueueOwner(threadId: string, mode: 'legacy' | 'native'): Promise<void> {
+  const owners = await readNativeQueueOwners()
+  if (mode === 'native') owners.add(threadId)
+  else owners.delete(threadId)
+  if (owners.size > 4096) throw new NativeQueueConflict('原生队列归属记录已达到上限。')
+  const statePath = join(getCodexHomeDir(), 'webui-native-queue-owners.json')
+  const payload = { [NATIVE_QUEUE_OWNERS_KEY]: [...owners].sort() }
+  const temporary = `${statePath}.${process.pid}.native-queue.tmp`
+  await writeFile(temporary, JSON.stringify(payload), { mode: 0o600 })
+  await rename(temporary, statePath)
+}
 
 async function readThreadQueueState(): Promise<ThreadQueueState> {
   const statePath = getCodexGlobalStatePath()
@@ -5952,24 +5997,26 @@ async function writeThreadQueueStateUnlocked(nextState: ThreadQueueState): Promi
   } else {
     delete payload[THREAD_QUEUE_STATE_KEY]
   }
-  await writeFile(statePath, JSON.stringify(payload), 'utf8')
+  const temporary = `${statePath}.${process.pid}.queue.tmp`
+  await writeFile(temporary, JSON.stringify(payload), { mode: 0o600 })
+  await rename(temporary, statePath)
 }
 
 async function withThreadQueueStateUpdate<T>(
   update: (state: ThreadQueueState) => ThreadQueueStateUpdate<T> | Promise<ThreadQueueStateUpdate<T>>,
 ): Promise<T> {
-  const run = threadQueueMutationChain.then(async () => {
+  return withThreadQueueMutation(async () => {
     const currentState = await readThreadQueueState()
     const { nextState, result } = await update(currentState)
     await writeThreadQueueStateUnlocked(nextState)
     return result
   })
-  threadQueueMutationChain = run.catch(() => {})
-  return run
 }
 
 async function writeThreadQueueState(nextState: ThreadQueueState): Promise<void> {
-  await withThreadQueueStateUpdate((currentState) => {
+  await withThreadQueueStateUpdate(async (currentState) => {
+    const nativeOwners = await readNativeQueueOwners()
+    if (Object.entries(nextState).some(([threadId, messages]) => nativeOwners.has(threadId) && messages.length > 0)) throw new NativeQueueConflict('本会话已使用原生队列，不能通过旧队列重复写入。请刷新页面。')
     return {
       nextState: reconcileThreadQueueStateWrite(currentState, nextState),
       result: undefined,
@@ -6002,13 +6049,10 @@ export function reconcileThreadQueueStateWrite(
 async function appendThreadQueuedMessage(threadId: string, message: StoredQueuedMessage): Promise<void> {
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) throw new Error('threadId is required')
-  await withThreadQueueStateUpdate((state) => ({
-    nextState: {
-      ...state,
-      [normalizedThreadId]: [...(state[normalizedThreadId] ?? []), message],
-    },
-    result: undefined,
-  }))
+  await withThreadQueueStateUpdate(async (state) => {
+    if ((await readNativeQueueOwners()).has(normalizedThreadId)) throw new NativeQueueConflict('本会话已使用原生队列，旧排队入口不能写入。')
+    return { nextState: { ...state, [normalizedThreadId]: [...(state[normalizedThreadId] ?? []), message] }, result: undefined }
+  })
 }
 
 function normalizeReasoningEffort(value: unknown): ReasoningEffort | '' {
@@ -6769,6 +6813,7 @@ export class AppServerProcess {
   private runtimeUserAgent = ''
   private runtimeStartedAt = ''
   private runtimeHome = ''
+  private readonly nativeThreadSettings = new Map<string, NativeThreadSettings>()
 
   constructor(
     private readonly threadRuntimeState: ThreadRuntimeState | null = null,
@@ -6844,6 +6889,11 @@ export class AppServerProcess {
     return this.shouldDeferConfigRestart()
   }
 
+  isThreadBusy(threadId: string): boolean {
+    return this.activeTurnThreadIds.has(threadId) || this.optimisticTurnThreadIds.has(threadId)
+      || this.listPendingServerRequests().some(request => extractThreadIdFromNotificationParams(request.params) === threadId)
+  }
+
   waitUntilIdle(): Promise<void> {
     if (!this.shouldDeferConfigRestart()) {
       return Promise.resolve()
@@ -6888,6 +6938,7 @@ export class AppServerProcess {
   }
 
   private handleUnexpectedExit(generation: number): void {
+    this.nativeThreadSettings.clear()
     this.runtimeNotices.clear()
     const failure = new Error('codex app-server exited unexpectedly')
     for (const request of this.pending.values()) {
@@ -6994,6 +7045,10 @@ export class AppServerProcess {
 
   private emitNotification(notification: { method: string; params: unknown }, generation = this.transport.activeGeneration): void {
     if (generation === 0) return
+    if (notification.method === 'thread/settings/updated') {
+      const params = asRecord(notification.params)
+      this.rememberNativeThreadSettings(readNonEmptyString(params?.threadId), params?.threadSettings)
+    }
     if (notification.method === 'item/started' || notification.method === 'item/completed') {
       const params = asRecord(notification.params)
       if (params?.item) {
@@ -7563,7 +7618,7 @@ export class AppServerProcess {
     this.start()
     const generation = this.transport.activeGeneration
     const id = this.nextId++
-    const turnStartThreadId = method === 'turn/start'
+    const turnStartThreadId = method === 'turn/start' || method === 'thread/queue/start'
       ? this.extractThreadIdFromParams(params)
       : ''
 
@@ -7623,11 +7678,18 @@ export class AppServerProcess {
   async rpc(method: string, params: unknown): Promise<unknown> {
     this.disposeIfConfigChanged()
     await this.ensureInitialized()
-    const threadId = method === 'turn/start' ? this.extractThreadIdFromParams(params) : ''
+    const threadId = method === 'turn/start' || method === 'thread/queue/start' ? this.extractThreadIdFromParams(params) : ''
     const pendingRuntimeTurnId = threadId ? this.threadRuntimeState?.beginTurn(threadId) ?? '' : ''
     try {
       const result = await this.call(method, params)
       this.threadRuntimeState?.observeRpcResult(method, params, result, pendingRuntimeTurnId)
+      if (method === 'thread/start' || method === 'thread/resume') {
+        const row = asRecord(result)
+        const resolvedThreadId = readNonEmptyString(asRecord(row?.thread)?.id)
+        this.rememberNativeThreadSettings(resolvedThreadId, row)
+        const settings = this.getNativeThreadSettings(resolvedThreadId)
+        if (settings) this.emitLocalNotification('codex-ui/thread-settings', { threadId: resolvedThreadId, threadSettings: settings })
+      }
       return result
     } catch (error) {
       if (threadId && pendingRuntimeTurnId) {
@@ -7642,6 +7704,18 @@ export class AppServerProcess {
     return () => {
       this.notificationListeners.delete(listener)
     }
+  }
+
+  private rememberNativeThreadSettings(threadId: string, value: unknown): void {
+    const settings = normalizeNativeSettings(value)
+    if (!threadId || !settings) return
+    this.nativeThreadSettings.delete(threadId)
+    this.nativeThreadSettings.set(threadId, settings)
+    while (this.nativeThreadSettings.size > 128) this.nativeThreadSettings.delete(this.nativeThreadSettings.keys().next().value!)
+  }
+
+  getNativeThreadSettings(threadId: string): NativeThreadSettings | null {
+    return this.nativeThreadSettings.get(threadId) ?? null
   }
 
   emitLocalNotification(method: string, params: unknown): void {
@@ -7720,6 +7794,7 @@ export class AppServerProcess {
   dispose(): void {
     if (!this.transport.running) return
 
+    this.nativeThreadSettings.clear()
     const generation = this.transport.stop()
     this.initialized = false
     this.initializePromise = null
@@ -7971,7 +8046,8 @@ export class BackendQueueProcessor {
   }
 
   private async claimNextQueuedTurn(threadId: string): Promise<BackendQueuedTurn | null> {
-    return withThreadQueueStateUpdate((state) => {
+    return withThreadQueueStateUpdate(async (state) => {
+      if ((await readNativeQueueOwners()).has(threadId)) return { nextState: state, result: null }
       const queue = state[threadId]
       if (!queue || queue.length === 0) {
         return { nextState: state, result: null }
@@ -8256,7 +8332,7 @@ type SharedBridgeState = {
 }
 
 const SHARED_BRIDGE_KEY = '__codexRemoteSharedBridge__'
-const SHARED_BRIDGE_VERSION = 'experimental-api-v4-agent-progress'
+const SHARED_BRIDGE_VERSION = 'experimental-api-v5-native-thread-controls'
 
 function getSharedBridgeState(): SharedBridgeState {
   const globalScope = globalThis as typeof globalThis & {
@@ -8943,8 +9019,18 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
         let rpcResult: unknown
         try {
-          rpcResult = await callRpcWithArchiveRecovery(appServer, body.method, body.params ?? null)
+          if (NATIVE_QUEUE_METHODS.includes(body.method) && body.method !== 'thread/queue/list') {
+            const threadId = readNonEmptyString(asRecord(body.params)?.threadId)
+            rpcResult = await withNativeQueueMutation(threadId, async () => {
+              if (!(await readNativeQueueOwners()).has(threadId)) throw new NativeQueueConflict('请先在空闲且旧队列清空后启用原生队列。')
+              if (body.method === 'thread/queue/start' && appServer.isThreadBusy(threadId)) throw new NativeQueueConflict('当前会话仍在运行或等待审批，不能另外启动排队消息。')
+              return callRpcWithArchiveRecovery(appServer, body.method, body.params ?? null)
+            })
+          } else {
+            rpcResult = await callRpcWithArchiveRecovery(appServer, body.method, body.params ?? null)
+          }
         } catch (error) {
+          if (error instanceof NativeQueueConflict) { setJson(res, 409, { error: error.message }); return }
           if (body.method === 'account/rateLimits/read' && isUnauthenticatedRateLimitError(error)) {
             setJson(res, 200, { result: null })
             return
@@ -9440,6 +9526,42 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         const methods = await methodCatalog.listNotificationMethods()
         setJson(res, 200, { data: methods })
         return
+      }
+
+      if (url.pathname === '/codex-api/native-queue-mode') {
+        if (req.method === 'GET') {
+          const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+          if (!threadId) { setJson(res, 400, { error: 'Missing threadId' }); return }
+          const mode = (await readNativeQueueOwners()).has(threadId) ? 'native' : 'legacy'
+          setJson(res, 200, { data: { mode, settings: appServer.getNativeThreadSettings(threadId) } })
+          return
+        }
+        if (req.method === 'PUT') {
+          const body = asRecord(await readJsonBody(req))
+          const threadId = readNonEmptyString(body?.threadId)
+          const mode = body?.mode
+          if (!threadId || (mode !== 'legacy' && mode !== 'native')) { setJson(res, 400, { error: 'Invalid queue mode' }); return }
+          const methods = await methodCatalog.listMethods()
+          if (!NATIVE_QUEUE_METHODS.every(method => methods.includes(method))) { setJson(res, 409, { error: '当前 CLI 不提供完整原生队列接口，不会自动迁移。' }); return }
+          await withNativeQueueMutation(threadId, () => withThreadQueueMutation(async () => {
+            const assertIdle = () => {
+              if (appServer.isThreadBusy(threadId)) throw new NativeQueueConflict('请等待当前会话和待处理审批结束后再切换队列。')
+            }
+            assertIdle()
+            const legacy = await readThreadQueueState()
+            if ((legacy[threadId] ?? []).length > 0) throw new NativeQueueConflict('请先执行完或清空旧队列；不会丢弃消息或更改其模型设置。')
+            const response = asRecord(await appServer.rpc('thread/queue/list', { threadId, limit: 1 }))
+            if (!Array.isArray(response?.data) || response.data.length > 0 || response.nextCursor) throw new NativeQueueConflict('原生队列尚未清空，不能切换归属。')
+            const summary = asRecord(await appServer.rpc('thread/read', { threadId, includeTurns: false }))
+            const runtimeStatus = readNonEmptyString(asRecord(asRecord(summary?.thread)?.status)?.type).toLowerCase()
+            if (!['idle', 'notloaded'].includes(runtimeStatus)) throw new NativeQueueConflict('无法确认线程空闲，已取消队列切换。')
+            assertIdle()
+            await writeNativeQueueOwner(threadId, mode)
+          }))
+          appServer.emitLocalNotification('codex-ui/native-queue-mode', { threadId, mode })
+          setJson(res, 200, { data: { mode } })
+          return
+        }
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/runtime-info') {
@@ -10650,7 +10772,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       next()
     } catch (error) {
       const message = getErrorMessage(error, 'Unknown bridge error')
-      setJson(res, 502, { error: message })
+      setJson(res, error instanceof NativeQueueConflict ? 409 : 502, { error: message })
     }
   }
 

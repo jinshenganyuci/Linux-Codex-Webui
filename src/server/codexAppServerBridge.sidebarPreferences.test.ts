@@ -22,7 +22,7 @@ describe('sidebar preference API', () => {
     const globalScope = globalThis as typeof globalThis & Record<string, unknown>
     const previousSharedBridge = globalScope[sharedBridgeKey]
     globalScope[sharedBridgeKey] = {
-      version: 'experimental-api-v4-agent-progress',
+      version: 'experimental-api-v5-native-thread-controls',
       appServer: {
         rpc: async () => ({}),
         onNotification: () => noOp,
