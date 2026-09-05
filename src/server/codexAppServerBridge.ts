@@ -9073,7 +9073,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }
           throw error
         }
-        if (['config/batchWrite', 'config/value/write', 'experimentalFeature/enablement/set', 'account/logout'].includes(body.method) || body.method.startsWith('account/login')) extensionInfo.invalidate()
+        if (['config/batchWrite', 'config/value/write', 'thread/settings/update', 'experimentalFeature/enablement/set', 'account/logout'].includes(body.method) || body.method.startsWith('account/login')) extensionInfo.invalidate()
         const trimmedResult = trimAndLimitThreadCommandOutputs(body.method, rpcResult, body.params)
         const rpcParams = asRecord(body.params)
         if (body.method === 'turn/start') {
@@ -9577,7 +9577,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/native-extension-info') {
-        const [info, descendantThreads] = await Promise.all([extensionInfo.read(), methodCatalog.supportsDescendantThreads()])
+        const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+        if (threadId.length > 256) { setJson(res, 400, { error: '无效的线程标识。' }); return }
+        const [info, descendantThreads] = await Promise.all([extensionInfo.read(threadId), methodCatalog.supportsDescendantThreads()])
         setJson(res, 200, { data: { ...info, descendantThreads } })
         return
       }

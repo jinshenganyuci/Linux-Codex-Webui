@@ -2,6 +2,7 @@
   <section v-if="state.threadId" class="native-thread-controls" data-testid="native-thread-controls" aria-label="原生会话控制">
     <div class="native-controls-heading">
       <button type="button" :aria-expanded="state.expanded" data-testid="native-controls-toggle" @click="controller.expand()">{{ state.expanded ? '收起原生控制' : '原生控制' }}</button>
+      <button type="button" data-testid="native-extensions-open" @click="emit('extensions')">原生扩展</button>
       <span v-if="state.loading" class="native-controls-muted">读取 CLI 状态…</span>
       <span v-else-if="state.goal" class="native-goal-summary" :title="state.goal.objective">Goal · {{ goalStatus }} · {{ state.goal.objective }}</span>
       <span v-else class="native-controls-muted">{{ state.mode === 'native' ? 'CLI 原生队列' : '当前会话' }}</span>
@@ -93,6 +94,7 @@ const props = defineProps<{
   isRunning: boolean
   legacyQueueCount: number
 }>()
+const emit = defineEmits<{ extensions: [] }>()
 const state = computed(() => props.controller.state)
 const unavailable = computed(() => state.value.loading || state.value.busy)
 const objective = ref('')

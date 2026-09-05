@@ -1,5 +1,6 @@
 export type NativeFeature = { name: string; enabled: boolean; defaultEnabled: boolean; stage: string; displayName: string | null; description: string | null }
 export type NativeExtensionInfo = {
+  threadId: string | null
   descendantThreads?: boolean
   cliVersion: string | null
   provider: string
@@ -16,10 +17,11 @@ export type NativeChildThread = { id: string; parentThreadId: string | null; nam
 export type NativeRealtimeSnapshot = { active: boolean; owned: boolean; phase: string }
 export type NativeRealtimeOptions = { outputModality: 'audio'; model?: string; voice?: string; transport: { type: 'webrtc'; sdp: string }; version: 'v1' }
 
-export const RUNTIME_FEATURE_KEYS = ['apps', 'plugins'] as const
+export const RUNTIME_FEATURE_KEYS = ['auth_elicitation', 'memories', 'mentions_v2', 'remote_plugin', 'tool_suggest'] as const
+export const RUNTIME_FEATURE_VERSION = '0.153.4'
 export const NATIVE_EXTENSION_METHODS = {
   realtime: ['thread/realtime/start', 'thread/realtime/stop', 'thread/realtime/appendText', 'thread/realtime/listVoices'],
-  remote: ['remoteControl/status/read', 'remoteControl/enable', 'remoteControl/disable', 'remoteControl/pairing/start', 'remoteControl/pairing/status', 'remoteControl/clients/list', 'remoteControl/clients/revoke'],
+  remote: ['remoteControl/status/read', 'remoteControl/enable', 'remoteControl/disable', 'remoteControl/pairing/start', 'remoteControl/pairing/status', 'remoteControl/client/list', 'remoteControl/client/revoke'],
 } as const
 
 export function extensionRecord(value: unknown): Record<string, unknown> | null {

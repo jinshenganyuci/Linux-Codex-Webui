@@ -111,6 +111,7 @@
           <div class="turn-progress-agent-copy">
             <div class="turn-progress-agent-line">
               <strong>{{ agentDisplayName(agent, index) }}</strong>
+              <a :href="`#/thread/${encodeURIComponent(agent.threadId)}`" class="turn-progress-agent-link">打开子线程</a>
               <span v-if="agent.path" class="turn-progress-agent-path">{{ agent.path }}</span>
               <span class="turn-progress-status" :data-status="agentTone(agent)">
                 {{ t(agentStatusTranslationKey(agent.status, agentIsStale(agent))) }}

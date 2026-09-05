@@ -2,6 +2,7 @@ import { isServerRequestId, serverRequestIdentity, isBlockingServerRequest } fro
 import { computed, ref } from 'vue'
 import { RuntimeNoticeStore } from '../runtimeNotices'
 import { createNativeThreadController } from './desktop/nativeThreadController'
+import { publishNativeExtensionEvent } from './desktop/nativeExtensionEvents'
 import { getNativeCapabilities, getNativeThreadState } from '../api/nativeThreadGateway'
 import { normalizeRuntimeItem } from '../runtimeItems'
 import type { UiRuntimeNotice } from '../types/codex'
@@ -8215,6 +8216,8 @@ export function useDesktopState() {
     hasReceivedNotificationReady = false
     void loadPendingServerRequestsFromBridge()
     stopNotificationStream = subscribeCodexNotifications((notification) => {
+      publishNativeExtensionEvent(notification)
+      if (notification.method.startsWith('thread/realtime/')) return
       if (notification.method === 'ready' && !nativeThreadControls.state.threadId && selectedThreadId.value) void nativeThreadControls.select(selectedThreadId.value)
       nativeThreadControls.observe(notification)
       if (notification.method === 'connection/status') {

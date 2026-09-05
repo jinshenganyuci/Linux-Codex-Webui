@@ -36,6 +36,24 @@ describe('native extension runtime', () => {
     expect(rpc).toHaveBeenCalledTimes(8)
   })
 
+  it('isolates current-thread feature and provider evidence from process defaults', async () => {
+    const rpc = vi.fn(async (method: string, params: unknown) => {
+      if (method === 'thread/read') return { thread: { modelProvider: 'thread-provider' } }
+      if (method === 'config/read') return { config: { model_provider: 'default-provider' } }
+      if (method === 'experimentalFeature/list') return { data: [{ name: 'context_management', enabled: Boolean((params as { threadId?: string }).threadId), stage: 'underDevelopment' }], nextCursor: null }
+      return {}
+    })
+    const reader = createExtensionInfoReader(rpc, () => ({ codex: { version: '0.153.4', generation: 1 } }))
+    const defaults = await reader.read()
+    const scoped = await reader.read('thread')
+    expect(defaults).toMatchObject({ threadId: null, provider: 'default-provider', features: [{ enabled: false }] })
+    expect(scoped).toMatchObject({ threadId: 'thread', provider: 'thread-provider', features: [{ enabled: true }] })
+    expect(rpc).toHaveBeenCalledWith('thread/read', { threadId: 'thread', includeTurns: false })
+    expect(rpc).toHaveBeenCalledWith('experimentalFeature/list', { threadId: 'thread', cursor: null, limit: 100 })
+    await reader.read('thread')
+    expect(rpc).toHaveBeenCalledTimes(8)
+  })
+
   it('serializes ownership across tabs and never interrupts an ordinary turn', async () => {
     const rpc = vi.fn(async (_method: string, _params: unknown) => ({}))
     const sessions = new NativeRealtimeSessions(rpc)
@@ -85,5 +103,26 @@ describe('native extension runtime', () => {
     expect(isVolatileRealtimeNotification('thread/realtime/sdp')).toBe(true)
     expect(isVolatileRealtimeNotification('thread/realtime/outputAudio/delta')).toBe(true)
     expect(isVolatileRealtimeNotification('turn/completed')).toBe(false)
+  })
+
+  it('does not retain a lease or retry cleanup when the CLI definitively rejects realtime support', async () => {
+    const rpc = vi.fn(async () => { throw new Error('thread test does not support realtime conversation') })
+    const sessions = new NativeRealtimeSessions(rpc)
+    await expect(sessions.request('start', 'test', 'owner', options)).rejects.toThrow('does not support')
+    expect(sessions.snapshot('test', 'owner').active).toBe(false)
+    await sessions.request('stop', 'test', 'owner')
+    await sessions.sweep()
+    expect(rpc).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not start queued microphone sessions after bridge shutdown', async () => {
+    const rpc = vi.fn(async () => ({}))
+    const sessions = new NativeRealtimeSessions(rpc)
+    const started = sessions.request('start', 'test', 'owner', options)
+    const rejected = expect(started).rejects.toThrow('桥接已关闭')
+    await sessions.dispose()
+    await rejected
+    expect(rpc).not.toHaveBeenCalled()
+    expect(sessions.snapshot('test', 'owner').active).toBe(false)
   })
 })

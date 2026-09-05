@@ -135,6 +135,7 @@
               @click.stop
             >
               <RuntimeInfoPanel />
+              <button type="button" class="native-extension-open" @click="nativeExtensionsOpen = true">原生扩展：插件、语音与远控</button>
               <div class="sidebar-settings-account-section">
                 <div class="sidebar-settings-account-header">
                   <div class="sidebar-settings-account-header-main">
@@ -914,6 +915,7 @@
                     @reorder="onReorderQueuedMessage"
                   />
                   <NativeThreadControls
+                    @extensions="nativeExtensionsOpen = true"
                     :controller="nativeThreadControls"
                     :settings-patch="selectedNativeSettingsPatch"
                     :active-turn-id="selectedNativeActiveTurnId"
@@ -979,6 +981,7 @@
       </section>
     </template>
   </DesktopLayout>
+  <NativeExtensionsPanel v-if="nativeExtensionsOpen" :thread-id="selectedThreadId" :cwd="directoryCwd" :token-usage="selectedThreadTokenUsage" @close="nativeExtensionsOpen = false" />
   <ProjectZipExportModal
     v-if="projectZipExportStatus.phase !== 'idle'"
     :status="projectZipExportStatus"
@@ -1072,6 +1075,8 @@ import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathFor
 import { copyTextToClipboard } from './utils/clipboard'
 
 const RuntimeInfoPanel = defineAsyncComponent(() => import('./components/settings/RuntimeInfoPanel.vue'))
+const NativeExtensionsPanel = defineAsyncComponent(() => import('./components/content/NativeExtensionsPanel.vue'))
+const nativeExtensionsOpen = ref(false)
 const ThreadConversation = defineAsyncComponent(() => import('./components/content/ThreadConversation.vue'))
 const ThreadTerminalPanel = defineAsyncComponent(() => import('./components/content/ThreadTerminalPanel.vue'))
 const ReviewPane = defineAsyncComponent(() => import('./components/content/ReviewPane.vue'))
