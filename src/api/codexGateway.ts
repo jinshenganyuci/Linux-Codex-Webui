@@ -2727,6 +2727,31 @@ async function buildTurnStartParams(
   return params
 }
 
+export async function buildNativeTurnInput(
+  text: string,
+  imageUrls: string[] = [],
+  skills: Array<{ name: string; path: string }> = [],
+  fileAttachments: FileAttachmentParam[] = [],
+): Promise<Array<Record<string, unknown>>> {
+  const params = await buildTurnStartParams(undefined, text, imageUrls, undefined, undefined, skills, fileAttachments)
+  return (params.input as Array<Record<string, unknown>>).map(item => item.type === 'image' ? { type: 'image', url: item.url } : item)
+}
+
+export async function steerThreadTurn(
+  threadId: string,
+  expectedTurnId: string,
+  text: string,
+  imageUrls: string[] = [],
+  skills: Array<{ name: string; path: string }> = [],
+  fileAttachments: FileAttachmentParam[] = [],
+): Promise<string> {
+  if (!threadId.trim() || !expectedTurnId.trim()) throw new Error('当前回合尚未确认或已经结束，请等待状态更新后重新发送。')
+  const input = await buildNativeTurnInput(text, imageUrls, skills, fileAttachments)
+  const result = await callRpc<{ turnId?: string }>('turn/steer', { threadId, expectedTurnId, input })
+  if (result.turnId !== expectedTurnId) throw new Error('插话返回的回合不匹配，请检查对话；不会自动重发。')
+  return result.turnId
+}
+
 export async function startThreadTurn(
   threadId: string,
   text: string,
