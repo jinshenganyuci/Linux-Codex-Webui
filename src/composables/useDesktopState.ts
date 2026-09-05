@@ -1,4 +1,8 @@
+import { isServerRequestId, serverRequestIdentity, isBlockingServerRequest } from '../serverRequests'
 import { computed, ref } from 'vue'
+import { RuntimeNoticeStore } from '../runtimeNotices'
+import { normalizeRuntimeItem } from '../runtimeItems'
+import type { UiRuntimeNotice } from '../types/codex'
 import {
 
   archiveThread,
@@ -789,15 +793,7 @@ function arePlanDataEqual(first?: UiPlanData, second?: UiPlanData): boolean {
   )
 }
 
-function isUnsupportedChatGptModelError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false
-  const message = error.message.toLowerCase()
-  return (
-    message.includes('not supported when using codex with a chatgpt account') ||
-    message.includes('model is not supported') ||
-    message.includes('requires a newer version of codex')
-  )
-}
+
 
 function areMessageFieldsEqual(first: UiMessage, second: UiMessage): boolean {
   return (
@@ -1671,15 +1667,9 @@ export function useDesktopState() {
     turnId?: string
   }
   type PendingTurnRequest = {
-    text: string
-    imageUrls: string[]
-    skills: Array<{ name: string; path: string }>
-    fileAttachments: FileAttachment[]
     effort: ReasoningEffort | ''
     collaborationMode: CollaborationModeKind
     speedMode: SpeedMode
-    collaborationModeDeveloperInstructions?: string
-    fallbackRetried: boolean
   }
   const queuedMessagesByThreadId = ref<Record<string, QueuedMessage[]>>({})
   const queueProcessingByThreadId = ref<Record<string, boolean>>({})
@@ -1732,7 +1722,8 @@ export function useDesktopState() {
     modelId: string,
   ): string | null | undefined {
     if (speedMode === 'fast') {
-      return isFastModeSupportedForModel(modelId) ? 'fast' : null
+      if (!isFastModeSupportedForModel(modelId)) return null
+      return availableModelCapabilities.value[modelId.trim()]?.fastServiceTier || 'fast'
     }
     if (speedMode === 'standard') return null
     return undefined
@@ -1743,12 +1734,15 @@ export function useDesktopState() {
   const turnIndexByTurnIdByThreadId = ref<Record<string, Record<string, number>>>({})
   const turnSummaryByThreadId = ref<Record<string, TurnSummaryState>>({})
   const turnActivityByThreadId = ref<Record<string, TurnActivityState>>({})
+  const runtimeNoticeStore = new RuntimeNoticeStore()
+  const runtimeNoticesByThreadId = ref<Record<string, UiRuntimeNotice[]>>({})
   const turnErrorByThreadId = ref<Record<string, TurnErrorState>>({})
   const activeTurnIdByThreadId = ref<Record<string, string>>({})
   const interruptBlockedUntilPersistedByThreadId = ref<Record<string, boolean>>({})
   const threadListedByServerById = ref<Record<string, boolean>>({})
   const persistedUserMessageByThreadId = ref<Record<string, boolean>>({})
   const pendingServerRequestsByThreadId = ref<Record<string, UiServerRequest[]>>({})
+  let pendingServerRequestsRevision = 0
   const pendingTurnRequestByThreadId = ref<Record<string, PendingTurnRequest>>({})
   const codexRateLimit = ref<UiRateLimitSnapshot | null>(null)
   const threadTokenUsageByThreadId = ref<Record<string, UiThreadTokenUsage>>(loadThreadTokenUsageMap())
@@ -1848,7 +1842,6 @@ export function useDesktopState() {
   const activeReasoningItemIdByThreadId = new Map<string, string>()
   let shouldAutoScrollOnNextAgentEvent = false
   const pendingTurnStartsById = new Map<string, TurnStartedInfo>()
-  const fallbackRetryInFlightThreadIds = new Set<string>()
   let hasPersistedCodexPermissionMode = hasStoredCodexPermissionMode()
   let hasLoadedThreadModelPreferences = false
   let hasLoadedThreadCollaborationPreferences = false
@@ -1856,7 +1849,7 @@ export function useDesktopState() {
   let hasLoadedNewChatDefaults = false
   let newChatDefaultsLoadPromise: Promise<void> | null = null
   let newThreadSelectionInitialized = false
-  let newThreadDraftModelId = ''
+  const newThreadDraftModelId = ref('')
   let newThreadModelManuallySelected = false
   let newThreadReasoningManuallySelected = false
   const runtimeDefaultModelId = ref('')
@@ -1930,7 +1923,8 @@ export function useDesktopState() {
     const hasAgentProgress = Boolean(turnProgress && (turnProgress.status === 'running' || turnProgress.agents.length > 0))
     const connectionState = notificationConnectionState.value
     const hasConnectionWarning = isInProgress && (connectionState === 'reconnecting' || connectionState === 'unavailable')
-    if (!activity && !reasoningText && !errorText && !hasAgentProgress && !hasConnectionWarning) return null
+    const runtimeNotices = runtimeNoticesByThreadId.value[threadId] ?? []
+    if (!activity && !reasoningText && !errorText && !hasAgentProgress && !hasConnectionWarning && runtimeNotices.length === 0) return null
     const activityModelDetails = (activity?.details ?? []).filter((detail) => (
       detail.startsWith('Model:') || detail.startsWith('Thinking:') || detail.startsWith('Speed:')
     ))
@@ -1944,7 +1938,8 @@ export function useDesktopState() {
           pendingTurn?.speedMode ?? selectedSpeedMode.value,
         ).filter((detail) => detail.startsWith('Model:') || detail.startsWith('Thinking:') || detail.startsWith('Speed:'))
     return {
-      activityLabel: activity?.label || THINKING_ACTIVITY_LABEL,
+      runtimeNotices,
+      activityLabel: activity?.label || (isInProgress ? THINKING_ACTIVITY_LABEL : 'Task status'),
       activityDetails: activity?.details ?? [],
       mainModelDetails,
       reasoningText,
@@ -1980,8 +1975,8 @@ export function useDesktopState() {
     return threadTokenUsageByThreadId.value[threadId] ?? null
   })
 
-  function serverRequestKey(requestId: number, generation: number): string {
-    return `${generation}:${requestId}`
+  function serverRequestKey(requestId: UiServerRequest['id'], generation: number): string {
+    return serverRequestIdentity(requestId, generation)
   }
 
   function setRequestUserInputSummariesForThread(
@@ -2166,7 +2161,7 @@ export function useDesktopState() {
     const contextId = toThreadContextId(threadId)
     if (contextId === NEW_THREAD_COLLABORATION_MODE_CONTEXT) {
       if (!selectedThreadId.value.trim()) return selectedModelId.value.trim()
-      return newThreadDraftModelId || runtimeDefaultModelId.value
+      return newThreadDraftModelId.value || runtimeDefaultModelId.value
     }
     return readSelectedModel(selectedModelIdByContext.value, threadId).trim()
   }
@@ -2301,11 +2296,11 @@ export function useDesktopState() {
     newThreadSelectionInitialized = true
     newThreadModelManuallySelected = false
     newThreadReasoningManuallySelected = false
-    newThreadDraftModelId = resolveNewChatDefaultModelId()
+    newThreadDraftModelId.value = resolveNewChatDefaultModelId()
     if (selectedThreadId.value.trim()) return
 
-    selectedModelId.value = newThreadDraftModelId
-    selectedReasoningEffort.value = resolveNewChatDefaultReasoningEffort(newThreadDraftModelId)
+    selectedModelId.value = newThreadDraftModelId.value
+    selectedReasoningEffort.value = resolveNewChatDefaultReasoningEffort(newThreadDraftModelId.value)
   }
 
   function reconcileSelectedReasoningEffort(modelId: string): boolean {
@@ -2329,13 +2324,13 @@ export function useDesktopState() {
     const preference = readThreadModelPreference(nextThreadId)
     if (!nextThreadId.trim() && previousThreadId.trim()) {
       newThreadSelectionInitialized = false
-      newThreadDraftModelId = ''
+      newThreadDraftModelId.value = ''
       newThreadModelManuallySelected = false
       newThreadReasoningManuallySelected = false
     }
     const nextModelId = nextThreadId.trim()
       ? preference?.model ?? readModelIdForThread(nextThreadId)
-      : newThreadDraftModelId || resolveNewChatDefaultModelId()
+      : newThreadDraftModelId.value || resolveNewChatDefaultModelId()
     selectedModelId.value = preference?.model ?? readProviderCompatibleSelectedModel(nextModelId)
     selectedReasoningEffort.value = preference?.reasoningEffort || resolveNewChatDefaultReasoningEffort() || selectedReasoningEffort.value
     reconcileSelectedReasoningEffort(selectedModelId.value)
@@ -2355,7 +2350,7 @@ export function useDesktopState() {
     const normalizedModelId = modelId.trim()
     const contextId = toThreadContextId(threadId)
     if (contextId === NEW_THREAD_COLLABORATION_MODE_CONTEXT) {
-      newThreadDraftModelId = normalizedModelId
+      newThreadDraftModelId.value = normalizedModelId
       if (options.manual !== false) newThreadModelManuallySelected = true
       if (!selectedThreadId.value.trim()) {
         selectedModelId.value = normalizedModelId
@@ -2536,25 +2531,6 @@ export function useDesktopState() {
     codexRateLimit.value = nextSnapshot
   }
 
-  async function applyFallbackModelSelection(threadId: string = selectedThreadId.value): Promise<void> {
-    if (threadId.trim()) {
-      setThreadModelId(threadId, MODEL_FALLBACK_ID)
-      reconcileSelectedReasoningEffort(MODEL_FALLBACK_ID)
-      const reasoningEffort = selectedReasoningEffort.value || readReasoningEffortForThread(threadId)
-      if (reasoningEffort) {
-        cacheThreadModelPreference(threadId, {
-          model: MODEL_FALLBACK_ID,
-          reasoningEffort,
-        })
-        void queueThreadModelPreferenceWrite(threadId)
-      }
-    } else {
-      setSelectedModelId(MODEL_FALLBACK_ID)
-      reconcileSelectedReasoningEffort(MODEL_FALLBACK_ID)
-    }
-    ensureAvailableModelIds(MODEL_FALLBACK_ID)
-  }
-
   function setPendingTurnRequest(threadId: string, request: PendingTurnRequest): void {
     pendingTurnRequestByThreadId.value = {
       ...pendingTurnRequestByThreadId.value,
@@ -2568,97 +2544,6 @@ export function useDesktopState() {
   }
 
 
-
-  async function retryPendingTurnWithFallback(threadId: string): Promise<void> {
-    if (fallbackRetryInFlightThreadIds.has(threadId)) return
-    const pending = pendingTurnRequestByThreadId.value[threadId]
-    if (!pending || pending.fallbackRetried) return
-
-    if (readThreadHistoryMode(threadId) === 'paginated') {
-      const message = 'Automatic model fallback cannot replay a paginated thread because Codex does not support rollback for this history mode.'
-      setTurnErrorForThread(threadId, message)
-      error.value = message
-      setThreadInProgress(threadId, false)
-      setTurnActivityForThread(threadId, null)
-      clearPendingTurnRequest(threadId)
-      return
-    }
-
-    fallbackRetryInFlightThreadIds.add(threadId)
-    setPendingTurnRequest(threadId, {
-      ...pending,
-      fallbackRetried: true,
-    })
-
-    try {
-      await applyFallbackModelSelection(threadId)
-      // Remove the failed user turn before replaying on fallback model to avoid duplicated user messages.
-      try {
-        const rolledBackMessages = await rollbackThread(threadId, 1)
-        setPersistedMessagesForThread(threadId, rolledBackMessages)
-        clearLivePlansForThread(threadId)
-        setLiveAgentMessagesForThread(threadId, [])
-        clearLiveReasoningForThread(threadId)
-        if (liveCommandsByThreadId.value[threadId]) {
-          liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
-        }
-      } catch {
-        // If rollback fails, continue with retry rather than dropping the turn.
-      }
-      setTurnErrorForThread(threadId, null)
-      error.value = ''
-      setTurnSummaryForThread(threadId, null)
-      setTurnActivityForThread(threadId, {
-        label: THINKING_ACTIVITY_LABEL,
-        details: buildPendingTurnDetails(
-          MODEL_FALLBACK_ID,
-          pending.effort,
-          pending.collaborationMode,
-          pending.speedMode,
-        ),
-      })
-      setThreadInProgress(threadId, true)
-
-      if (resumedThreadById.value[threadId] !== true) {
-        const resumedThread = await resumeThread(threadId)
-        if (resumedThread.model && !readThreadModelPreference(threadId) && !hasCachedThreadModelSelection(threadId)) {
-          setThreadModelId(threadId, resumedThread.model.trim())
-        }
-        if (resumedThread.modelProvider) {
-          setThreadModelProviderId(threadId, resumedThread.modelProvider)
-        }
-        resumedThreadById.value = {
-          ...resumedThreadById.value,
-          [threadId]: true,
-        }
-      }
-
-      await startThreadTurn(
-        threadId,
-        pending.text,
-        pending.imageUrls,
-        MODEL_FALLBACK_ID,
-        pending.effort || undefined,
-        pending.skills.length > 0 ? pending.skills : undefined,
-        pending.fileAttachments,
-        pending.collaborationMode,
-        serviceTierForSpeedMode(pending.speedMode, MODEL_FALLBACK_ID),
-        pending.collaborationModeDeveloperInstructions,
-      )
-
-      scheduleRateLimitRefresh()
-      pendingThreadMessageRefresh.add(threadId)
-      await syncFromNotifications()
-    } catch (unknownError) {
-      const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
-      setTurnErrorForThread(threadId, errorMessage)
-      error.value = errorMessage
-      setThreadInProgress(threadId, false)
-      setTurnActivityForThread(threadId, null)
-    } finally {
-      fallbackRetryInFlightThreadIds.delete(threadId)
-    }
-  }
 
   function setSelectedReasoningEffort(effort: ReasoningEffort | ''): void {
     if (effort && !REASONING_EFFORT_OPTIONS.includes(effort)) {
@@ -2700,7 +2585,10 @@ export function useDesktopState() {
     error.value = ''
 
     try {
-      await setCodexSpeedMode(nextMode)
+      const contextId = selectedThreadId.value.trim() || NEW_THREAD_COLLABORATION_MODE_CONTEXT
+      const tier = availableModelCapabilities.value[readModelIdForThread(contextId)]?.fastServiceTier
+      if (tier) await setCodexSpeedMode(nextMode, tier)
+      else await setCodexSpeedMode(nextMode)
     } catch (unknownError) {
       selectedSpeedMode.value = previousMode
       error.value = unknownError instanceof Error ? unknownError.message : 'Failed to update Fast mode'
@@ -2776,7 +2664,7 @@ export function useDesktopState() {
     const modelLabel = modelId.trim() || 'default'
     const effortLabel = effort || 'default'
     const modeLabel = collaborationMode === 'plan' ? 'Plan' : 'Default'
-    const speedLabel = serviceTierForSpeedMode(speedMode, modelId) === 'fast' ? 'Fast' : 'Standard'
+    const speedLabel = serviceTierForSpeedMode(speedMode, modelId) ? 'Fast' : 'Standard'
     return [`Mode: ${modeLabel}`, `Model: ${modelLabel}`, `Thinking: ${effortLabel}`, `Speed: ${speedLabel}`]
   }
 
@@ -2928,8 +2816,8 @@ export function useDesktopState() {
 
       if (!selectedThreadId.value.trim()) {
         if (Object.prototype.hasOwnProperty.call(patch, 'model') && !newThreadModelManuallySelected) {
-          newThreadDraftModelId = resolveNewChatDefaultModelId()
-          selectedModelId.value = newThreadDraftModelId
+          newThreadDraftModelId.value = resolveNewChatDefaultModelId()
+          selectedModelId.value = newThreadDraftModelId.value
         }
         if (Object.prototype.hasOwnProperty.call(patch, 'reasoningEffort') && !newThreadReasoningManuallySelected) {
           selectedReasoningEffort.value = resolveNewChatDefaultReasoningEffort(selectedModelId.value)
@@ -2960,7 +2848,7 @@ export function useDesktopState() {
       const isNewThreadContext = selectedThreadId.value.trim().length === 0
       if (isNewThreadContext && options?.providerChanged) {
         newThreadSelectionInitialized = false
-        newThreadDraftModelId = ''
+        newThreadDraftModelId.value = ''
         newThreadModelManuallySelected = false
         newThreadReasoningManuallySelected = false
       }
@@ -3145,7 +3033,7 @@ export function useDesktopState() {
     if (requests.some((request) => isApprovalRequestMethod(request.method))) {
       return 'approval'
     }
-    return requests.length > 0 ? 'response' : null
+    return requests.some(isBlockingServerRequest) ? 'response' : null
   }
 
   function applyThreadFlags(): void {
@@ -4741,7 +4629,7 @@ export function useDesktopState() {
     const generation = row.generation
     const rawMethod = readString(row.method)
     const requestParams = row.params
-    if (typeof id !== 'number' || !Number.isInteger(id) || typeof generation !== 'number' || !Number.isInteger(generation) || !rawMethod) {
+    if (!isServerRequestId(id) || typeof generation !== 'number' || !Number.isInteger(generation) || !rawMethod) {
       return null
     }
 
@@ -4803,6 +4691,7 @@ export function useDesktopState() {
     if (
       normalized === 'item/tool/requestUserInput' ||
       normalized === 'request_user_input' ||
+      normalized === 'request_user_input_async' ||
       looksLikeToolUserInputRequest(params)
     ) {
       return 'item/tool/requestUserInput'
@@ -4904,6 +4793,7 @@ export function useDesktopState() {
   }
 
   function upsertPendingServerRequest(request: UiServerRequest): void {
+    pendingServerRequestsRevision += 1
     const threadId = request.threadId || GLOBAL_SERVER_REQUEST_SCOPE
     const current = pendingServerRequestsByThreadId.value[threadId] ?? []
     const index = current.findIndex((row) => row.id === request.id)
@@ -4921,12 +4811,14 @@ export function useDesktopState() {
     applyThreadFlags()
   }
 
-  function removePendingServerRequestById(requestId: number, generation?: number): UiServerRequest[] {
+  function removePendingServerRequestById(requestId: UiServerRequest['id'], generation?: number, expectedThreadId = ''): UiServerRequest[] {
+    pendingServerRequestsRevision += 1
     const next: Record<string, UiServerRequest[]> = {}
     const removed: UiServerRequest[] = []
     for (const [threadId, requests] of Object.entries(pendingServerRequestsByThreadId.value)) {
       const filtered = requests.filter((request) => {
         const matches = request.id === requestId && (generation === undefined || request.generation === generation)
+          && (!expectedThreadId || request.threadId === expectedThreadId)
         if (matches) removed.push(request)
         return !matches
       })
@@ -4963,12 +4855,13 @@ export function useDesktopState() {
       return true
     }
 
-    if (notification.method === 'server/request/resolved') {
+    if (notification.method === 'server/request/resolved' || notification.method === 'serverRequest/resolved') {
       const row = asRecord(notification.params)
-      const id = row?.id
-      if (typeof id === 'number' && Number.isInteger(id)) {
-        const generation = typeof row?.generation === 'number' ? row.generation : undefined
-        const removed = removePendingServerRequestById(id, generation)
+      const id = row?.id ?? row?.requestId
+      if (isServerRequestId(id)) {
+        const generation = typeof row?.generation === 'number' ? row.generation : notification.generation
+        if (notification.method === 'serverRequest/resolved' && generation === undefined) return true
+        const removed = removePendingServerRequestById(id, generation, readString(row?.threadId))
         for (const request of removed) {
           if (
             request.method === 'item/tool/requestUserInput'
@@ -4988,7 +4881,7 @@ export function useDesktopState() {
         : undefined
       const requestIds = Array.isArray(row?.requestIds) ? row.requestIds : []
       for (const requestId of requestIds) {
-        if (typeof requestId === 'number' && Number.isInteger(requestId)) {
+        if (isServerRequestId(requestId)) {
           const removed = removePendingServerRequestById(requestId, generation)
           for (const request of removed) {
             if (request.method === 'item/tool/requestUserInput') {
@@ -5358,6 +5251,7 @@ export function useDesktopState() {
         text,
         timestampIso: timestampFromNotification(notification),
         messageType: 'agentMessage.live',
+        ...(item.phase === 'commentary' || item.phase === 'final_answer' ? { phase: item.phase } : {}),
       }
     }
 
@@ -5623,6 +5517,11 @@ export function useDesktopState() {
       return
     }
     if (applyQueueHandoffNotification(notification)) return
+    if (runtimeNoticeStore.observe(notification.method, notification.params)) {
+      runtimeNoticesByThreadId.value = runtimeNoticeStore.snapshot()
+      const threadId = extractThreadIdFromNotification(notification)
+      if (threadId) bumpRuntimeStateLifecycleEpoch(threadId)
+    }
 
     if (notification.method === 'account/rateLimits/updated') {
       scheduleRateLimitRefresh()
@@ -5704,13 +5603,7 @@ export function useDesktopState() {
 
     const completedTurn = readTurnCompletedInfo(notification)
     const turnErrorMessage = readTurnErrorMessage(notification)
-    const completedThreadId = completedTurn?.threadId ?? extractThreadIdFromNotification(notification)
-    const completedThreadModelId = completedThreadId ? readModelIdForThread(completedThreadId) : ''
-    const shouldRetryWithFallback =
-      Boolean(completedThreadId) &&
-      Boolean(turnErrorMessage) &&
-      completedThreadModelId !== MODEL_FALLBACK_ID &&
-      isUnsupportedChatGptModelError(new Error(turnErrorMessage))
+
     let completionEndsActiveRun = false
     if (completedTurn) {
       const rawCompletedStatus = readString(asRecord(asRecord(notification.params)?.turn)?.status).toLowerCase()
@@ -5816,7 +5709,7 @@ export function useDesktopState() {
         }
       }
       markThreadUnreadByEvent(completedTurn.threadId)
-      if (completionEndsActiveRun && !shouldRetryWithFallback) {
+      if (completionEndsActiveRun) {
         clearPendingTurnRequest(completedTurn.threadId)
         scheduleQueueStateRefresh(completedTurn.threadId)
       }
@@ -5828,27 +5721,16 @@ export function useDesktopState() {
         setTurnErrorForThread(failedThreadId, turnErrorMessage)
       }
       error.value = turnErrorMessage
-      if (failedThreadId && shouldRetryWithFallback) {
-        void retryPendingTurnWithFallback(failedThreadId)
-      }
     } else if (completedTurn) {
       setTurnErrorForThread(completedTurn.threadId, null)
     }
 
     if (notificationErrorState) {
       const errorThreadId = notificationThreadId
-      const errorThreadModelId = errorThreadId ? readModelIdForThread(errorThreadId) : selectedModelId.value.trim()
       if (errorThreadId) {
         setTurnErrorForThread(errorThreadId, notificationErrorState.message)
       }
       error.value = notificationErrorState.message
-      if (errorThreadModelId !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(new Error(notificationErrorState.message))) {
-        if (errorThreadId) {
-          void retryPendingTurnWithFallback(errorThreadId)
-        } else {
-          void applyFallbackModelSelection()
-        }
-      }
     }
 
     const planUpdate = readPlanUpdate(notification)
@@ -5884,6 +5766,11 @@ export function useDesktopState() {
         liveAgentMessageDelta.messageId,
         liveAgentMessageDelta.delta,
       )
+    }
+
+    if (notification.method === 'item/started' || notification.method === 'item/completed') {
+      const runtimeItem = normalizeRuntimeItem(asRecord(notification.params)?.item, notification.method === 'item/completed')
+      if (runtimeItem) upsertLiveAgentMessage(notificationThreadId, bindNotificationTurn(runtimeItem))
     }
 
     const completedAgentMessage = readAgentMessageCompleted(notification)
@@ -5970,10 +5857,8 @@ export function useDesktopState() {
         setThreadInProgress(completedThreadId, false)
         setTurnActivityForThread(completedThreadId, null)
         markThreadUnreadByEvent(completedThreadId)
-        if (!shouldRetryWithFallback) {
-          clearPendingTurnRequest(completedThreadId)
-          scheduleQueueStateRefresh(completedThreadId)
-        }
+        clearPendingTurnRequest(completedThreadId)
+        scheduleQueueStateRefresh(completedThreadId)
       }
     }
 
@@ -7020,7 +6905,7 @@ export function useDesktopState() {
     if (imageUrls.length > 0 || skills.length > 0 || fileAttachments.length > 0) return false
 
     const requests = pendingServerRequestsByThreadId.value[threadId] ?? []
-    const userInputRequests = requests.filter((request) => request.method === 'item/tool/requestUserInput')
+    const userInputRequests = requests.filter((request) => request.method === 'item/tool/requestUserInput' && isBlockingServerRequest(request))
     if (userInputRequests.length !== 1) return false
 
     const [request] = userInputRequests
@@ -7187,7 +7072,7 @@ export function useDesktopState() {
     const nextText = text.trim()
     const targetCwd = cwd.trim()
     const selectedModel = readModelIdForThread(NEW_THREAD_COLLABORATION_MODE_CONTEXT).trim()
-    let selectedEffort = selectedReasoningEffort.value
+    const selectedEffort = selectedReasoningEffort.value
     const selectedMode = collaborationModeOverride === 'plan'
       ? 'plan'
       : collaborationModeOverride === 'default'
@@ -7204,91 +7089,40 @@ export function useDesktopState() {
     let threadId = ''
 
     try {
-      let startedTurnId = ''
-      try {
-        const startedThread = await startThreadWithTurn(
-          targetCwd || undefined,
-          nextText,
-          imageUrls,
-          selectedModel || undefined,
-          selectedEffort || undefined,
-          skills.length > 0 ? skills : undefined,
-          fileAttachments,
-          selectedMode,
-          serviceTierForSpeedMode(speedMode, selectedModel),
-          collaborationModeDeveloperInstructions,
-        )
-        threadId = startedThread.threadId
-        startedTurnId = startedThread.turnId
-        setThreadModelId(threadId, startedThread.model)
-        setThreadModelProviderId(threadId, startedThread.modelProvider || activeProviderId.value)
-        const resolvedModel = startedThread.model.trim() || selectedModel
-        if (resolvedModel && selectedEffort) {
-          cacheThreadModelPreference(threadId, {
-            model: resolvedModel,
-            reasoningEffort: selectedEffort,
-          })
-          void queueThreadModelPreferenceWrite(threadId)
-        }
-        setSelectedCollaborationModeForThread(
-          threadId,
-          shouldPersistCollaborationMode ? selectedMode : 'default',
-          { persist: shouldPersistCollaborationMode && selectedMode === 'plan' },
-        )
-      } catch (unknownError) {
-        if (selectedModel && selectedModel !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
-          await applyFallbackModelSelection()
-          selectedEffort = selectedReasoningEffort.value
-          const fallbackThread = await startThreadWithTurn(
-            targetCwd || undefined,
-            nextText,
-            imageUrls,
-            MODEL_FALLBACK_ID,
-            selectedEffort || undefined,
-            skills.length > 0 ? skills : undefined,
-            fileAttachments,
-            selectedMode,
-            serviceTierForSpeedMode(speedMode, MODEL_FALLBACK_ID),
-            collaborationModeDeveloperInstructions,
-          )
-          threadId = fallbackThread.threadId
-          startedTurnId = fallbackThread.turnId
-          setThreadModelId(threadId, fallbackThread.model)
-          setThreadModelProviderId(threadId, fallbackThread.modelProvider || activeProviderId.value)
-          const fallbackModel = fallbackThread.model.trim() || MODEL_FALLBACK_ID
-          if (selectedEffort) {
-            cacheThreadModelPreference(threadId, {
-              model: fallbackModel,
-              reasoningEffort: selectedEffort,
-            })
-            void queueThreadModelPreferenceWrite(threadId)
-          }
-          setSelectedCollaborationModeForThread(
-            threadId,
-            shouldPersistCollaborationMode ? selectedMode : 'default',
-            { persist: shouldPersistCollaborationMode && selectedMode === 'plan' },
-          )
-        } else {
-          throw unknownError
-        }
+      const startedThread = await startThreadWithTurn(
+        targetCwd || undefined,
+        nextText,
+        imageUrls,
+        selectedModel || undefined,
+        selectedEffort || undefined,
+        skills.length > 0 ? skills : undefined,
+        fileAttachments,
+        selectedMode,
+        serviceTierForSpeedMode(speedMode, selectedModel),
+        collaborationModeDeveloperInstructions,
+      )
+      threadId = startedThread.threadId
+      const startedTurnId = startedThread.turnId
+      setThreadModelId(threadId, startedThread.model)
+      setThreadModelProviderId(threadId, startedThread.modelProvider || activeProviderId.value)
+      const resolvedModel = startedThread.model.trim() || selectedModel
+      if (resolvedModel && selectedEffort) {
+        cacheThreadModelPreference(threadId, {
+          model: resolvedModel,
+          reasoningEffort: selectedEffort,
+        })
+        void queueThreadModelPreferenceWrite(threadId)
       }
+      setSelectedCollaborationModeForThread(
+        threadId,
+        shouldPersistCollaborationMode ? selectedMode : 'default',
+        { persist: shouldPersistCollaborationMode && selectedMode === 'plan' },
+      )
       if (!threadId) return ''
 
       insertOptimisticThread(threadId, targetCwd, nextText || '[Image]')
       appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments)
-      setPendingTurnRequest(threadId, {
-        text: nextText,
-        imageUrls: [...imageUrls],
-        skills: skills.map((skill) => ({ name: skill.name, path: skill.path })),
-        fileAttachments: fileAttachments.map((file) => ({ ...file })),
-        effort: selectedEffort,
-        collaborationMode: selectedMode,
-        speedMode,
-        ...(collaborationModeDeveloperInstructions?.trim()
-          ? { collaborationModeDeveloperInstructions: collaborationModeDeveloperInstructions.trim() }
-          : {}),
-        fallbackRetried: false,
-      })
+      setPendingTurnRequest(threadId, { effort: selectedEffort, collaborationMode: selectedMode, speedMode })
       blockInterruptUntilThreadIsPersisted(threadId)
       resumedThreadById.value = {
         ...resumedThreadById.value,
@@ -7296,7 +7130,7 @@ export function useDesktopState() {
       }
       setSelectedThreadId(threadId)
       newThreadSelectionInitialized = false
-      newThreadDraftModelId = ''
+      newThreadDraftModelId.value = ''
       newThreadModelManuallySelected = false
       newThreadReasoningManuallySelected = false
       shouldAutoScrollOnNextAgentEvent = true
@@ -7378,19 +7212,7 @@ export function useDesktopState() {
     const normalizedSkills = skills.map((skill) => ({ name: skill.name, path: skill.path }))
     const normalizedFileAttachments = fileAttachments.map((file) => ({ ...file }))
 
-    setPendingTurnRequest(threadId, {
-      text: normalizedText,
-      imageUrls: [...normalizedImageUrls],
-      skills: normalizedSkills,
-      fileAttachments: normalizedFileAttachments,
-      effort: reasoningEffort,
-      collaborationMode,
-      speedMode,
-      ...(collaborationModeDeveloperInstructions?.trim()
-        ? { collaborationModeDeveloperInstructions: collaborationModeDeveloperInstructions.trim() }
-        : {}),
-      fallbackRetried: false,
-    })
+    setPendingTurnRequest(threadId, { effort: reasoningEffort, collaborationMode: collaborationMode, speedMode })
 
     try {
       const pendingMessageLoad = loadMessagePromiseByThreadId.get(threadId)
@@ -7416,52 +7238,18 @@ export function useDesktopState() {
       }
       const modelId = readModelIdForThread(threadId)
 
-      let startedTurnId = ''
-      try {
-        startedTurnId = await startThreadTurn(
-          threadId,
-          nextText,
-          normalizedImageUrls,
-          modelId || undefined,
-          reasoningEffort || undefined,
-          skills.length > 0 ? skills : undefined,
-          fileAttachments,
-          collaborationMode,
-          serviceTierForSpeedMode(speedMode, modelId),
-          collaborationModeDeveloperInstructions,
-        )
-      } catch (unknownError) {
-        if (modelId && modelId !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
-          await applyFallbackModelSelection(threadId)
-          setPendingTurnRequest(threadId, {
-            text: normalizedText,
-            imageUrls: [...normalizedImageUrls],
-            skills: normalizedSkills,
-            fileAttachments: normalizedFileAttachments,
-            effort: reasoningEffort,
-            collaborationMode,
-            speedMode,
-            ...(collaborationModeDeveloperInstructions?.trim()
-              ? { collaborationModeDeveloperInstructions: collaborationModeDeveloperInstructions.trim() }
-              : {}),
-            fallbackRetried: true,
-          })
-          startedTurnId = await startThreadTurn(
-            threadId,
-            nextText,
-            normalizedImageUrls,
-            MODEL_FALLBACK_ID,
-            reasoningEffort || undefined,
-            skills.length > 0 ? skills : undefined,
-            fileAttachments,
-            collaborationMode,
-            serviceTierForSpeedMode(speedMode, MODEL_FALLBACK_ID),
-            collaborationModeDeveloperInstructions,
-          )
-        } else {
-          throw unknownError
-        }
-      }
+      const startedTurnId = await startThreadTurn(
+        threadId,
+        nextText,
+        normalizedImageUrls,
+        modelId || undefined,
+        reasoningEffort || undefined,
+        skills.length > 0 ? skills : undefined,
+        fileAttachments,
+        collaborationMode,
+        serviceTierForSpeedMode(speedMode, modelId),
+        collaborationModeDeveloperInstructions,
+      )
 
       if (startedTurnId) {
         bumpRuntimeStateLifecycleEpoch(threadId)
@@ -8013,6 +7801,10 @@ export function useDesktopState() {
         lastAppliedRuntimeRequestByThreadId.set(threadId, requestContext.requestSequence)
       }
 
+      if (state.runtimeNotices && runtimeNoticeStore.replace(threadId, state.turnId, state.runtimeNotices)) {
+        runtimeNoticesByThreadId.value = runtimeNoticeStore.snapshot()
+      }
+
       if (state.isRunning && state.state === 'running') {
         const currentProgress = agentProgressByThreadId.value[threadId]
         const terminalSummary = turnSummaryByThreadId.value[threadId]
@@ -8430,11 +8222,16 @@ export function useDesktopState() {
 
   async function loadPendingServerRequestsFromBridge(): Promise<void> {
     try {
-      const rows = await getPendingServerRequests()
-      const normalizedRequests = rows
-        .map((row) => normalizeServerRequest(row))
-        .filter((request): request is UiServerRequest => request !== null)
-      replacePendingServerRequests(normalizedRequests)
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const revision = pendingServerRequestsRevision
+        const rows = await getPendingServerRequests()
+        if (revision !== pendingServerRequestsRevision) continue
+        const normalizedRequests = rows
+          .map((row) => normalizeServerRequest(row))
+          .filter((request): request is UiServerRequest => request !== null)
+        replacePendingServerRequests(normalizedRequests)
+        return
+      }
     } catch {
       // Keep UI usable when pending request endpoint is temporarily unavailable.
     }

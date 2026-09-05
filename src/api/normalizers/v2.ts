@@ -1,3 +1,4 @@
+import { normalizeRuntimeItem } from '../../runtimeItems'
 import type {
   Thread,
   ThreadItem,
@@ -463,6 +464,7 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
         id: item.id,
         role: 'assistant',
         text: item.text,
+        ...(['commentary', 'final_answer'].includes(String((item as Record<string, unknown>).phase)) ? { phase: (item as Record<string, unknown>).phase as UiMessage['phase'] } : {}),
         messageType: item.type,
       },
     ]
@@ -596,7 +598,8 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
     ]
   }
 
-  return []
+  const runtimeItem = normalizeRuntimeItem(item)
+  return runtimeItem ? [runtimeItem] : []
 }
 
 function toPaginatedUiMessages(item: ThreadItem): UiMessage[] {

@@ -41,6 +41,13 @@
       </div>
     </header>
 
+    <div v-if="overlay.runtimeNotices?.length" class="runtime-notices" role="status" aria-live="polite">
+      <section v-for="notice in overlay.runtimeNotices" :key="notice.kind" class="runtime-notice" :data-kind="notice.kind" :data-action="notice.requiresAction">
+        <strong>{{ t(notice.title) }}</strong>
+        <p v-for="detail in notice.details" :key="detail">{{ detail }}</p>
+      </section>
+    </div>
+
     <button
       v-if="progress && isMobile"
       ref="mobileOpenButtonRef"

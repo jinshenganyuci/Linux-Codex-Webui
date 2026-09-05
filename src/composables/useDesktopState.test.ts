@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { computed } from 'vue'
 import {
   buildWorkspaceRootsProjectOrderState,
   collectWorkspaceRootPathsForProjectRemoval,
@@ -269,9 +270,9 @@ beforeEach(() => {
 
 describe('planning clarification history', () => {
   function installNotificationHandler(): {
-    read: () => ((notification: { method: string; params?: unknown }) => void)
+    read: () => ((notification: { method: string; params?: unknown; generation?: number }) => void)
   } {
-    let handler: ((notification: { method: string; params?: unknown }) => void) | undefined
+    let handler: ((notification: { method: string; params?: unknown; generation?: number }) => void) | undefined
     gatewayMocks.subscribeCodexNotifications.mockImplementation((nextHandler) => {
       handler = nextHandler as typeof handler
       return vi.fn()
@@ -301,6 +302,43 @@ describe('planning clarification history', () => {
       },
     }
   }
+
+  it('keeps nonblocking questions separate from normal composer messages', async () => {
+    installTestWindow()
+    const notifications = installNotificationHandler()
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startNotificationStream()
+    const event = requestNotification()
+    notifications.read()({ ...event, params: { ...event.params, params: { ...event.params.params, isBlocking: false } } })
+    gatewayMocks.resumeThread.mockResolvedValue({ model: 'gpt-6-astra', modelProvider: 'myproxy', messages: [], inProgress: false, activeTurnId: '' })
+    gatewayMocks.startThreadTurn.mockResolvedValue('regular-turn')
+    await state.sendMessageToSelectedThread('normal composer message')
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.replyToServerRequest).not.toHaveBeenCalled()
+    expect(state.selectedThreadServerRequests.value).toHaveLength(1)
+    state.stopPolling()
+  })
+
+  it('clears native resolutions with string ids only for the matching generation and thread', () => {
+    installTestWindow()
+    const notifications = installNotificationHandler()
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    state.startNotificationStream()
+    const event = requestNotification()
+    notifications.read()({ ...event, params: { ...event.params, id: 'question-41' } })
+    const stale = { method: 'serverRequest/resolved', generation: 8, params: { threadId: 'thread-a', requestId: 'question-41' } }
+    notifications.read()(stale)
+    expect(state.selectedThreadServerRequests.value).toHaveLength(1)
+    notifications.read()({ ...stale, params: { ...stale.params, threadId: 'other' }, generation: 9 })
+    expect(state.selectedThreadServerRequests.value).toHaveLength(1)
+    notifications.read()({ ...stale, generation: 9 })
+    expect(state.selectedThreadServerRequests.value).toHaveLength(0)
+    notifications.read()({ ...stale, generation: 9 })
+    expect(state.selectedThreadServerRequests.value).toHaveLength(0)
+    state.stopPolling()
+  })
 
   it('replaces the answered form with a persistent compact summary', async () => {
     installTestWindow()
@@ -1879,7 +1917,7 @@ describe('paginated thread history state', () => {
     }
   })
 
-  it('blocks fork, rollback, and automatic fallback replay for paginated threads', async () => {
+  it('blocks unsafe history actions and preserves the original model error without fallback replay', async () => {
     installTestWindow()
     let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
     gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
@@ -1914,7 +1952,7 @@ describe('paginated thread history state', () => {
       },
     })
 
-    await vi.waitFor(() => expect(state.error.value).toContain('paginated thread'))
+    await vi.waitFor(() => expect(state.error.value).toContain('model is not supported'))
     expect(gatewayMocks.forkThread).not.toHaveBeenCalled()
     expect(gatewayMocks.rollbackThread).not.toHaveBeenCalled()
     expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
@@ -2615,6 +2653,41 @@ describe('live error overlay', () => {
 })
 
 describe('provider model selection', () => {
+  it('reactively selects a provider-only model for a new thread while another thread remains active', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project')] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.6-luna',
+      providerId: 'myproxy',
+      reasoningEffort: 'medium',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities(
+      'gpt-5.6-luna',
+      {
+        id: 'gpt-6-astra',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultReasoningEffort: 'low',
+      },
+    ))
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    const newThreadModel = computed(() => state.readModelIdForThread('__new-thread__'))
+
+    expect(newThreadModel.value).toBe('gpt-5.6-luna')
+    state.setSelectedModelIdForThread('__new-thread__', 'gpt-6-astra')
+    expect(newThreadModel.value).toBe('gpt-6-astra')
+    expect(state.selectedModelId.value).toBe('gpt-5.6-luna')
+  })
+
   it('sends Fast for a native Codex provider when the live model catalog allows it', async () => {
     installTestWindow()
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
@@ -2659,6 +2732,26 @@ describe('provider model selection', () => {
       'default',
       'fast',
       undefined,
+    )
+  })
+
+  it('passes Astra ultra and the native priority tier without rewriting either value', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-6-astra', providerId: 'myproxy', reasoningEffort: 'ultra', speedMode: 'standard' })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities({
+      id: 'gpt-6-astra', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      defaultReasoningEffort: 'low', supportsFastMode: true,
+    }).map(model => ({ ...model, fastServiceTier: 'priority', metadataSource: 'app-server' })))
+    gatewayMocks.startThreadWithTurn.mockResolvedValue({ threadId: 'astra-priority-thread', model: 'gpt-6-astra', modelProvider: 'myproxy', turnId: 'astra-priority-turn' })
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    await state.updateSelectedSpeedMode('fast')
+    await state.sendMessageToNewThread('explicit ultra and Fast', '/tmp/project')
+    expect(gatewayMocks.setCodexSpeedMode).toHaveBeenCalledWith('fast', 'priority')
+    expect(gatewayMocks.startThreadWithTurn).toHaveBeenCalledWith(
+      '/tmp/project', 'explicit ultra and Fast', [], 'gpt-6-astra', 'ultra', undefined, [], 'default', 'priority', undefined,
     )
   })
 

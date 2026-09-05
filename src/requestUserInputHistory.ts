@@ -1,3 +1,4 @@
+import { isServerRequestId, serverRequestIdentity } from './serverRequests'
 import type {
   UiMessage,
   UiRequestUserInputHistoryState,
@@ -56,7 +57,7 @@ function normalizeQuestion(value: unknown): UiRequestUserInputQuestionSummary | 
 export function normalizeRequestUserInputSummary(value: unknown): UiRequestUserInputSummary | null {
   const record = asRecord(value)
   if (!record) return null
-  const requestId = readSafeInteger(record.requestId)
+  const requestId = isServerRequestId(record.requestId) ? record.requestId : null
   const generation = readSafeInteger(record.generation)
   const threadId = readTrimmedString(record.threadId, 512)
   const id = readTrimmedString(record.id, 512)
@@ -158,7 +159,7 @@ export function buildRequestUserInputSummary(
   if (questions.length === 0) return null
   const replyAnswers = status === 'answered' ? readReplyAnswers(result) : {}
   const summary = normalizeRequestUserInputSummary({
-    id: `request-user-input:${request.generation}:${request.id}`,
+    id: `request-user-input:${serverRequestIdentity(request.id, request.generation)}`,
     threadId: request.threadId,
     turnId: request.turnId,
     itemId: request.itemId,

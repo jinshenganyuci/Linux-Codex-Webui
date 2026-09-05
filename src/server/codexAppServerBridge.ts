@@ -1,4 +1,8 @@
+import { isServerRequestId, serverRequestIdentity, isBlockingServerRequest } from '../serverRequests.js'
 import { spawn, spawnSync } from 'node:child_process'
+import { RuntimeCatalog, codexVersionFromUserAgent } from './runtimeCatalog.js'
+import { WEBUI_BUILD_INFO } from './runtimeIdentity.js'
+import { RuntimeNoticeStore } from '../runtimeNotices.js'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rename, rm, mkdir, stat, cp, lstat, readlink, symlink, realpath, utimes } from 'node:fs/promises'
 import { createReadStream, existsSync, readFileSync } from 'node:fs'
@@ -78,6 +82,7 @@ import {
 } from './newChatDefaults.js'
 import { ThreadTitleGenerator } from './threadTitleGenerator.js'
 import {
+  limitRuntimeItemPayload,
   limitCommandOutputsInTurns,
   limitThreadCommandOutputs,
   THREAD_METHODS_WITH_TURNS,
@@ -100,7 +105,7 @@ type JsonRpcCall = {
 }
 
 type JsonRpcResponse = {
-  id?: number
+  id?: number | string
   result?: unknown
   error?: {
     code: number
@@ -141,7 +146,7 @@ export type WorkspaceRootsState = {
 }
 
 type PendingServerRequest = {
-  id: number
+  id: UiServerRequest['id']
   generation: number
   method: string
   params: unknown
@@ -6735,7 +6740,8 @@ export class AppServerProcess {
   private pendingConfigRestart = false
   private readonly pending = new Map<number, { generation: number; resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
   private readonly notificationListeners = new Set<(value: AppServerNotification) => void>()
-  private readonly pendingServerRequests = new Map<number, PendingServerRequest>()
+  private readonly pendingServerRequests = new Map<UiServerRequest['id'], PendingServerRequest>()
+  private readonly resolvedServerRequestKeys = new Set<string>()
   private readonly streamEventsByThreadId = new Map<string, StreamEventFrame[]>()
   private readonly lastThreadReadSnapshotByThreadId = new Map<string, unknown>()
   private readonly threadTurnPageReadCacheByThreadId = new Map<string, { result: unknown; expiresAt: number }>()
@@ -6756,6 +6762,12 @@ export class AppServerProcess {
   private pendingAgentProgressGeneration = 0
   private chatgptAuthRefreshPromise: Promise<ChatgptAuthTokensRefreshResponse> | null = null
   private activeConfigSignature = ''
+  private readonly runtimeCatalog = new RuntimeCatalog()
+  private readonly runtimeNotices = new RuntimeNoticeStore()
+  private runtimeCommand = ''
+  private runtimeUserAgent = ''
+  private runtimeStartedAt = ''
+  private runtimeHome = ''
 
   constructor(
     private readonly threadRuntimeState: ThreadRuntimeState | null = null,
@@ -6799,7 +6811,7 @@ export class AppServerProcess {
     return this.activeTurnThreadIds.size > 0 ||
       this.optimisticTurnThreadIds.size > 0 ||
       this.pending.size > 0 ||
-      this.pendingServerRequests.size > 0
+      Array.from(this.pendingServerRequests.values()).some(isBlockingServerRequest)
   }
 
   private applyPendingConfigRestartIfIdle(): boolean {
@@ -6851,7 +6863,11 @@ export class AppServerProcess {
 
     const config = this.buildAppServerConfig()
     this.activeConfigSignature = this.getAppServerConfigSignature(config)
-    const invocation = getSpawnInvocation(this.getCodexCommand(), config.args)
+    this.runtimeCommand = this.getCodexCommand()
+    this.runtimeUserAgent = ''
+    this.runtimeStartedAt = new Date().toISOString()
+    this.runtimeHome = process.env.CODEX_HOME || join(homedir(), '.codex')
+    const invocation = getSpawnInvocation(this.runtimeCommand, config.args)
     const spawnEnv = Object.keys(config.env).length > 0
       ? { ...process.env, ...config.env }
       : undefined
@@ -6871,6 +6887,7 @@ export class AppServerProcess {
   }
 
   private handleUnexpectedExit(generation: number): void {
+    this.runtimeNotices.clear()
     const failure = new Error('codex app-server exited unexpectedly')
     for (const request of this.pending.values()) {
       request.reject(failure)
@@ -6905,7 +6922,7 @@ export class AppServerProcess {
       return
     }
 
-    if (typeof message.id === 'number' && this.pending.get(message.id)?.generation === generation) {
+    if (typeof message.method !== 'string' && typeof message.id === 'number' && this.pending.get(message.id)?.generation === generation) {
       const pendingRequest = this.pending.get(message.id)
       this.pending.delete(message.id)
 
@@ -6926,7 +6943,20 @@ export class AppServerProcess {
       return
     }
 
-    if (typeof message.method === 'string' && typeof message.id !== 'number') {
+    if (typeof message.method === 'string' && !isServerRequestId(message.id)) {
+      if (message.method === 'serverRequest/resolved') {
+        const params = asRecord(message.params)
+        const requestId = params?.requestId
+        const pendingRequest = isServerRequestId(requestId) ? this.pendingServerRequests.get(requestId) : null
+        if (pendingRequest && this.extractThreadIdFromParams(pendingRequest.params) === readNonEmptyString(params?.threadId)) {
+          void this.resolvePendingServerRequest(generation, pendingRequest.id, {}, 'native').then(() => {
+            this.emitNotification({ method: 'serverRequest/resolved', params: message.params }, generation)
+          }).catch((error) => {
+            console.warn('[server-request] Failed to finish resolved request:', getErrorMessage(error, 'Unknown error'))
+          })
+          return
+        }
+      }
       this.emitNotification({
         method: message.method,
         params: message.params ?? null,
@@ -6935,7 +6965,7 @@ export class AppServerProcess {
     }
 
     // Handle server-initiated JSON-RPC requests (approvals, dynamic tool calls, etc.).
-    if (typeof message.id === 'number' && typeof message.method === 'string') {
+    if (isServerRequestId(message.id) && typeof message.method === 'string') {
       this.handleServerRequest(generation, message.id, message.method, message.params ?? null)
     }
   }
@@ -6963,6 +6993,13 @@ export class AppServerProcess {
 
   private emitNotification(notification: { method: string; params: unknown }, generation = this.transport.activeGeneration): void {
     if (generation === 0) return
+    if (notification.method === 'item/started' || notification.method === 'item/completed') {
+      const params = asRecord(notification.params)
+      if (params?.item) {
+        const item = limitRuntimeItemPayload(params.item)
+        if (item !== params.item) notification = { ...notification, params: { ...params, item } }
+      }
+    }
     if (notification.method === 'thread/started') this.rememberThreadSessionPath(notification.params)
     const emittedNotification: AppServerNotification = { ...notification, generation }
     const changedProgressRoots = this.agentProgressTracker.handleNotification(
@@ -6970,6 +7007,7 @@ export class AppServerProcess {
       notification.params,
       generation,
     )
+    this.runtimeNotices.observe(notification.method, notification.params)
     this.threadRuntimeState?.observeNotification(notification.method, notification.params)
     this.updateActiveTurnState(notification)
     this.recordStreamEvent(emittedNotification)
@@ -7367,7 +7405,7 @@ export class AppServerProcess {
     })
   }
 
-  private sendServerRequestReply(generation: number, requestId: number, reply: ServerRequestReply): void {
+  private sendServerRequestReply(generation: number, requestId: UiServerRequest['id'], reply: ServerRequestReply): void {
     if (reply.error) {
       this.sendLine({
         jsonrpc: '2.0',
@@ -7384,14 +7422,18 @@ export class AppServerProcess {
     }, generation)
   }
 
-  private async resolvePendingServerRequest(generation: number, requestId: number, reply: ServerRequestReply): Promise<void> {
+  private async resolvePendingServerRequest(generation: number, requestId: UiServerRequest['id'], reply: ServerRequestReply, mode: 'manual' | 'native' = 'manual'): Promise<void> {
     const pendingRequest = this.pendingServerRequests.get(requestId)
     if (!pendingRequest || pendingRequest.generation !== generation) {
       throw new Error(`No pending server request found for id ${String(requestId)}`)
     }
+    if (mode === 'manual') this.sendServerRequestReply(generation, requestId, reply)
     this.pendingServerRequests.delete(requestId)
-
-    this.sendServerRequestReply(generation, requestId, reply)
+    this.resolvedServerRequestKeys.add(serverRequestIdentity(requestId, generation))
+    while (this.resolvedServerRequestKeys.size > 512) {
+      const oldest = this.resolvedServerRequestKeys.values().next().value
+      if (oldest !== undefined) this.resolvedServerRequestKeys.delete(oldest)
+    }
     const requestParams = asRecord(pendingRequest.params)
     const threadId = readNonEmptyString(
       requestParams?.threadId
@@ -7419,7 +7461,7 @@ export class AppServerProcess {
     }
     const summary = buildRequestUserInputSummary(
       request,
-      reply.error ? 'unanswered' : 'answered',
+      mode === 'native' || reply.error ? 'unanswered' : 'answered',
       reply.result,
     )
     if (summary) {
@@ -7436,7 +7478,7 @@ export class AppServerProcess {
         generation,
         method: pendingRequest.method,
         threadId,
-        mode: 'manual',
+        mode,
         resolvedAtIso: new Date().toISOString(),
       },
     }, generation)
@@ -7462,7 +7504,7 @@ export class AppServerProcess {
     return await this.chatgptAuthRefreshPromise
   }
 
-  private async handleChatgptAuthTokensRefreshRequest(generation: number, requestId: number, params: unknown): Promise<void> {
+  private async handleChatgptAuthTokensRefreshRequest(generation: number, requestId: UiServerRequest['id'], params: unknown): Promise<void> {
     const requestParams = asRecord(params)
     const previousAccountId = readNonEmptyString(requestParams?.previousAccountId ?? requestParams?.previous_account_id)
     try {
@@ -7493,7 +7535,9 @@ export class AppServerProcess {
     }
   }
 
-  private handleServerRequest(generation: number, requestId: number, method: string, params: unknown): void {
+  private handleServerRequest(generation: number, requestId: UiServerRequest['id'], method: string, params: unknown): void {
+    if (this.resolvedServerRequestKeys.has(serverRequestIdentity(requestId, generation))) return
+    if (this.pendingServerRequests.get(requestId)?.generation === generation) return
     if (method === 'account/chatgptAuthTokens/refresh') {
       void this.handleChatgptAuthTokensRefreshRequest(generation, requestId, params)
       return
@@ -7556,12 +7600,13 @@ export class AppServerProcess {
     this.initializePromise = this.call('initialize', {
       clientInfo: {
         name: 'linux-codex-webui',
-        version: '0.1.0',
+        version: WEBUI_BUILD_INFO.version,
       },
       capabilities: {
         experimentalApi: true,
       },
-    }).then(() => {
+    }).then((result) => {
+      this.runtimeUserAgent = readNonEmptyString(asRecord(result)?.userAgent)
       this.sendLine({
         jsonrpc: '2.0',
         method: 'initialized',
@@ -7611,8 +7656,8 @@ export class AppServerProcess {
     }
 
     const id = body.id
-    if (typeof id !== 'number' || !Number.isInteger(id)) {
-      throw new Error('Invalid response payload: "id" must be an integer')
+    if (!isServerRequestId(id)) {
+      throw new Error('Invalid response payload: "id" must be an integer or a non-empty string')
     }
 
     const generation = body.generation
@@ -7639,6 +7684,34 @@ export class AppServerProcess {
     await this.resolvePendingServerRequest(generation, id, { result: body.result })
   }
 
+  getRuntimeNotices(threadId: string) {
+    return this.runtimeNotices.read(threadId)
+  }
+
+  getRuntimeInfo() {
+    return {
+      webui: WEBUI_BUILD_INFO,
+      codex: {
+        version: this.transport.running ? codexVersionFromUserAgent(this.runtimeUserAgent) : null,
+        userAgent: this.runtimeUserAgent,
+        command: this.runtimeCommand,
+        startedAt: this.runtimeStartedAt,
+        home: this.runtimeHome,
+        generation: this.transport.activeGeneration,
+        running: this.transport.running,
+        busy: this.isBusy(),
+        activeThreadIds: [...this.activeTurnThreadIds],
+        pendingRequestCount: this.pendingServerRequests.size,
+        catalogStatus: this.runtimeCatalog.status,
+      },
+    }
+  }
+
+  async getBundledModelCapabilities() {
+    await this.ensureInitialized()
+    return this.runtimeCatalog.read(this.runtimeCommand, codexVersionFromUserAgent(this.runtimeUserAgent))
+  }
+
   listPendingServerRequests(): PendingServerRequest[] {
     return Array.from(this.pendingServerRequests.values())
   }
@@ -7651,6 +7724,7 @@ export class AppServerProcess {
     this.initializePromise = null
     this.activeConfigSignature = ''
 
+    this.runtimeNotices.clear()
     const failure = new Error('codex app-server stopped')
     for (const request of this.pending.values()) {
       request.reject(failure)
@@ -8901,7 +8975,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           })
           return
         }
-        const data = await threadRuntimeState.getStates(threadIds)
+        const data = (await threadRuntimeState.getStates(threadIds)).map(state => ({
+          ...state,
+          runtimeNotices: typeof appServer.getRuntimeNotices === 'function' ? appServer.getRuntimeNotices(state.threadId) : [],
+        }))
         setJson(res, 200, {
           data,
           instanceId: threadRuntimeState.instanceId,
@@ -9476,12 +9553,22 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
+      if (req.method === 'GET' && url.pathname === '/codex-api/runtime-info') {
+        setJson(res, 200, { data: appServer.getRuntimeInfo() })
+        return
+      }
+
       if (req.method === 'GET' && url.pathname === '/codex-api/provider-models') {
         const requestedProvider = url.searchParams.get('provider')?.trim() ?? ''
-        const data = requestedProvider
-          ? { ...(await readProviderModelIdsForProvider(appServer, requestedProvider)), exclusive: true }
-          : await readProviderBackedModelIds(appServer)
-        setJson(res, 200, data)
+        const dataPromise = requestedProvider
+          ? readProviderModelIdsForProvider(appServer, requestedProvider).then(data => ({ ...data, exclusive: true }))
+          : readProviderBackedModelIds(appServer)
+        const [data, bundledCapabilities] = await Promise.all([
+          dataPromise,
+          typeof appServer.getBundledModelCapabilities === 'function' ? appServer.getBundledModelCapabilities() : Promise.resolve([]),
+        ])
+        const capabilities = bundledCapabilities.filter(model => data.data.includes(model.id))
+        setJson(res, 200, { ...data, capabilities })
         return
       }
 

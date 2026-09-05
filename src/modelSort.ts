@@ -1,4 +1,5 @@
 const MODEL_STRENGTH_RANK: Record<string, number> = {
+  'gpt-6-astra': 1000,
   'gpt-5.6-sol': 900,
   'gpt-5.6-terra': 800,
   'gpt-5.5': 700,

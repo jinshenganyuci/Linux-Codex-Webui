@@ -576,6 +576,7 @@ describe('getAvailableModelIds', () => {
         supportedReasoningEfforts: ['low', 'ultra'],
         defaultReasoningEffort: 'low',
         supportsFastMode: true,
+        metadataSource: 'app-server', reasoningSupport: 'supported', fastModeSupport: 'supported', fastServiceTier: 'priority', fastDescription: '1.5x speed, increased usage',
       },
       {
         id: 'provider-custom',
@@ -583,6 +584,7 @@ describe('getAvailableModelIds', () => {
         supportedReasoningEfforts: [],
         defaultReasoningEffort: null,
         supportsFastMode: false,
+        metadataSource: 'provider', reasoningSupport: 'unknown', fastModeSupport: 'unknown', fastServiceTier: null, fastDescription: null,
       },
     ])
     expect(requests).toEqual(['/codex-api/provider-models', '/codex-api/rpc'])
@@ -675,6 +677,7 @@ describe('getAvailableModelIds', () => {
       supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
       defaultReasoningEffort: 'low',
       supportsFastMode: true,
+      metadataSource: 'app-server', reasoningSupport: 'supported', fastModeSupport: 'supported', fastServiceTier: 'fast', fastDescription: null,
     }])
   })
 })

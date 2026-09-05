@@ -17,7 +17,7 @@ export type RpcNotification = {
 }
 
 type ServerRequestReplyBody = {
-  id: number
+  id: number | string
   generation: number
   result?: unknown
   error?: {

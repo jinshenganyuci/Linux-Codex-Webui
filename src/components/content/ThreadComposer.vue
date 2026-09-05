@@ -376,6 +376,7 @@
           :reasoning-options="reasoningOptions"
           open-direction="up"
           :disabled="isComposerConfigDisabled"
+          :capability-notice="modelCapabilityNotice"
           @update:selected-model="onModelSelect"
           @update:selected-reasoning-effort="onReasoningEffortSelect"
         />
@@ -657,6 +658,7 @@
               role="listbox"
               :aria-label="t('Reasoning')"
             >
+              <p class="model-reasoning-capability-note">{{ modelCapabilityNotice }}</p>
               <button
                 v-for="option in reasoningOptions"
                 :key="option.value"
@@ -999,6 +1001,12 @@ const modelOptions = computed(() =>
     label: formatModelLabel(props.modelCapabilities?.[modelId]?.displayName || modelId),
   })),
 )
+const modelCapabilityNotice = computed(() => {
+  const capability = props.modelCapabilities?.[props.selectedModel]
+  if (capability?.metadataSource === 'bundled') return t('CLI bundled metadata; provider support is not verified.')
+  if (!capability || capability.reasoningSupport === 'unknown') return t('Model capabilities are unknown; settings require provider support.')
+  return t('Capabilities reported by the running Codex CLI; account restrictions may apply.')
+})
 const isPlanModeSelected = computed(() => props.selectedCollaborationMode === 'plan')
 
 const isPlanModeWaitingForModel = computed(() =>
@@ -1138,10 +1146,12 @@ const speedModeDescription = computed(() => {
     return t('Saving speed setting...')
   }
   if (!isFastModeSupported.value) {
-    return t('Fast mode is unavailable for this model. Turn it off to use Standard mode.')
+    return t(props.modelCapabilities?.[props.selectedModel]?.fastModeSupport === 'unknown'
+      ? 'Fast capability is unknown for this provider model.'
+      : 'Fast mode is unavailable for this model. Turn it off to use Standard mode.')
   }
   return props.selectedSpeedMode === 'fast'
-    ? t('About 1.5x faster, with increased credit usage')
+    ? props.modelCapabilities?.[props.selectedModel]?.fastDescription || t('Faster service tier; availability and usage depend on your provider.')
     : t('Default speed with normal credit usage')
 })
 const inProgressMode = computed<'steer' | 'queue'>(() =>

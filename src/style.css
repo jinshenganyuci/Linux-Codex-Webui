@@ -3324,3 +3324,49 @@ html.dark .request-user-input-summary-answer {
 html.dark .request-user-input-summary-answer-label {
   color: rgb(165 180 252);
 }
+
+.runtime-info-panel,
+.runtime-notice,
+.runtime-item {
+  border: 1px solid rgb(148 163 184 / 28%);
+  border-radius: 10px;
+  background: rgb(248 250 252);
+  color: rgb(51 65 85);
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.model-reasoning-capability-note {
+  margin: 4px 10px 8px;
+  max-width: 260px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #71717a;
+  white-space: normal;
+}
+html.dark .model-reasoning-capability-note { color: #a1a1aa; }
+
+.runtime-info-panel { margin: 8px 0; font-size: 12px; }
+.runtime-info-panel summary,
+.runtime-item summary { cursor: pointer; font-weight: 600; }
+.runtime-info-panel dl { display: grid; gap: 4px 8px; grid-template-columns: auto minmax(0, 1fr); margin: 8px 0; }
+.runtime-info-panel dd { margin: 0; }
+.runtime-info-panel dt,
+.runtime-info-help,
+.runtime-item summary span { opacity: .72; }
+.runtime-info-panel button { padding: 4px 10px; border: 1px solid currentColor; border-radius: 6px; }
+.runtime-notices { display: grid; gap: 8px; margin-top: 10px; }
+.runtime-notice { font-size: 12px; }
+.runtime-notice p { margin: 4px 0 0; white-space: pre-wrap; }
+.runtime-notice[data-action="true"] { border-color: rgb(217 119 6 / 55%); }
+.runtime-item { font-size: 12px; max-width: 100%; }
+.runtime-item summary span { float: right; font-weight: 400; margin-left: 12px; }
+.runtime-item pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; margin-top: 8px; }
+.runtime-item a { display: inline-block; color: rgb(67 56 202); margin-top: 8px; }
+
+html.dark .runtime-info-panel,
+html.dark .runtime-notice,
+html.dark .runtime-item { background: rgb(24 30 43); color: rgb(226 232 240); border-color: rgb(148 163 184 / 25%); }
+html.dark .runtime-notice[data-action="true"] { border-color: rgb(251 191 36 / 55%); }
+html.dark .runtime-item a { color: rgb(165 180 252); }

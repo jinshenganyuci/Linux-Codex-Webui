@@ -26,7 +26,13 @@
         :data-role="message.role"
         :data-message-type="message.messageType || ''"
       >
-        <div v-if="isCommandMessage(message)" class="message-row" data-role="system">
+        <details v-if="message.runtimeItem" class="runtime-item" :data-status="message.runtimeItem.status">
+          <summary>{{ t(message.runtimeItem.title) }} <span>{{ t(message.runtimeItem.status === 'inProgress' ? 'Running' : message.runtimeItem.status === 'failed' ? 'Failed' : message.runtimeItem.status === 'interrupted' || message.runtimeItem.status === 'declined' ? 'Interrupted' : 'Completed') }}</span></summary>
+          <pre v-if="message.runtimeItem.body">{{ message.runtimeItem.body }}</pre>
+          <p v-if="message.runtimeItem.truncated">{{ t('Output preview truncated') }}</p>
+          <a v-if="message.runtimeItem.agentThreadId" :href="`#/thread/${encodeURIComponent(message.runtimeItem.agentThreadId)}`">{{ t('Open subagent conversation') }}</a>
+        </details>
+        <div v-else-if="isCommandMessage(message)" class="message-row" data-role="system">
           <div class="message-stack" data-role="system">
             <button
               v-if="getGroupedCommandsForLatest(message).length > 0"
@@ -1064,6 +1070,7 @@ export function createThreadCommandOutputCache(
 </script>
 
 <script setup lang="ts">
+import { isBlockingServerRequest } from '../../serverRequests'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanLifecycle, UiPlanStep, UiRequestUserInputQuestionSummary, UiServerRequest } from '../../types/codex'
 import { getFullThreadCommandOutput, updateThreadFileChanges } from '../../api/codexGateway'
@@ -1678,7 +1685,7 @@ const emit = defineEmits<{
   forkThread: [payload: { threadId: string; turnIndex: number }]
   rollback: [payload: { turnId: string }]
   implementPlan: [payload: { turnId: string }]
-  respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
+  respondServerRequest: [payload: { id: UiServerRequest['id']; result?: unknown; error?: { code?: number; message: string } }]
 }>()
 
 const commandOutputRenderVersion = ref(0)
@@ -2838,7 +2845,7 @@ function requestDisplayTitle(request: UiServerRequest): string {
   if (request.method === 'item/fileChange/requestApproval') return t('File change approval required')
   if (request.method === 'item/permissions/requestApproval') return t('Permissions approval required')
   if (request.method === 'mcpServer/elicitation/request') return t('MCP server input required')
-  if (request.method === 'item/tool/requestUserInput') return t('Input required')
+  if (request.method === 'item/tool/requestUserInput') return t(isBlockingServerRequest(request) ? 'Input required' : 'Optional input · task continues')
   if (request.method === 'item/tool/call') return t('Tool call waiting for response')
   return request.method
 }
@@ -2853,7 +2860,7 @@ function readMcpElicitationUrl(request: UiServerRequest): string {
   return typeof params?.url === 'string' ? params.url.trim() : ''
 }
 
-function mcpElicitationAnswerKey(requestId: number, fieldKey: string): string {
+function mcpElicitationAnswerKey(requestId: UiServerRequest['id'], fieldKey: string): string {
   return `${String(requestId)}:${fieldKey}`
 }
 
@@ -2974,17 +2981,17 @@ function readMcpElicitationInputType(schema: Record<string, unknown>): string {
   return 'text'
 }
 
-function readMcpElicitationFieldValue(requestId: number, field: McpElicitationField): string | number | boolean | string[] {
+function readMcpElicitationFieldValue(requestId: UiServerRequest['id'], field: McpElicitationField): string | number | boolean | string[] {
   const saved = mcpElicitationAnswers.value[mcpElicitationAnswerKey(requestId, field.key)]
   return saved === undefined ? field.defaultValue : saved
 }
 
-function readMcpElicitationMultiValue(requestId: number, field: McpElicitationField): string[] {
+function readMcpElicitationMultiValue(requestId: UiServerRequest['id'], field: McpElicitationField): string[] {
   const value = readMcpElicitationFieldValue(requestId, field)
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
 }
 
-function toolQuestionKey(requestId: number, questionId: string): string {
+function toolQuestionKey(requestId: UiServerRequest['id'], questionId: string): string {
   return `${String(requestId)}:${questionId}`
 }
 
@@ -3022,14 +3029,14 @@ function readToolQuestions(request: UiServerRequest): ParsedToolQuestion[] {
   return parsed
 }
 
-function readQuestionAnswer(requestId: number, questionId: string, fallback: string): string {
+function readQuestionAnswer(requestId: UiServerRequest['id'], questionId: string, fallback: string): string {
   const key = toolQuestionKey(requestId, questionId)
   const saved = toolQuestionAnswers.value[key]
   if (typeof saved === 'string' && saved.length > 0) return saved
   return fallback
 }
 
-function onQuestionAnswerInput(requestId: number, questionId: string, event: Event): void {
+function onQuestionAnswerInput(requestId: UiServerRequest['id'], questionId: string, event: Event): void {
   const target = event.target
   if (!(target instanceof HTMLInputElement)) return
   const key = toolQuestionKey(requestId, questionId)
@@ -3039,18 +3046,18 @@ function onQuestionAnswerInput(requestId: number, questionId: string, event: Eve
   }
 }
 
-function readQuestionOptionDescription(requestId: number, question: ParsedToolQuestion): string {
+function readQuestionOptionDescription(requestId: UiServerRequest['id'], question: ParsedToolQuestion): string {
   const selected = readQuestionAnswer(requestId, question.id, question.options[0]?.label || '')
   const match = question.options.find((option) => option.label === selected)
   return match?.description ?? ''
 }
 
-function readQuestionOtherAnswer(requestId: number, questionId: string): string {
+function readQuestionOtherAnswer(requestId: UiServerRequest['id'], questionId: string): string {
   const key = toolQuestionKey(requestId, questionId)
   return toolQuestionOtherAnswers.value[key] ?? ''
 }
 
-function onQuestionAnswerChange(requestId: number, questionId: string, value: string): void {
+function onQuestionAnswerChange(requestId: UiServerRequest['id'], questionId: string, value: string): void {
   const key = toolQuestionKey(requestId, questionId)
   toolQuestionAnswers.value = {
     ...toolQuestionAnswers.value,
@@ -3058,7 +3065,7 @@ function onQuestionAnswerChange(requestId: number, questionId: string, value: st
   }
 }
 
-function onQuestionOtherAnswerInput(requestId: number, questionId: string, event: Event): void {
+function onQuestionOtherAnswerInput(requestId: UiServerRequest['id'], questionId: string, event: Event): void {
   const target = event.target
   if (!(target instanceof HTMLInputElement)) return
   const key = toolQuestionKey(requestId, questionId)
@@ -3068,7 +3075,7 @@ function onQuestionOtherAnswerInput(requestId: number, questionId: string, event
   }
 }
 
-function onMcpElicitationFieldInput(requestId: number, field: McpElicitationField, event: Event): void {
+function onMcpElicitationFieldInput(requestId: UiServerRequest['id'], field: McpElicitationField, event: Event): void {
   const target = event.target
   if (!(target instanceof HTMLInputElement)) return
   mcpElicitationAnswers.value = {
@@ -3077,7 +3084,7 @@ function onMcpElicitationFieldInput(requestId: number, field: McpElicitationFiel
   }
 }
 
-function onMcpElicitationBooleanToggle(requestId: number, field: McpElicitationField, event: Event): void {
+function onMcpElicitationBooleanToggle(requestId: UiServerRequest['id'], field: McpElicitationField, event: Event): void {
   const target = event.target
   if (!(target instanceof HTMLInputElement)) return
   mcpElicitationAnswers.value = {
@@ -3087,7 +3094,7 @@ function onMcpElicitationBooleanToggle(requestId: number, field: McpElicitationF
 }
 
 function onMcpElicitationMultiToggle(
-  requestId: number,
+  requestId: UiServerRequest['id'],
   field: McpElicitationField,
   optionValue: string,
   event: Event,
@@ -3103,7 +3110,7 @@ function onMcpElicitationMultiToggle(
   }
 }
 
-function onRespondApproval(requestId: number, decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'): void {
+function onRespondApproval(requestId: UiServerRequest['id'], decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'): void {
   emit('respondServerRequest', {
     id: requestId,
     result: { decision },
@@ -3175,7 +3182,7 @@ function onRespondToolRequestUserInput(request: UiServerRequest): void {
   })
 }
 
-function onRespondToolCallFailure(requestId: number): void {
+function onRespondToolCallFailure(requestId: UiServerRequest['id']): void {
   emit('respondServerRequest', {
     id: requestId,
     result: {
@@ -3190,7 +3197,7 @@ function onRespondToolCallFailure(requestId: number): void {
   })
 }
 
-function onRespondToolCallSuccess(requestId: number): void {
+function onRespondToolCallSuccess(requestId: UiServerRequest['id']): void {
   emit('respondServerRequest', {
     id: requestId,
     result: {
@@ -3200,14 +3207,14 @@ function onRespondToolCallSuccess(requestId: number): void {
   })
 }
 
-function onRespondEmptyResult(requestId: number): void {
+function onRespondEmptyResult(requestId: UiServerRequest['id']): void {
   emit('respondServerRequest', {
     id: requestId,
     result: {},
   })
 }
 
-function onRejectUnknownRequest(requestId: number): void {
+function onRejectUnknownRequest(requestId: UiServerRequest['id']): void {
   emit('respondServerRequest', {
     id: requestId,
     error: {

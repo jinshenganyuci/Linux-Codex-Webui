@@ -26,6 +26,7 @@
     "dist-cli/",
     "scripts/dev.cjs",
     "scripts/dev-random-home.cjs",
+    "scripts/prepare-codex-acceptance.mjs",
     "scripts/fix-pty-native-build.cjs"
   ],
   "pnpm": {

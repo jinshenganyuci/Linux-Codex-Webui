@@ -1,3 +1,6 @@
+import { normalizeModelCapability, providerModelCapability } from '../modelCapabilities'
+import { normalizeRuntimeNotices } from '../runtimeNotices'
+import type { UiRuntimeNotice } from '../types/codex'
 import {
   fetchRpcMethodCatalog,
   fetchRpcNotificationCatalog,
@@ -319,6 +322,7 @@ type DirectoryComposioConnectorPage = {
 }
 
 type ProviderModelsResponse = {
+  capabilities?: UiModelCapability[]
   data?: unknown
   exclusive?: unknown
 }
@@ -782,7 +786,7 @@ function normalizeReasoningEffort(value: unknown): ReasoningEffort | '' {
 }
 
 function normalizeSpeedMode(value: unknown): SpeedMode {
-  return typeof value === 'string' && value.trim().toLowerCase() === 'fast'
+  return typeof value === 'string' && ['fast', 'priority'].includes(value.trim().toLowerCase())
     ? 'fast'
     : 'standard'
 }
@@ -849,6 +853,7 @@ export type ThreadItemsListPage = {
 }
 
 export type ThreadRuntimeState = {
+  runtimeNotices?: UiRuntimeNotice[]
   threadId: string
   turnId: string
   state: 'running' | 'completed' | 'interrupted' | 'idle'
@@ -973,6 +978,7 @@ function normalizeThreadRuntimeState(value: unknown): ThreadRuntimeState | null 
     threadId,
     turnId: readString(row?.turnId) ?? '',
     state: state as ThreadRuntimeState['state'],
+    ...(Array.isArray(row?.runtimeNotices) ? { runtimeNotices: normalizeRuntimeNotices(row.runtimeNotices) } : {}),
     isRunning: row?.isRunning === true,
     source: source && ['session', 'local', 'external', 'none'].includes(source)
       ? source as ThreadRuntimeState['source']
@@ -2135,7 +2141,7 @@ export async function getThreadTerminalSnapshot(threadId: string): Promise<Threa
 }
 
 export async function replyToServerRequest(
-  id: number,
+  id: number | string,
   generation: number,
   payload: { result?: unknown; error?: { code?: number; message: string } },
 ): Promise<void> {
@@ -2825,7 +2831,7 @@ export async function setDefaultModel(model: string): Promise<void> {
   await callRpc('setDefaultModel', { model })
 }
 
-export async function setCodexSpeedMode(mode: SpeedMode): Promise<void> {
+export async function setCodexSpeedMode(mode: SpeedMode, fastServiceTier = 'fast'): Promise<void> {
   const normalizedMode: SpeedMode = mode === 'fast' ? 'fast' : 'standard'
   await callRpc('config/batchWrite', {
     edits: [
@@ -2836,7 +2842,7 @@ export async function setCodexSpeedMode(mode: SpeedMode): Promise<void> {
       },
       {
         keyPath: 'service_tier',
-        value: normalizedMode === 'fast' ? 'fast' : null,
+        value: normalizedMode === 'fast' ? fastServiceTier : null,
         mergeStrategy: normalizedMode === 'fast' ? 'upsert' : 'replace',
       },
     ],
@@ -2845,7 +2851,7 @@ export async function setCodexSpeedMode(mode: SpeedMode): Promise<void> {
   })
 }
 
-async function fetchProviderModelIds(providerId?: string): Promise<{ ids: string[], exclusive: boolean } | null> {
+async function fetchProviderModelIds(providerId?: string): Promise<{ ids: string[], exclusive: boolean, capabilities: UiModelCapability[] } | null> {
   try {
     const normalizedProviderId = providerId?.trim() ?? ''
     const url = normalizedProviderId
@@ -2869,6 +2875,7 @@ async function fetchProviderModelIds(providerId?: string): Promise<{ ids: string
           .filter((candidate, index, candidates): candidate is string =>
             candidate.length > 0 && candidates.indexOf(candidate) === index),
         exclusive: providerPayload.exclusive === true,
+        capabilities: Array.isArray(providerPayload.capabilities) ? providerPayload.capabilities : [],
       }
     }
   } catch {
@@ -2877,58 +2884,7 @@ async function fetchProviderModelIds(providerId?: string): Promise<{ ids: string
   return null
 }
 
-function providerModelCapability(id: string): UiModelCapability {
-  return {
-    id,
-    displayName: id,
-    supportedReasoningEfforts: [],
-    defaultReasoningEffort: null,
-    supportsFastMode: false,
-  }
-}
 
-function normalizeModelCapability(value: unknown): UiModelCapability | null {
-  const row = asRecord(value)
-  if (!row) return null
-  const id = readString(row.id) || readString(row.model)
-  if (!id) return null
-
-  const supportedReasoningEfforts = Array.isArray(row.supportedReasoningEfforts)
-    ? row.supportedReasoningEfforts.flatMap((option) => {
-        const optionRecord = asRecord(option)
-        const effort = normalizeReasoningEffort(optionRecord?.reasoningEffort ?? option)
-        return effort ? [effort] : []
-      })
-    : []
-  const defaultReasoningEffort = normalizeReasoningEffort(row.defaultReasoningEffort) || null
-  const serviceTiers = Array.isArray(row.serviceTiers)
-    ? row.serviceTiers.flatMap((value) => {
-        const serviceTier = asRecord(value)
-        const id = readString(serviceTier?.id)
-        const name = readString(serviceTier?.name)
-        if (!id && !name) return []
-        return [{
-          id: id ?? '',
-          name: name ?? '',
-        }]
-      })
-    : []
-  const fastServiceTier = serviceTiers.find((tier) => (
-    tier.id.toLowerCase() === 'fast' || tier.name.toLowerCase() === 'fast'
-  ))
-  const additionalSpeedTiers = readStringArray(row.additionalSpeedTiers)
-  const supportsFastMode = Boolean(
-    fastServiceTier || additionalSpeedTiers.some((tier) => tier.toLowerCase() === 'fast'),
-  )
-
-  return {
-    id,
-    displayName: readString(row.displayName) || id,
-    supportedReasoningEfforts: Array.from(new Set(supportedReasoningEfforts)),
-    defaultReasoningEffort,
-    supportsFastMode,
-  }
-}
 
 async function fetchCodexModelCapabilities(): Promise<UiModelCapability[]> {
   const payload = await callRpc<unknown>('model/list', {})
@@ -2955,18 +2911,18 @@ export async function getAvailableModels(options: { includeProviderModels?: bool
     codexModels = await fetchCodexModelCapabilities()
   } catch (error) {
     if (!restrictToProviderModels || !providerModels) throw error
-    return providerModels.ids.map(providerModelCapability)
+    return providerModels.ids.map(id => providerModelCapability(id, providerModels.capabilities))
   }
 
   if (restrictToProviderModels && providerModels) {
     const codexModelById = new Map(codexModels.map((model) => [model.id, model]))
-    return providerModels.ids.map((id) => codexModelById.get(id) ?? providerModelCapability(id))
+    return providerModels.ids.map((id) => codexModelById.get(id) ?? providerModelCapability(id, providerModels.capabilities))
   }
 
   if (!shouldIncludeProviderModels || !providerModels) return codexModels
 
   for (const candidate of providerModels.ids) {
-    if (!codexModels.some((model) => model.id === candidate)) codexModels.push(providerModelCapability(candidate))
+    if (!codexModels.some((model) => model.id === candidate)) codexModels.push(providerModelCapability(candidate, providerModels.capabilities))
   }
   return codexModels
 }

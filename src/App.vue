@@ -134,6 +134,7 @@
               class="sidebar-settings-panel"
               @click.stop
             >
+              <RuntimeInfoPanel />
               <div class="sidebar-settings-account-section">
                 <div class="sidebar-settings-account-header">
                   <div class="sidebar-settings-account-header-main">
@@ -990,6 +991,7 @@
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { isBlockingServerRequest } from './serverRequests'
 import { useRoute, useRouter } from 'vue-router'
 import DesktopLayout from './components/layout/DesktopLayout.vue'
 import CodexLoginModal from './components/app/CodexLoginModal.vue'
@@ -1057,6 +1059,7 @@ import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, Telegra
 import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
 import { copyTextToClipboard } from './utils/clipboard'
 
+const RuntimeInfoPanel = defineAsyncComponent(() => import('./components/settings/RuntimeInfoPanel.vue'))
 const ThreadConversation = defineAsyncComponent(() => import('./components/content/ThreadConversation.vue'))
 const ThreadTerminalPanel = defineAsyncComponent(() => import('./components/content/ThreadTerminalPanel.vue'))
 const ReviewPane = defineAsyncComponent(() => import('./components/content/ReviewPane.vue'))
@@ -1538,7 +1541,8 @@ const isComposerFastModeSupported = computed(() => (
 ))
 const selectedThreadPendingRequest = computed<UiServerRequest | null>(() => {
   const rows = selectedThreadServerRequests.value
-  return rows.length > 0 ? rows[rows.length - 1] : null
+  const blocking = rows.filter(isBlockingServerRequest)
+  return blocking.at(-1) ?? rows.at(-1) ?? null
 })
 const composerCwd = computed(() => {
   if (isHomeRoute.value) return newThreadCwd.value.trim()

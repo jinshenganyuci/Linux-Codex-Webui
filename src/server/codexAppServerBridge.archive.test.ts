@@ -620,7 +620,7 @@ describe('AppServerProcess runtime config restart', () => {
       id: 1,
       method: 'initialize',
       params: {
-        clientInfo: { name: 'linux-codex-webui', version: '0.1.0' },
+        clientInfo: { name: 'linux-codex-webui', version: 'development' },
         capabilities: { experimentalApi: true },
       },
     })}\n`])
@@ -634,7 +634,7 @@ describe('AppServerProcess runtime config restart', () => {
         id: 1,
         method: 'initialize',
         params: {
-          clientInfo: { name: 'linux-codex-webui', version: '0.1.0' },
+          clientInfo: { name: 'linux-codex-webui', version: 'development' },
           capabilities: { experimentalApi: true },
         },
       })}\n`,
@@ -730,7 +730,7 @@ describe('AppServerProcess runtime config restart', () => {
       id: 2,
       method: 'initialize',
       params: {
-        clientInfo: { name: 'linux-codex-webui', version: '0.1.0' },
+          clientInfo: { name: 'linux-codex-webui', version: 'development' },
         capabilities: { experimentalApi: true },
       },
     })}\n`)

@@ -34,6 +34,7 @@
       >
         <div ref="menuRef" class="model-reasoning-menu">
           <div class="model-reasoning-menu-label">{{ t('Reasoning') }}</div>
+          <p v-if="capabilityNotice" class="model-reasoning-capability-note">{{ capabilityNotice }}</p>
           <ul class="model-reasoning-list" role="listbox" :aria-label="t('Reasoning')">
             <li v-for="option in reasoningOptions" :key="option.value">
               <button
@@ -106,6 +107,7 @@ const props = defineProps<{
   selectedReasoningEffort: ReasoningEffort | ''
   selectedSpeedMode: SpeedMode
   isFastModeSupported?: boolean
+  capabilityNotice?: string
   modelOptions: DropdownOption[]
   reasoningOptions: DropdownOption<ReasoningEffort>[]
   disabled?: boolean

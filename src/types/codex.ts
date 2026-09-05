@@ -21,6 +21,11 @@ export type UiModelCapability = {
   supportedReasoningEfforts: ReasoningEffort[]
   defaultReasoningEffort: ReasoningEffort | null
   supportsFastMode: boolean
+  metadataSource?: 'app-server' | 'bundled' | 'provider'
+  reasoningSupport?: 'supported' | 'unsupported' | 'unknown'
+  fastModeSupport?: 'supported' | 'unsupported' | 'unknown'
+  fastServiceTier?: string | null
+  fastDescription?: string | null
 }
 export type SpeedMode = 'standard' | 'fast'
 export type CollaborationModeKind = 'default' | 'plan'
@@ -302,6 +307,8 @@ export type UiMessage = {
   fileChanges?: UiFileChange[]
   fileChangeStatus?: UiFileChangeStatus
   messageType?: string
+  phase?: 'commentary' | 'final_answer'
+  runtimeItem?: { title: string; body: string; status: string; agentThreadId?: string; truncated?: boolean }
   rawPayload?: string
   isUnhandled?: boolean
   commandExecution?: CommandExecutionData
@@ -328,7 +335,7 @@ export type UiRequestUserInputSummary = {
   threadId: string
   turnId: string
   itemId: string
-  requestId: number
+  requestId: number | string
   generation: number
   status: UiRequestUserInputSummaryStatus
   questions: UiRequestUserInputQuestionSummary[]
@@ -339,7 +346,7 @@ export type UiRequestUserInputSummary = {
 export type UiRequestUserInputHistoryState = Record<string, UiRequestUserInputSummary[]>
 
 export type UiServerRequest = {
-  id: number
+  id: number | string
   generation: number
   method: string
   threadId: string
@@ -350,7 +357,7 @@ export type UiServerRequest = {
 }
 
 export type UiServerRequestReply = {
-  id: number
+  id: number | string
   generation?: number
   result?: unknown
   followUpMessageText?: string
@@ -421,6 +428,7 @@ export type UiTurnProgress = {
 export type UiNotificationConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'unavailable'
 
 export type UiLiveOverlay = {
+  runtimeNotices?: UiRuntimeNotice[]
   activityLabel: string
   activityDetails: string[]
   mainModelDetails?: string[]
@@ -428,6 +436,15 @@ export type UiLiveOverlay = {
   errorText: string
   connectionState?: UiNotificationConnectionState
   turnProgress?: UiTurnProgress | null
+}
+
+export type UiRuntimeNotice = {
+  kind: 'safety' | 'verification' | 'authentication' | 'rerouted' | 'moderation'
+  threadId: string
+  turnId: string
+  title: string
+  details: string[]
+  requiresAction: boolean
 }
 
 export type UiCreditsSnapshot = {

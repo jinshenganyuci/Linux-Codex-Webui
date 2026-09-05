@@ -234,6 +234,7 @@
 </template>
 
 <script setup lang="ts">
+import { isBlockingServerRequest } from '../../serverRequests'
 import { computed, ref, watch } from 'vue'
 import type { UiServerRequest, UiServerRequestReply } from '../../types/codex'
 import { useUiLanguage } from '../../composables/useUiLanguage'
@@ -354,6 +355,7 @@ function readRequestReason(request: UiServerRequest): string {
 }
 
 function requestPanelTitle(request: UiServerRequest): string {
+  if (!isBlockingServerRequest(request)) return t('Optional input · task continues')
   if (isApprovalRequest(request)) return t('Awaiting approval')
   if (isMcpElicitationRequest(request)) return t('MCP server input required')
   if (request.method === 'item/tool/requestUserInput') return t('Awaiting response')
@@ -368,6 +370,7 @@ function requestPanelPrompt(request: UiServerRequest): string {
   if (isFileApprovalRequest(request)) return t('Do you want to make these changes?')
   if (isPermissionsApprovalRequest(request)) return t('Do you want to grant these permissions?')
   if (isMcpElicitationRequest(request)) return t('An MCP server needs your input before Codex can continue.')
+  if (!isBlockingServerRequest(request)) return t('You can answer here later; normal messages will not answer this question.')
   if (request.method === 'item/tool/requestUserInput') return t('Codex needs your answer before it can continue.')
   return t('Codex is waiting for a response before it can continue.')
 }
@@ -471,7 +474,7 @@ watch(
   { immediate: true },
 )
 
-function toolQuestionKey(requestId: number, questionId: string): string {
+function toolQuestionKey(requestId: UiServerRequest['id'], questionId: string): string {
   return `${String(requestId)}:${questionId}`
 }
 
@@ -509,18 +512,18 @@ function readToolQuestions(request: UiServerRequest): ParsedToolQuestion[] {
   return parsed
 }
 
-function readQuestionAnswer(requestId: number, questionId: string, fallback: string): string {
+function readQuestionAnswer(requestId: UiServerRequest['id'], questionId: string, fallback: string): string {
   const key = toolQuestionKey(requestId, questionId)
   const saved = toolQuestionAnswers.value[key]
   if (typeof saved === 'string' && saved.length > 0) return saved
   return fallback
 }
 
-function readQuestionOtherAnswer(requestId: number, questionId: string): string {
+function readQuestionOtherAnswer(requestId: UiServerRequest['id'], questionId: string): string {
   return toolQuestionOtherAnswers.value[toolQuestionKey(requestId, questionId)] ?? ''
 }
 
-function onQuestionAnswerChange(requestId: number, questionId: string, value: string): void {
+function onQuestionAnswerChange(requestId: UiServerRequest['id'], questionId: string, value: string): void {
   const key = toolQuestionKey(requestId, questionId)
   toolQuestionAnswers.value = {
     ...toolQuestionAnswers.value,
@@ -532,7 +535,7 @@ function toolQuestionOptions(question: ParsedToolQuestion): Array<{ value: strin
   return question.options.map((option) => ({ value: option.label, label: option.label }))
 }
 
-function onQuestionOtherAnswerInput(requestId: number, questionId: string, event: Event): void {
+function onQuestionOtherAnswerInput(requestId: UiServerRequest['id'], questionId: string, event: Event): void {
   const target = event.target
   if (!(target instanceof HTMLInputElement)) return
   const key = toolQuestionKey(requestId, questionId)
@@ -543,7 +546,7 @@ function onQuestionOtherAnswerInput(requestId: number, questionId: string, event
 }
 
 function selectedOptionDescription(
-  requestId: number,
+  requestId: UiServerRequest['id'],
   questionId: string,
   options: Array<{ label: string; description: string }>,
 ): string {
@@ -551,7 +554,7 @@ function selectedOptionDescription(
   return options.find((option) => option.label === selected)?.description ?? ''
 }
 
-function mcpElicitationAnswerKey(requestId: number, fieldKey: string): string {
+function mcpElicitationAnswerKey(requestId: UiServerRequest['id'], fieldKey: string): string {
   return `${String(requestId)}:${fieldKey}`
 }
 
@@ -704,25 +707,25 @@ function readMcpElicitationInputType(schema: Record<string, unknown>): string {
   return 'text'
 }
 
-function readMcpElicitationFieldValue(requestId: number, field: McpElicitationField): string | number | boolean | string[] | null {
+function readMcpElicitationFieldValue(requestId: UiServerRequest['id'], field: McpElicitationField): string | number | boolean | string[] | null {
   const saved = mcpElicitationAnswers.value[mcpElicitationAnswerKey(requestId, field.key)]
   if (saved !== undefined) return saved
   return field.defaultValue
 }
 
-function readMcpElicitationMultiValue(requestId: number, field: McpElicitationField): string[] {
+function readMcpElicitationMultiValue(requestId: UiServerRequest['id'], field: McpElicitationField): string[] {
   const value = readMcpElicitationFieldValue(requestId, field)
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
 }
 
-function onMcpElicitationFieldInput(requestId: number, field: McpElicitationField, event: Event): void {
+function onMcpElicitationFieldInput(requestId: UiServerRequest['id'], field: McpElicitationField, event: Event): void {
   const target = event.target
   if (!(target instanceof HTMLInputElement)) return
 
   onMcpElicitationFieldValueChange(requestId, field, target.value)
 }
 
-function onMcpElicitationFieldValueChange(requestId: number, field: McpElicitationField, rawValue: string): void {
+function onMcpElicitationFieldValueChange(requestId: UiServerRequest['id'], field: McpElicitationField, rawValue: string): void {
   const nextValue =
     field.kind === 'number'
       ? rawValue
@@ -735,7 +738,7 @@ function onMcpElicitationFieldValueChange(requestId: number, field: McpElicitati
   mcpElicitationValidationError.value = ''
 }
 
-function onMcpElicitationBooleanChange(requestId: number, field: McpElicitationField, value: string): void {
+function onMcpElicitationBooleanChange(requestId: UiServerRequest['id'], field: McpElicitationField, value: string): void {
   let nextValue: boolean | null = null
   if (value === 'true') nextValue = true
   else if (value === 'false') nextValue = false
@@ -748,7 +751,7 @@ function onMcpElicitationBooleanChange(requestId: number, field: McpElicitationF
 }
 
 function onMcpElicitationMultiToggle(
-  requestId: number,
+  requestId: UiServerRequest['id'],
   field: McpElicitationField,
   optionValue: string,
   event: Event,
@@ -790,7 +793,7 @@ function mcpSingleEnumOptions(field: McpElicitationField): Array<{ value: string
   return options
 }
 
-function isMcpElicitationFieldAnswered(requestId: number, field: McpElicitationField): boolean {
+function isMcpElicitationFieldAnswered(requestId: UiServerRequest['id'], field: McpElicitationField): boolean {
   const value = readMcpElicitationFieldValue(requestId, field)
   if (field.kind === 'multiEnum') {
     return Array.isArray(value) && value.length > 0

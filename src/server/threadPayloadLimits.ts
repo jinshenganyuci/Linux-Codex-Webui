@@ -65,8 +65,42 @@ function truncateCommandOutput(
   }
 }
 
+function limitStructuredOutput(item: Record<string, unknown>, budget: CommandOutputBudget): unknown {
+  const key = item.type === 'hookPrompt' ? 'fragments' : 'output'
+  const output = item[key]
+  let truncated = false
+  const clip = (value: string): string => {
+    const allowed = Math.min(64 * 1024, budget.remainingBytes)
+    const result = truncateCommandOutput(value, allowed)
+    const retained = result?.output ?? value
+    budget.remainingBytes = Math.max(0, budget.remainingBytes - Buffer.byteLength(retained, 'utf8'))
+    truncated ||= result !== null
+    return retained
+  }
+  let nextOutput: unknown = output
+  if (typeof output === 'string') nextOutput = clip(output)
+  else if (Array.isArray(output)) {
+    truncated = output.length > 64
+    nextOutput = output.slice(0, 64).map(part => {
+      const row = asRecord(part)
+      return typeof row?.text === 'string' ? { ...row, text: clip(row.text) } : part
+    })
+  }
+  return truncated ? { ...item, [key]: nextOutput, outputTruncated: true } : item
+}
+
+export function limitRuntimeItemPayload(item: unknown): unknown {
+  const row = asRecord(item)
+  return row?.type === 'functionCallOutput' || row?.type === 'hookPrompt'
+    ? limitStructuredOutput(row, { remainingBytes: 64 * 1024 })
+    : item
+}
+
 function limitCommandExecutionOutput(item: unknown, budget: CommandOutputBudget): unknown {
   const itemRecord = asRecord(item)
+  if (itemRecord?.type === 'functionCallOutput' || itemRecord?.type === 'hookPrompt') {
+    return limitStructuredOutput(itemRecord, budget)
+  }
   if (
     itemRecord?.type !== 'commandExecution'
     || typeof itemRecord.aggregatedOutput !== 'string'
