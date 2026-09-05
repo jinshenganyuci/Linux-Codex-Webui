@@ -6,6 +6,8 @@ const { chromium } = require('playwright')
 const root = mkdtempSync(resolve(require('node:os').tmpdir(), 'codexui-phase1-docker-'))
 const output = resolve('output/playwright')
 const image = process.env.PHASE1_DOCKER_IMAGE || 'linux-codex-webui-phase1:20260905'
+const reportPrefix = process.env.CODEX_ACCEPTANCE_REPORT_PREFIX || 'phase1'
+assert.match(reportPrefix, /^[a-z0-9-]+$/)
 const containers = []
 const reports = []
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
@@ -45,7 +47,7 @@ async function checkUi(browser, name, port) {
   assert.equal(await page.getByText('OpenCode Zen', { exact: true }).count(), 0)
   assert.deepEqual(errors, [])
   await page.waitForTimeout(2300)
-  const screenshot = resolve(output, `phase1-docker-${name}.png`)
+  const screenshot = resolve(output, `${reportPrefix}-docker-${name}.png`)
   await page.screenshot({ path: screenshot })
   await page.close()
   return screenshot
@@ -90,7 +92,7 @@ async function checkUi(browser, name, port) {
       assert.equal(await page.locator('.conversation-item').filter({ hasText: 'PHASE1_INVALID_AUTH' }).count(), 1)
       assert.equal(await page.locator('.turn-progress-card').filter({ hasText: 'PHASE1_INVALID_AUTH' }).count(), 0)
       await page.waitForTimeout(2300)
-      const screenshot = resolve(output, `phase1-docker-invalid-auth-${theme}.png`)
+      const screenshot = resolve(output, `${reportPrefix}-docker-invalid-auth-${theme}.png`)
       await page.screenshot({ path: screenshot })
       screenshots.push(screenshot)
       await page.close()
@@ -107,7 +109,7 @@ async function checkUi(browser, name, port) {
     assert.deepEqual(after.data, ['gpt-5.6-luna'])
     reports.push({ name: 'provider-switch', port: 4194, before: before.data, after: after.data, screenshot: await checkUi(browser, 'provider-switch', 4194) })
     console.log('provider-switch: passed')
-    writeFileSync(resolve(output, 'phase1-docker-report.json'), JSON.stringify(reports, null, 2))
+    writeFileSync(resolve(output, `${reportPrefix}-docker-report.json`), JSON.stringify(reports, null, 2))
     console.log(JSON.stringify(reports, null, 2))
   } catch (error) {
     for (const container of containers) console.error(container, docker('logs', '--tail', '30', container))

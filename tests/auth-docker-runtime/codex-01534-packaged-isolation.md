@@ -20,3 +20,10 @@
 #### Rollback/Cleanup
 - 脚本 finally 删除它自己创建的容器和临时 HOME；失败时按输出名称复查，不停止其他容器。
 - 验收镜像可保留复现；清理临时打包目录，不操作正式服务。
+
+### 第二批复用打包矩阵
+
+- 前置条件：第二批构建和 tarball、已有 `linux-codex-webui-phase1:d2242b1` 基础镜像；仍需先确认 4191–4194 空闲。
+- 操作：按 `documentation/codex-0.153.4-phase2.md` 使用 `scripts/docker-codex-phase2.Dockerfile`，执行 `PHASE1_DOCKER_IMAGE=linux-codex-webui-phase2:5eba11f CODEX_ACCEPTANCE_REPORT_PREFIX=phase2 node scripts/verify-codex-phase1-docker.cjs`。
+- 预期：同样四个当前 Codex-only 场景通过；`phase2-docker-report.json` 和 `phase2-docker-*.png` 不覆盖首批证据；假 401 刷新后仍只一个错误、零重复 live overlay。构建仅复用本机测试缓存，不包含正式凭据或历史，不在升级流程创建备份。
+- 清理：删除本次临时打包目录；脚本只清理它自己创建的容器和假 HOME，不修改 13510/13511 服务。
