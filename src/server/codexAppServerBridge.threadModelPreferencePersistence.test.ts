@@ -30,7 +30,7 @@ describe('generic turn/start model preference persistence', () => {
       return {}
     })
     globalScope[sharedBridgeKey] = {
-      version: 'experimental-api-v5-native-thread-controls',
+      version: 'experimental-api-v6-native-extensions',
       appServer: {
         rpc,
         onNotification: () => noOp,

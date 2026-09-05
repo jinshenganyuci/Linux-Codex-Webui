@@ -21,7 +21,7 @@ describe('thread collaboration preference API', () => {
     const globalScope = globalThis as typeof globalThis & Record<string, unknown>
     const previousSharedBridge = globalScope[sharedBridgeKey]
     globalScope[sharedBridgeKey] = {
-      version: 'experimental-api-v5-native-thread-controls',
+      version: 'experimental-api-v6-native-extensions',
       appServer: {
         rpc: async () => ({}),
         onNotification: () => noOp,

@@ -38,4 +38,18 @@ describe('RPC schema catalog', () => {
     expect(await catalog.listMethods()).toEqual(['new'])
     expect(generate).toHaveBeenCalledTimes(3)
   })
+
+  it('requires the actual descendant parameter rather than guessing from thread/list existence', async () => {
+    let supported = false
+    const generate = vi.fn(async (_command: string, directory: string) => {
+      const root = JSON.parse(schema(['thread/list']))
+      root.definitions = { ThreadListParams: { properties: supported ? { ancestorThreadId: { type: 'string' } } : {} } }
+      await writeFile(join(directory, 'ClientRequest.json'), JSON.stringify(root))
+      await writeFile(join(directory, 'ServerNotification.json'), schema([]))
+    })
+    const catalog = new MethodCatalog(generate, async () => ({ command: 'codex', key: String(supported) }))
+    expect(await catalog.supportsDescendantThreads()).toBe(false)
+    supported = true
+    expect(await catalog.supportsDescendantThreads()).toBe(true)
+  })
 })

@@ -35,7 +35,7 @@ async function fixture() {
   const noOp = () => undefined
   const methods = vi.fn(async () => NATIVE_QUEUE_METHODS)
   scope.__codexRemoteSharedBridge__ = {
-    version: 'experimental-api-v5-native-thread-controls',
+    version: 'experimental-api-v6-native-extensions',
     appServer: { rpc, onNotification: () => noOp, dispose: noOp, disposeWhenIdle: async () => {}, isThreadBusy: () => busy, getNativeThreadSettings: () => null, emitLocalNotification: vi.fn() },
     terminalManager: { subscribe: () => noOp, dispose: noOp }, methodCatalog: { listMethods: methods },
     telegramBridge: { configureAllowedUserIds: noOp, configureToken: noOp, start: noOp, stop: noOp },

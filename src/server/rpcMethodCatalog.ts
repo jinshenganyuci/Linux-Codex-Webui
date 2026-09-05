@@ -35,14 +35,14 @@ async function commandIdentity(): Promise<{ command: string; key: string }> {
 
 export class MethodCatalog {
   private cachedKey = ''
-  private pending: Promise<{ methods: string[]; notifications: string[] }> | null = null
+  private pending: Promise<{ methods: string[]; notifications: string[]; descendantThreads: boolean }> | null = null
 
   constructor(
     private readonly generate = generateSchemas,
     private readonly identify = commandIdentity,
   ) {}
 
-  private async load(): Promise<{ methods: string[]; notifications: string[] }> {
+  private async load(): Promise<{ methods: string[]; notifications: string[]; descendantThreads: boolean }> {
     const identity = await this.identify()
     if (this.pending && this.cachedKey === identity.key) return this.pending
     this.cachedKey = identity.key
@@ -51,7 +51,8 @@ export class MethodCatalog {
       try {
         await this.generate(identity.command, directory)
         const [requests, notifications] = await Promise.all(['ClientRequest.json', 'ServerNotification.json'].map(filename => readFile(join(directory, filename), 'utf8')))
-        return { methods: extractMethods(JSON.parse(requests)), notifications: extractMethods(JSON.parse(notifications)) }
+        const schema = JSON.parse(requests)
+        return { methods: extractMethods(schema), notifications: extractMethods(JSON.parse(notifications)), descendantThreads: Boolean(schema.definitions?.ThreadListParams?.properties?.ancestorThreadId) }
       } finally {
         await rm(directory, { recursive: true, force: true })
       }
@@ -67,4 +68,5 @@ export class MethodCatalog {
 
   async listMethods(): Promise<string[]> { return [...(await this.load()).methods] }
   async listNotificationMethods(): Promise<string[]> { return [...(await this.load()).notifications] }
+  async supportsDescendantThreads(): Promise<boolean> { return (await this.load()).descendantThreads }
 }

@@ -42,7 +42,7 @@ describe('active plan snapshot bridge recovery', () => {
     const noOp = () => undefined
     previousSharedBridge = globalScope[sharedBridgeKey]
     globalScope[sharedBridgeKey] = {
-      version: 'experimental-api-v5-native-thread-controls',
+      version: 'experimental-api-v6-native-extensions',
       appServer: {
         rpc: async () => ({}),
         onNotification: (listener: typeof notificationListener) => {
@@ -81,6 +81,12 @@ describe('active plan snapshot bridge recovery', () => {
         })
       })
       expect(notificationListener).not.toBeNull()
+      notificationListener!({ method: 'thread/realtime/sdp', params: { threadId: 'voice', sdp: 'PRIVATE_SDP' } })
+      notificationListener!({ method: 'thread/realtime/outputAudio/delta', params: { threadId: 'voice', audio: { data: 'PRIVATE_AUDIO' } } })
+      const replayed: unknown[] = []
+      const stopReplay = middleware.subscribeNotifications(value => replayed.push(value), { streamId: middleware.getNotificationStreamState().streamId, sequence: 0 })
+      stopReplay()
+      expect(JSON.stringify(replayed)).not.toContain('PRIVATE_')
       notificationListener!({
         method: 'turn/plan/updated',
         generation: 7,
@@ -129,7 +135,7 @@ describe('active plan snapshot bridge recovery', () => {
     const noOp = () => undefined
     previousSharedBridge = globalScope[sharedBridgeKey]
     globalScope[sharedBridgeKey] = {
-      version: 'experimental-api-v5-native-thread-controls',
+      version: 'experimental-api-v6-native-extensions',
       appServer: {
         rpc: async () => ({}),
         onNotification: (listener: typeof notificationListener) => {

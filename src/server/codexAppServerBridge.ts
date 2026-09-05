@@ -2,6 +2,8 @@ import { isServerRequestId, serverRequestIdentity, isBlockingServerRequest } fro
 import { spawn, spawnSync } from 'node:child_process'
 import { RuntimeCatalog, codexVersionFromUserAgent } from './runtimeCatalog.js'
 import { MethodCatalog } from './rpcMethodCatalog.js'
+import { isVolatileRealtimeNotification } from '../nativeExtensions.js'
+import { createExtensionInfoReader, NativeRealtimeSessions, RealtimeSessionConflict } from './nativeExtensionRuntime.js'
 import { NATIVE_QUEUE_METHODS, normalizeNativeSettings, type NativeThreadSettings } from '../nativeThreadControls.js'
 import { WEBUI_BUILD_INFO } from './runtimeIdentity.js'
 import { RuntimeNoticeStore } from '../runtimeNotices.js'
@@ -7164,6 +7166,7 @@ export class AppServerProcess {
   }
 
   private recordStreamEvent(notification: AppServerNotification): void {
+    if (isVolatileRealtimeNotification(notification.method)) return
     const threadId = this.extractThreadIdFromParams(notification.params)
     if (!threadId) return
     const frame: StreamEventFrame = {
@@ -8332,7 +8335,7 @@ type SharedBridgeState = {
 }
 
 const SHARED_BRIDGE_KEY = '__codexRemoteSharedBridge__'
-const SHARED_BRIDGE_VERSION = 'experimental-api-v5-native-thread-controls'
+const SHARED_BRIDGE_VERSION = 'experimental-api-v6-native-extensions'
 
 function getSharedBridgeState(): SharedBridgeState {
   const globalScope = globalThis as typeof globalThis & {
@@ -8449,6 +8452,10 @@ async function buildThreadSearchIndex(appServer: AppServerProcess): Promise<Thre
 
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const { appServer, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor, threadRuntimeState } = getSharedBridgeState()
+  const extensionInfo = createExtensionInfoReader((method, params) => appServer.rpc(method, params), () => appServer.getRuntimeInfo())
+  const realtimeSessions = new NativeRealtimeSessions((method, params) => appServer.rpc(method, params))
+  const realtimeLeaseTimer = setInterval(() => { void realtimeSessions.sweep() }, 5000)
+  realtimeLeaseTimer.unref()
   const threadTitleGenerator = new ThreadTitleGenerator()
   const activePlanSnapshots = new ActivePlanSnapshotStore()
   const scheduledPlanSummaryRevisionByTurnId = new Map<string, number>()
@@ -8477,6 +8484,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     })
   }
   const publishNotification = (notification: { method: string; params: unknown; generation?: number }) => {
+    realtimeSessions.observe(notification.method, notification.params, notification.generation)
     const atIso = new Date().toISOString()
     activePlanSnapshots.applyNotification(
       notification.method,
@@ -8505,7 +8513,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       streamId: notificationStreamId,
       sequence: ++notificationSequence,
     }
-    notificationReplayBuffer.push(frame)
+    if (!isVolatileRealtimeNotification(frame.method)) notificationReplayBuffer.push(frame)
     if (notificationReplayBuffer.length > NOTIFICATION_REPLAY_BUFFER_LIMIT) {
       notificationReplayBuffer.splice(0, notificationReplayBuffer.length - NOTIFICATION_REPLAY_BUFFER_LIMIT)
     }
@@ -9019,6 +9027,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
         let rpcResult: unknown
         try {
+          if (body.method.startsWith('thread/realtime/') && body.method !== 'thread/realtime/listVoices' && realtimeSessions.isWebUiOwned(readNonEmptyString(asRecord(body.params)?.threadId))) {
+            throw new RealtimeSessionConflict('该实时会话由 WebUI 页面管理，请使用原页面的控制按钮。')
+          }
           if (NATIVE_QUEUE_METHODS.includes(body.method) && body.method !== 'thread/queue/list') {
             const threadId = readNonEmptyString(asRecord(body.params)?.threadId)
             rpcResult = await withNativeQueueMutation(threadId, async () => {
@@ -9030,7 +9041,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             rpcResult = await callRpcWithArchiveRecovery(appServer, body.method, body.params ?? null)
           }
         } catch (error) {
-          if (error instanceof NativeQueueConflict) { setJson(res, 409, { error: error.message }); return }
+          if (error instanceof NativeQueueConflict || error instanceof RealtimeSessionConflict) { setJson(res, 409, { error: error.message }); return }
           if (body.method === 'account/rateLimits/read' && isUnauthenticatedRateLimitError(error)) {
             setJson(res, 200, { result: null })
             return
@@ -9062,6 +9073,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }
           throw error
         }
+        if (['config/batchWrite', 'config/value/write', 'experimentalFeature/enablement/set', 'account/logout'].includes(body.method) || body.method.startsWith('account/login')) extensionInfo.invalidate()
         const trimmedResult = trimAndLimitThreadCommandOutputs(body.method, rpcResult, body.params)
         const rpcParams = asRecord(body.params)
         if (body.method === 'turn/start') {
@@ -9071,7 +9083,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         const errorMergedResult = THREAD_METHODS_WITH_TURNS.has(body.method) || body.method === 'thread/turns/list'
           ? mergeStreamTurnErrorsIntoThreadResult(appServer, trimmedResult, body.method, rpcThreadId)
           : trimmedResult
-        const listMergedResult = body.method === 'thread/list'
+        const listMergedResult = body.method === 'thread/list' && !rpcParams?.ancestorThreadId && !rpcParams?.parentThreadId
           ? mergeImportedThreadsIntoThreadListResult(errorMergedResult)
           : errorMergedResult
         const sanitizedResult = await sanitizeThreadTurnsInlinePayloads(body.method, listMergedResult)
@@ -9560,6 +9572,25 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }))
           appServer.emitLocalNotification('codex-ui/native-queue-mode', { threadId, mode })
           setJson(res, 200, { data: { mode } })
+          return
+        }
+      }
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/native-extension-info') {
+        const [info, descendantThreads] = await Promise.all([extensionInfo.read(), methodCatalog.supportsDescendantThreads()])
+        setJson(res, 200, { data: { ...info, descendantThreads } })
+        return
+      }
+
+      if (url.pathname === '/codex-api/realtime-session') {
+        if (req.method === 'GET') {
+          setJson(res, 200, { data: realtimeSessions.snapshot(url.searchParams.get('threadId') ?? '', url.searchParams.get('ownerId') ?? '') })
+          return
+        }
+        if (req.method === 'POST') {
+          const body = asRecord(await readJsonBody(req))
+          const data = await realtimeSessions.request(readNonEmptyString(body?.action), readNonEmptyString(body?.threadId), readNonEmptyString(body?.ownerId), body?.options)
+          setJson(res, 200, { data })
           return
         }
       }
@@ -10772,11 +10803,14 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       next()
     } catch (error) {
       const message = getErrorMessage(error, 'Unknown bridge error')
-      setJson(res, error instanceof NativeQueueConflict ? 409 : 502, { error: message })
+      setJson(res, error instanceof NativeQueueConflict || error instanceof RealtimeSessionConflict ? 409 : 502, { error: message })
     }
   }
 
   middleware.dispose = () => {
+    clearInterval(realtimeLeaseTimer)
+    void realtimeSessions.dispose()
+    extensionInfo.invalidate()
     threadSearchIndex = null
     threadTitleGenerator.dispose()
     telegramBridge.stop()
@@ -10788,6 +10822,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     appServer.dispose()
   }
   middleware.disposeGracefully = async () => {
+    clearInterval(realtimeLeaseTimer)
+    await realtimeSessions.dispose()
+    extensionInfo.invalidate()
     threadSearchIndex = null
     threadTitleGenerator.dispose()
     telegramBridge.stop()
