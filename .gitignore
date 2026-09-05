@@ -1,6 +1,8 @@
 node_modules
 dist/
 dist-cli/
+/tsup.config.bundled_*.mjs
+/tsup.config.bundled_*.cjs
 output/
 .env
 .playwright-cli/

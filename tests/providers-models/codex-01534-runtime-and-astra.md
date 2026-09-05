@@ -7,6 +7,7 @@
 #### Steps
 1. 比较源配置的模型、context window、压缩阈值及 hash，确认准备脚本未修改源文件，目标 HOME 中没有正式 sessions/数据库。
 2. 用目标 HOME 和固定 `CODEXUI_CODEX_COMMAND` 启动 13511，打开设置→运行信息，对比 RPC 握手版本、实际可执行路径和构建提交。
+   从干净提交构建时 `dirty` 必须为 false；tsup 临时 bundled 配置不应算作源代码改动。可用 `git check-ignore --no-index tsup.config.bundled_test.mjs` 检查忽略规则，真实未提交业务文件仍须被识别。
 3. 选择 Astra，检查 low/medium/high/xhigh/max/ultra 六档及来源说明；重新加载确认选择持久化。
 4. 显式选择 Fast，用请求拦截检查 `turn/start.serviceTier` 为 native 元数据声明的 `priority`，标准模式为 null；不能仅凭 HTTP 200 判定加速或计费。
 5. 在隔离 TestChat 让 Astra 只读取当前 README 并输出唯一标记，检查工具与最终回答；不要用正式历史测试。
