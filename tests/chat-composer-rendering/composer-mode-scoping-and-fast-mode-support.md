@@ -100,3 +100,10 @@ PHASE1_DOCKER_IMAGE=linux-codex-webui-global-fast:20260907 CODEX_ACCEPTANCE_REPO
 隔离 4193，1280×900 深色，认证错误刷新后保留：
 
 ![隔离容器认证错误刷新验收](/root/codex工作目录/Linux-Codex-Webui/output/playwright/global-fast-docker-invalid-auth-dark.png)
+
+
+#### 13511 发布后复验
+- 前端提交 `a351a1a`，实际索引 SHA-256 `a065fd10b8365057e9f270ec61c16b63041a23258505bb9b58e3e78ba6dd17de`；33 个已部署 HTTP 资源逐个匹配构建。
+- `LIVE_PREVIEW=1 node scripts/verify-global-fast-mode.cjs` 通过：六组真实页面检查、开关各一次全局写入、刷新与新浏览器同值、模型配置无速度入口、Esc 返回/关闭、注入一次失败回退；页面错误和真实消息发送均为 0。常规用例保留 Service Worker，只有注入失败上下文禁用它以可靠拦截请求。
+- 完整 URL 为 `http://127.0.0.1:13511/#/thread/01a0797c-faa5-70a0-b29e-b4c92c0bb03c`，视口为 1440×900、375×812、768×1024，分别明暗两次；首页全局检查使用 `http://127.0.0.1:13511/#/`。截图在 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/global-fast/plus-{1440,375,768}-{light,dark}.png` 与 `models-{1440,375,768}-{light,dark}.png`，上方内联图片即发布后截图。
+- 发布回执 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/global-fast/deployment.json`，浏览器明细同目录 `live-result.json`。主进程 491027 和 app-server 子进程 491058 不变，4 个验收会话保留，配置字段测试后恢复；正式 13510 静态文件校验不变。未创建备份、未重启后端，4191–4194 测试监听均已清理。
