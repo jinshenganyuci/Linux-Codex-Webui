@@ -30,7 +30,7 @@
           <summary>{{ t(message.runtimeItem.title) }} <span>{{ t(message.runtimeItem.status === 'inProgress' ? 'Running' : message.runtimeItem.status === 'failed' ? 'Failed' : message.runtimeItem.status === 'interrupted' || message.runtimeItem.status === 'declined' ? 'Interrupted' : 'Completed') }}</span></summary>
           <pre v-if="message.runtimeItem.body">{{ message.runtimeItem.body }}</pre>
           <p v-if="message.runtimeItem.truncated">{{ t('Output preview truncated') }}</p>
-          <a v-if="message.runtimeItem.agentThreadId" :href="`#/thread/${encodeURIComponent(message.runtimeItem.agentThreadId)}`">{{ t('Open subagent conversation') }}</a>
+          <a v-if="message.runtimeItem.agentThreadId" :href="childHref(message.runtimeItem.agentThreadId)">{{ t('Open subagent conversation') }}</a>
         </details>
         <div v-else-if="isCommandMessage(message)" class="message-row" data-role="system">
           <div class="message-stack" data-role="system">
@@ -1050,6 +1050,7 @@ export function createThreadCommandOutputCache(
 </script>
 
 <script setup lang="ts">
+import { useSubagentNavigation } from '../../router/subagentNavigation'
 import { isBlockingServerRequest } from '../../serverRequests'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanLifecycle, UiPlanStep, UiRequestUserInputQuestionSummary, UiServerRequest } from '../../types/codex'
@@ -1661,6 +1662,8 @@ const props = defineProps<{
   loadEarlierMessages?: (threadId: string) => Promise<void>
   loadAgentResult?: (threadId: string) => Promise<void>
 }>()
+
+const { childHref } = useSubagentNavigation(() => props.activeThreadId)
 
 const emit = defineEmits<{
   forkThread: [payload: { threadId: string; turnIndex: number }]

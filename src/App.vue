@@ -418,11 +418,22 @@
         <span v-if="isVirtualKeyboardOpen" class="content-keyboard-spacer" aria-hidden="true" />
         <ContentHeader :title="contentTitle" :accent="isArchivedRoute || isSkillsRoute || isAutomationsRoute">
           <template #leading>
+            <RouterLink
+              v-if="subagentReturnHref"
+              class="thread-parent-back"
+              :to="subagentReturnHref.slice(1)"
+              replace
+              :aria-label="t('Back to previous conversation')"
+              :title="t('Back to previous conversation')"
+            >
+              <IconTablerChevronLeft aria-hidden="true" />
+              <span>{{ t('Back') }}</span>
+            </RouterLink>
             <SidebarThreadControls
               v-if="isSidebarCollapsed || isMobile"
               class="sidebar-thread-controls-header-host"
               :is-sidebar-collapsed="isSidebarCollapsed"
-              :show-new-thread-button="true"
+              :show-new-thread-button="!isMobile || !subagentReturnHref"
               @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
               @start-new-thread="onStartNewThreadFromToolbar"
             />
@@ -1032,7 +1043,9 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { isBlockingServerRequest } from './serverRequests'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { useSubagentNavigation } from './router/subagentNavigation'
+import IconTablerChevronLeft from './components/icons/IconTablerChevronLeft.vue'
 import DesktopLayout from './components/layout/DesktopLayout.vue'
 import CodexLoginModal from './components/app/CodexLoginModal.vue'
 import ProjectZipExportModal from './components/app/ProjectZipExportModal.vue'
@@ -1243,6 +1256,7 @@ const {
 
 const route = useRoute()
 const router = useRouter()
+const { returnHref: subagentReturnHref } = useSubagentNavigation()
 const { isMobile } = useMobile()
 type SidebarThreadTreeExposed = {
   openAutomationEditorFromPanel: (payload: AutomationEditRequest) => void
@@ -1508,7 +1522,7 @@ const contentTitle = computed(() => {
   if (isAutomationsRoute.value) return t('Automations')
   if (isSkillsRoute.value) return t('Skills')
   if (isHomeRoute.value) return t('Start new thread')
-  return selectedThread.value?.title ?? t('Choose a thread')
+  return selectedThread.value?.title ?? t(subagentReturnHref.value ? 'Subagent conversation' : 'Choose a thread')
 })
 const browserHostName =
   typeof window !== 'undefined'

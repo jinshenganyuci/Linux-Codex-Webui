@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [子任务对话左上角返回入口](subagent-return-navigation.md) |
 | [Pinned threads remain visible during background pagination](pinned-threads-remain-visible-during-background-pagination.md) |
 | [Thread archive recovery and sidebar pruning](thread-archive-recovery-and-sidebar-pruning.md) |
 | [Unread thread cutoff state](unread-thread-cutoff-state.md) |

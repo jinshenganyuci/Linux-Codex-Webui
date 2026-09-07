@@ -494,6 +494,32 @@ body:has(.native-extension-backdrop) > .composer-dropdown-menu-wrap { z-index: 1
   }
 }
 
+.thread-parent-back {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 8px;
+  border-radius: 999px;
+  color: var(--mac-text, #3f3f46);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.thread-parent-back svg { width: 19px; height: 19px; }
+.thread-parent-back:hover { background: var(--mac-hover, #f4f4f5); }
+.thread-parent-back:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+:root.dark .thread-parent-back { color: var(--mac-text, #e4e4e7); }
+
+@media (max-width: 767px), (pointer: coarse) {
+  .thread-parent-back { min-width: 44px; height: 44px; padding: 0; }
+  .thread-parent-back span { display: none; }
+}
+
 :root.dark .content-header {
   @apply border-zinc-800 bg-zinc-950;
 }

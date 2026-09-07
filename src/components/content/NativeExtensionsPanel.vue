@@ -24,7 +24,7 @@
               <p v-if="childrenTruncated">只显示前 200 项，请进入子线程继续查看。</p>
               <ul class="native-extension-list">
                 <li v-for="child in children.slice(0, childLimit)" :key="child.id" :data-child-thread="child.id">
-                  <div><a :href="`#/thread/${encodeURIComponent(child.id)}`" @click="emit('close')">{{ child.name }}</a> · {{ child.role || '角色未记录' }} · {{ child.archived ? '已归档' : childStatus(child.status) }}</div>
+                  <div><a :href="childHref(child.id)" @click="emit('close')">{{ child.name }}</a> · {{ child.role || '角色未记录' }} · {{ child.archived ? '已归档' : childStatus(child.status) }}</div>
                   <p>{{ child.preview || '没有任务摘要' }}</p>
                   <p>{{ child.model || '模型未记录' }} / {{ child.effort || '推理未记录' }} · 父线程 {{ child.parentThreadId || '未提供' }}</p>
                 </li>
@@ -74,6 +74,7 @@
 </template>
 
 <script setup lang="ts">
+import { useSubagentNavigation } from '../../router/subagentNavigation'
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { fetchRpcMethodCatalog, rpcCall } from '../../api/codexRpcClient'
 import { getExtensionInfo, listNativeChildren, setRuntimeFeature } from '../../api/nativeExtensionsGateway'
@@ -84,6 +85,8 @@ import type { UiThreadTokenUsage } from '../../types/codex'
 const NativeRealtimePanel = defineAsyncComponent(() => import('./NativeRealtimePanel.vue'))
 const NativeRemotePanel = defineAsyncComponent(() => import('./NativeRemotePanel.vue'))
 const props = defineProps<{ threadId: string; cwd: string; tokenUsage?: UiThreadTokenUsage | null }>()
+
+const { childHref } = useSubagentNavigation(() => props.threadId)
 const emit = defineEmits<{ close: [] }>()
 const tabs = [{ id: 'features', label: '插件与能力' }, { id: 'realtime', label: '实时语音' }, { id: 'remote', label: '远程控制' }, { id: 'agents', label: '子任务' }, { id: 'context', label: '上下文' }]
 const tab = ref('features')
