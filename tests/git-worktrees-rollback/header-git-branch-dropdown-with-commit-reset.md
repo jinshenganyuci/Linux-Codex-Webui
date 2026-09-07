@@ -138,3 +138,5 @@ Thread header Git dropdown replaces the simple review action with a commits/bran
 预期：375px 顶栏中分支入口缩至 44px，原约 46px 的标题区域获得至少 120px；短标题不再截断。长分支名和圆点场景仅修改测试页面 DOM，不操作真实仓库。结果及截图在 `output/playwright/compact-header-branch/`。
 
 清理/回滚：关闭测试浏览器即可；不创建会话、不修改分支或配置。此次仅静态 CSS，回退可重新发布目标前端，不需要重启服务。
+
+发布复验：前端 `e4b9754` 已静态发布到 13511，33 个 HTTP 资源一致，手机明暗两组直接加载线上产物通过；入口 44×44、标题 129px，原主进程/实际 CLI 子进程、配置及 7 个验收会话保留。无重启、无备份；完整截图和测试地址见 `output/playwright/compact-header-branch/verification.md`。
