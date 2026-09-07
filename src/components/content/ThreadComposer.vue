@@ -199,12 +199,16 @@
             type="button"
             :aria-label="t('Add photos & files')"
             :disabled="isInteractionDisabled"
+            :aria-expanded="isAttachMenuOpen"
+            :aria-controls="attachMenuId"
+            aria-haspopup="dialog"
             @click="toggleAttachMenu"
           >
             +
           </button>
 
-          <div v-if="isAttachMenuOpen" class="thread-composer-attach-menu">
+          <Teleport to="body">
+          <div v-if="isAttachMenuOpen" :id="attachMenuId" ref="attachMenuRef" class="thread-composer-attach-menu" :style="attachMenuStyle" role="dialog" aria-label="添加与输入设置">
             <div class="thread-composer-menu-label">添加</div>
             <button v-if="!isMobile && isDictationSupported" class="thread-composer-attach-item" type="button" :disabled="isInteractionDisabled" @click="isAttachMenuOpen = false; onDictationToggle()">语音输入</button>
             <ComposerPermissionDropdown v-if="isMobile" class="thread-composer-mobile-permission"
@@ -212,7 +216,7 @@
               :model-value="selectedCodexPermissionMode" :disabled="isPermissionModeDisabled || nativePermissionBusy" :error="nativePermissionError" :loading="nativePermissionLoading"
               @opened="emit('load-native-permissions')" @update:model-value="onPermissionModeSelect" @select-native="emit('select-native-permission', $event)" />
             <ComposerSearchDropdown
-              class="thread-composer-control thread-composer-skill-control thread-composer-skill-menu-control"
+              class="thread-composer-skill-menu-control"
               :options="skillDropdownOptions"
               :selected-values="selectedSkillPaths"
               :placeholder="t('Skills')"
@@ -342,6 +346,7 @@
               />
             </button>
             </div>
+          </Teleport>
           </div>
 
           <template v-if="!isDictationRecording">
@@ -551,7 +556,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import type {
   CollaborationModeKind,
   CollaborationModeOption,
@@ -781,6 +786,11 @@ const {
   },
 })
 const attachMenuRootRef = ref<HTMLElement | null>(null)
+const attachMenuRef = ref<HTMLElement | null>(null)
+const attachMenuId = `composer-add-${useId()}`
+const attachMenuStyle = ref<Record<string, string>>({})
+let attachMenuObserver: ResizeObserver | null = null
+let attachMenuFrame = 0
 const contextUsageRootRef = ref<HTMLElement | null>(null)
 const composerAutocompleteRootRef = ref<HTMLElement | null>(null)
 const photoLibraryInputRef = ref<HTMLInputElement | null>(null)
@@ -1555,6 +1565,72 @@ function onDictationPressEnd(): void {
   stopRecording()
 }
 
+function positionAttachMenu(): void {
+  const root = attachMenuRootRef.value, menu = attachMenuRef.value
+  if (!isAttachMenuOpen.value || !root || !menu) return
+  const viewport = window.visualViewport
+  const leftEdge = viewport?.offsetLeft ?? 0, topEdge = viewport?.offsetTop ?? 0
+  const width = viewport?.width ?? window.innerWidth, height = viewport?.height ?? window.innerHeight
+  const mobile = width < 768, padding = 16, gap = 8
+  const anchor = (mobile ? root.closest('.thread-composer-shell') : root)?.getBoundingClientRect()
+  if (!anchor) return
+  const menuWidth = Math.max(0, Math.min(mobile ? 420 : 360, width - padding * 2))
+  const aboveComposer = Math.min(anchor.top - gap, topEdge + height - padding)
+  // When a keyboard leaves too little room above the composer, keep the menu usable in the visible viewport.
+  const bottom = aboveComposer - topEdge - padding >= 160 ? aboveComposer : topEdge + height - padding
+  const maxHeight = Math.max(0, bottom - topEdge - padding)
+  const menuHeight = Math.min(menu.scrollHeight + 2, maxHeight)
+  const left = mobile ? leftEdge + (width - menuWidth) / 2
+    : Math.max(leftEdge + padding, Math.min(anchor.left, leftEdge + width - menuWidth - padding))
+  attachMenuStyle.value = {
+    position: 'fixed', left: `${left}px`, top: `${bottom - menuHeight}px`, bottom: 'auto',
+    width: `${menuWidth}px`, minWidth: '0', maxWidth: `${width - padding * 2}px`, maxHeight: `${maxHeight}px`,
+  }
+}
+
+function scheduleAttachMenuPosition(): void {
+  if (attachMenuFrame || !isAttachMenuOpen.value) return
+  attachMenuFrame = window.requestAnimationFrame(() => { attachMenuFrame = 0; positionAttachMenu() })
+}
+
+function onAttachMenuEscape(event: KeyboardEvent): void {
+  if (!isAttachMenuOpen.value || event.key !== 'Escape' || event.defaultPrevented) return
+  // A teleported child picker owns Escape until it closes.
+  if (attachMenuRef.value?.querySelector('[aria-expanded="true"]')) return
+  event.preventDefault()
+  isAttachMenuOpen.value = false
+  attachMenuRootRef.value?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
+}
+
+function removeAttachMenuLayout(): void {
+  attachMenuObserver?.disconnect()
+  attachMenuObserver = null
+  window.cancelAnimationFrame(attachMenuFrame)
+  attachMenuFrame = 0
+  window.removeEventListener('resize', scheduleAttachMenuPosition)
+  window.removeEventListener('scroll', scheduleAttachMenuPosition, true)
+  window.removeEventListener('keydown', onAttachMenuEscape)
+  window.visualViewport?.removeEventListener('resize', scheduleAttachMenuPosition)
+  window.visualViewport?.removeEventListener('scroll', scheduleAttachMenuPosition)
+}
+
+watch(isAttachMenuOpen, async (open) => {
+  removeAttachMenuLayout()
+  if (!open) return
+  await nextTick()
+  if (!isAttachMenuOpen.value || !attachMenuRef.value) return
+  positionAttachMenu()
+  attachMenuObserver = new ResizeObserver(scheduleAttachMenuPosition)
+  attachMenuObserver.observe(attachMenuRef.value)
+  const shell = attachMenuRootRef.value?.closest('.thread-composer-shell')
+  if (shell) attachMenuObserver.observe(shell)
+  window.addEventListener('resize', scheduleAttachMenuPosition)
+  window.addEventListener('scroll', scheduleAttachMenuPosition, true)
+  window.addEventListener('keydown', onAttachMenuEscape)
+  window.visualViewport?.addEventListener('resize', scheduleAttachMenuPosition)
+  window.visualViewport?.addEventListener('scroll', scheduleAttachMenuPosition)
+})
+
 function toggleAttachMenu(): void {
   if (isInteractionDisabled.value) return
   isAttachMenuOpen.value = !isAttachMenuOpen.value
@@ -2282,7 +2358,7 @@ function onDocumentClick(event: MouseEvent): void {
   if (!target) return
 
   const attachRoot = attachMenuRootRef.value
-  if (isAttachMenuOpen.value && attachRoot && !attachRoot.contains(target) && !(target instanceof Element && target.closest('.search-dropdown-menu-wrap, .composer-dropdown-menu-wrap'))) {
+  if (isAttachMenuOpen.value && attachRoot && !attachRoot.contains(target) && !attachMenuRef.value?.contains(target) && !(target instanceof Element && target.closest('.search-dropdown-menu-wrap, .composer-dropdown-menu-wrap'))) {
     isAttachMenuOpen.value = false
   }
 
@@ -2326,6 +2402,7 @@ defineExpose<ThreadComposerExposed>({
 })
 
 onBeforeUnmount(() => {
+  removeAttachMenuLayout()
   document.removeEventListener('click', onDocumentClick)
   window.removeEventListener('drop', onWindowDragCleanup)
   window.removeEventListener('dragend', onWindowDragCleanup)
@@ -2342,6 +2419,7 @@ watch(
   () => props.activeThreadId,
   (nextThreadId) => {
     cancelDictation()
+    isAttachMenuOpen.value = false
     if (lastActiveThreadId) {
       persistDraftForThread(lastActiveThreadId, getCurrentDraftPayload())
     }

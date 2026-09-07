@@ -3914,10 +3914,11 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
 :root .thread-composer-context-ring circle:last-child { stroke: var(--context-usage-accent); }
 :root .thread-composer-context-popover-summary { color: var(--mac-text); font-weight: 400; }
 :root .thread-composer-context-popover { width: max-content; min-width: 210px; max-width: min(320px, calc(100vw - 32px)); }
-:root .thread-composer-attach-menu { max-height: min(540px, 65dvh); overflow-y: auto; overscroll-behavior: contain; }
-:root .thread-composer-skill-menu-control { width: 100%; max-width: none; }
+:root .thread-composer-attach-menu { display: flex; flex-direction: column; align-items: stretch; overflow-y: auto; overscroll-behavior: contain; }
+:root .thread-composer-attach-menu > * { flex-shrink: 0; min-width: 0; }
+:root .thread-composer-skill-menu-control { display: flex; width: 100%; max-width: none; }
 :root .thread-composer-skill-menu-control .search-dropdown-trigger { width: 100%; justify-content: space-between; min-height: 40px; padding: 8px 10px; background: transparent; text-align: left; border-radius: 10px; }
-:root .thread-composer-skill-menu-control .search-dropdown-value { max-width: none; }
+:root .thread-composer-skill-menu-control .search-dropdown-value { max-width: none; font-size: 14px; }
 :root .thread-composer-skill-menu-control .search-dropdown-trigger:hover { background: var(--mac-hover); }
 :root:is(.dark, :not(.dark)) .model-reasoning-layer { border: 1px solid var(--mac-border); background: var(--mac-solid); box-shadow: 0 8px 24px rgb(0 0 0 / 10%); }
 :root:is(.dark, :not(.dark)) :is(.model-reasoning-menu, .model-reasoning-model-menu) { background: transparent; border: 0; box-shadow: none; border-radius: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
@@ -3935,7 +3936,9 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
   :root .thread-composer-context-button { width: 32px; height: 44px; }
   :root:is(.dark, :not(.dark)) .thread-composer-submit { width: 40px; height: 40px; }
   :root .thread-composer-mic, :root .thread-composer-stop { width: 40px; height: 44px; }
-  :root .thread-composer-mobile-permission .composer-dropdown-trigger { padding: 8px 10px; width: 100%; gap: 8px; }
+  :root .thread-composer-mobile-permission { display: flex; width: 100%; }
+  :root .thread-composer-mobile-permission .composer-dropdown-trigger { padding: 8px 10px; width: 100%; min-height: 44px; gap: 8px; }
+  :root .thread-composer-skill-menu-control .search-dropdown-trigger { min-height: 44px; }
   :root .model-reasoning-layer.is-model-open { border-radius: 28px 28px 0 0; }
   :root:is(.dark, :not(.dark)) .model-reasoning-option.is-selected { border-radius: 0; }
   :root .model-reasoning-option { background: var(--mac-hover); }
@@ -3945,3 +3948,8 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
   :root .thread-composer-controls { flex-wrap: wrap; }
   :root .thread-composer-plan-mode-indicator { order: 1; }
 }
+
+/* Keep the fast-mode cue in its original warm orange in both themes. */
+:root .model-reasoning-trigger-fast-icon { color: #f97316; }
+/* Teleported add menus and their child pickers stay above an expanded composer. */
+:root:has(.thread-composer-input-wrap--expanded) :is(.thread-composer-attach-menu, .composer-dropdown-menu-wrap, .search-dropdown-menu-wrap) { z-index: calc(var(--ui-z-fullscreen) + 1); }

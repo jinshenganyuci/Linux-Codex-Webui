@@ -1,11 +1,15 @@
 <template>
-  <div ref="track" class="reasoning-slider" :class="{ 'is-ultra': previewValue === 'ultra', 'is-dragging': dragging, 'is-disabled': disabled || options.length < 2 }"
+  <div ref="track" class="reasoning-slider" :class="{ 'is-ultra': previewValue === 'ultra', 'is-dragging': dragging, 'is-page-hidden': !pageVisible, 'is-disabled': disabled || options.length < 2 }"
     role="slider" :tabindex="disabled || options.length < 2 ? -1 : 0" :aria-label="t('Reasoning')" aria-orientation="horizontal"
     :aria-valuemin="0" :aria-valuemax="Math.max(0, options.length - 1)" :aria-valuenow="previewIndex"
     :aria-valuetext="options[previewIndex]?.label || t('Thinking')" :aria-disabled="disabled || options.length < 2"
     @pointerdown="start" @pointermove="move" @pointerup="finish" @pointercancel="cancel" @lostpointercapture="cancel" @keydown="onKey">
     <div class="reasoning-slider-track" aria-hidden="true">
-      <div class="reasoning-slider-fill" :style="{ width: `calc(var(--slider-thumb) + (100% - var(--slider-thumb)) * ${position / 100})` }" />
+      <div class="reasoning-slider-fill" :style="{ width: `calc(var(--slider-thumb) + (100% - var(--slider-thumb)) * ${position / 100})` }">
+        <span v-if="previewValue === 'ultra'" class="reasoning-slider-particles">
+          <span v-for="particle in ultraParticles" :key="particle.id" class="reasoning-slider-particle" :style="particle.style" />
+        </span>
+      </div>
       <span v-for="(option, index) in options" :key="option.value" class="reasoning-slider-tick" :class="{ 'is-filled': index <= previewIndex }"
         :style="{ left: `calc(var(--slider-thumb) / 2 + (100% - var(--slider-thumb)) * ${index / Math.max(1, options.length - 1)})` }" />
       <span class="reasoning-slider-thumb" :style="{ left: `calc((100% - var(--slider-thumb)) * ${position / 100})` }" />
@@ -13,13 +17,25 @@
   </div>
 </template>
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ReasoningEffort } from '../../types/codex'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import { advanceSheetSpring } from './sheetMotion'
 const props = defineProps<{ modelValue: ReasoningEffort | ''; options: { value: ReasoningEffort; label: string }[]; disabled?: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [value: ReasoningEffort]; preview: [value: ReasoningEffort | ''] }>()
 const { t } = useUiLanguage()
+// Fixed, small particle count; animation changes only transform and opacity.
+const ultraParticles = Array.from({ length: 12 }, (_, id) => ({
+  id,
+  style: {
+    left: `${7 + id * 7.3}%`, top: `${22 + (id * 29 % 58)}%`,
+    width: `${id % 3 === 0 ? 2.5 : 1.5}px`, height: `${id % 3 === 0 ? 2.5 : 1.5}px`,
+    animationDelay: `${-id * 0.37}s`, animationDuration: `${2.6 + (id % 4) * 0.35}s`,
+  },
+}))
+const pageVisible = ref(typeof document === 'undefined' || !document.hidden)
+function syncPageVisibility() { pageVisible.value = !document.hidden }
+onMounted(() => document.addEventListener('visibilitychange', syncPageVisibility))
 const track = ref<HTMLElement | null>(null), dragging = ref(false), position = ref(0)
 const selectedIndex = computed(() => Math.max(0, props.options.findIndex(o => o.value === props.modelValue)))
 const previewIndex = computed(() => Math.round(position.value / 100 * Math.max(0, props.options.length - 1)))
@@ -88,7 +104,7 @@ function onKey(event: KeyboardEvent) {
 watch(() => props.modelValue, () => { if (!dragging.value) { const next = percentage(selectedIndex.value); if (frame && next === springTarget) return; stop(); position.value = next } }, { immediate: true })
 watch(() => props.options.map(o => o.value).join(','), () => { if (dragging.value) release(); stop(); position.value = percentage(selectedIndex.value); emit('preview', props.modelValue) })
 watch(() => props.disabled, value => { if (value) cancel() })
-onBeforeUnmount(() => { stop(); if (dragging.value) release() })
+onBeforeUnmount(() => { document.removeEventListener('visibilitychange', syncPageVisibility); stop(); if (dragging.value) release() })
 </script>
 <style scoped>
 .reasoning-slider { --slider-thumb: 32px; height: 44px; display: flex; align-items: center; touch-action: none; user-select: none; cursor: grab; outline-offset: 4px; border-radius: 999px; }
@@ -100,6 +116,15 @@ onBeforeUnmount(() => { stop(); if (dragging.value) release() })
 .reasoning-slider-tick { position: absolute; top: calc(50% - 2.5px); height: 5px; width: 5px; margin-left: -2.5px; border-radius: 50%; background: #b5b5b9; }
 .reasoning-slider-tick.is-filled { background: rgb(255 255 255 / 35%); }
 .reasoning-slider-thumb { position: absolute; top: 0; width: var(--slider-thumb); height: var(--slider-thumb); border: 1px solid rgb(0 0 0 / 7%); border-radius: 50%; background: white; box-shadow: 0 1px 3px rgb(0 0 0 / 16%); }
-.reasoning-slider.is-ultra .reasoning-slider-fill { background: radial-gradient(circle at 20% 40%, #ffffff9c 0 1px, transparent 2px), radial-gradient(circle at 70% 70%, #ffffff90 0 1px, transparent 2px), linear-gradient(105deg, #9ab8ff, #9359ff 60%, #7744ec); background-size: 31px 23px, 43px 27px, 100% 100%; }
+.reasoning-slider.is-ultra .reasoning-slider-fill { background: linear-gradient(105deg, #9ab8ff, #9359ff 60%, #7744ec); }
+.reasoning-slider.is-ultra .reasoning-slider-tick { opacity: 0; }
+.reasoning-slider-particles { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; pointer-events: none; }
+.reasoning-slider-particle { position: absolute; background: white; border-radius: 50%; opacity: .55; animation: ultra-particle-drift 3s ease-in-out infinite; }
+.reasoning-slider:is(.is-page-hidden, .is-disabled) .reasoning-slider-particle { animation-play-state: paused; }
+@keyframes ultra-particle-drift {
+  0%, 100% { transform: translate3d(-2px, 1px, 0); opacity: .3; }
+  50% { transform: translate3d(2px, -2px, 0); opacity: .85; }
+}
+@media (prefers-reduced-motion: reduce) { .reasoning-slider-particle { animation: none; transform: none; opacity: .55; } }
 @media (max-width: 767px) { .reasoning-slider { --slider-thumb: 44px; height: 56px; } .reasoning-slider-tick { width: 7px; height: 7px; top: calc(50% - 3.5px); margin-left: -3.5px; } .reasoning-slider-thumb { border: 3px solid #3295ff; box-shadow: none; } .reasoning-slider.is-ultra .reasoning-slider-thumb { border-color: #8754f8; } }
 </style>
