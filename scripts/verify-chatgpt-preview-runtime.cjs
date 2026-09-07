@@ -2,7 +2,7 @@ const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const base = process.env.UI_PREVIEW_BASE_URL || 'http://127.0.0.1:13511', out = path.resolve('output/playwright/chatgpt-preview');
+const base = process.env.UI_PREVIEW_BASE_URL || 'http://127.0.0.1:13511', out = path.resolve(process.env.UI_PREVIEW_OUTPUT_DIR || 'output/playwright/chatgpt-preview');
 const id = process.env.UI_PREVIEW_THREAD_ID || JSON.parse(fs.readFileSync(path.join(out, 'thread.json'))).id;
 (async () => {
     const actual = (await (await fetch(base + '/codex-api/rpc', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method: 'thread/read', params: { threadId: id, includeTurns: true } }) })).json()).result.thread;

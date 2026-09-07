@@ -4,7 +4,7 @@ const { existsSync, writeFileSync, readFileSync } = require('node:fs');
 const path = require('node:path');
 const base = process.env.UI_PREVIEW_BASE_URL || 'http://127.0.0.1:13511';
 const threadId = process.env.UI_PREVIEW_THREAD_ID || JSON.parse(readFileSync('output/playwright/chatgpt-preview/thread.json')).id;
-const out = path.resolve('output/playwright/chatgpt-preview');
+const out = path.resolve(process.env.UI_PREVIEW_OUTPUT_DIR || 'output/playwright/chatgpt-preview');
 const useBuilt = process.env.LIVE_PREVIEW !== '1';
 const reports = [];
 function within(box, v, label) { assert(box, label); assert(box.x >= -1 && box.y >= -1 && box.x + box.width <= v.width + 1 && box.y + box.height <= v.height + 1, `${label}: ${JSON.stringify(box)}`); }
@@ -70,6 +70,7 @@ function within(box, v, label) { assert(box, label); assert(box.x >= -1 && box.y
             await page.locator('.native-controls-heading h2').click();
             assert(await objective.isVisible(), 'inside click closes');
             await page.locator('.native-controls-overlay').click({ position: { x: 2, y: 2 } });
+            await page.locator('.native-controls-dialog').waitFor({ state: 'hidden' });
             assert.equal(await page.locator('.native-controls-dialog').count(), 0, 'outside dismiss');
             await openControls();
             await page.getByRole('button', { name: '目标', exact: true }).click();

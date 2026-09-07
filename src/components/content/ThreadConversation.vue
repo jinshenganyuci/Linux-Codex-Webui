@@ -1705,6 +1705,22 @@ function ensureFullCommandOutput(message: UiMessage): void {
 }
 
 const conversationListRef = ref<HTMLElement | null>(null)
+// Measure native scrollbar space once per resize, including Firefox and OS overlay modes.
+// Keeping the inset on the content root aligns the composer without assuming a pixel width.
+watch(conversationListRef, (list, _previous, onCleanup) => {
+  if (!list) return
+  const root = list.closest<HTMLElement>('.content-root')
+  if (!root) return
+  const updateInset = () => {
+    const inset = `${Math.max(0, list.offsetWidth - list.clientWidth) / 2}px`
+    if (root.style.getPropertyValue('--chat-scrollbar-inset') !== inset) root.style.setProperty('--chat-scrollbar-inset', inset)
+  }
+  const observer = new ResizeObserver(updateInset)
+  observer.observe(list)
+  updateInset()
+  onCleanup(() => { observer.disconnect(); root.style.removeProperty('--chat-scrollbar-inset') })
+}, { flush: 'post' })
+
 const bottomAnchorRef = ref<HTMLElement | null>(null)
 const modalImageUrl = ref('')
 const copiedResponseAnchorId = ref('')

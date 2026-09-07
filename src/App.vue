@@ -522,6 +522,7 @@
                 />
               </div>
               <div v-else class="new-thread-empty">
+                <div class="new-thread-hero-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 6 6 6-6 6m9 0h5" /></svg></div>
                 <p class="new-thread-hero">{{ t("Let's build") }}</p>
                 <div class="new-thread-suggestions" aria-label="开始一个任务">
                   <button v-for="suggestion in desktopSuggestions" :key="suggestion.title" type="button" @click="homeThreadComposerRef?.appendTextToDraft(suggestion.prompt)">
