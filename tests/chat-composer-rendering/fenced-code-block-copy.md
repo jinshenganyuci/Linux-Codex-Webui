@@ -68,3 +68,16 @@ LIVE_PREVIEW=1 node scripts/verify-message-presentation.cjs
 #### 清理与回退
 - 验收聊天及文本夹具保留用于 13511 查看效果；验收结束可仅删除该 TestChat 和对应夹具，不删除其他线程，不修改用户源码。
 - 回退从目标提交重新构建前端并原子替换独立 13511 入口；不创建备份、不重启后端，正式 13510 须另行明确授权升级。
+
+
+#### 13511 发布后复验和性能采样
+- 前端提交 `c7ea54d` 已发布到独立 13511；33 个实际 HTTP 资源与构建一致，索引 SHA-256 `d15f049af8f8ac894a4f73879c017e28ac365f0343c0280fa8d0d101526ebb04`。
+- `LIVE_PREVIEW=1 node scripts/verify-message-presentation.cjs` 六组通过，保留 Service Worker 验证刷新：18 组链接属性/默认蓝色检查、30 次代码原文及剪贴板匹配、换行独立性、触屏按钮尺寸和无页面错误。最终截图路径同上，均已更新为已部署页面的截图；完整记录同目录 `live-result.json`。
+- 使用完成态真实 TestChat、相同路由前后执行：
+```bash
+PROFILE_BASE_URL=http://127.0.0.1:13511 PROFILE_ROUTE='#/thread/01a07ac1-1655-7340-bead-0637d5eeab63' PROFILE_WAIT_MS=7000 pnpm run profile:browser
+```
+- `duplicateCounts` 前后相同：thread/resume 1 次、skills/list 1 次、模型目录 1 次，无重复 thread/read/history 分页；既有 thread/list 首页面仍为 2 次，保留警告，不归因本次修改。API 总量均 129.0 KB，高亮懒加载均 1 次。已核对 `warnings`、`apiSummary` / 汇总 `topApiSummary` 和 `slowestApiRows`；两次均正确加载真实消息且有 API 流量。最慢请求从 thread/list 581.8ms 变为模型目录 297.2ms，单次样本不作性能提升结论。
+- 首条消息 996.4→532.2ms；长任务 2→3 次，最大 149→139ms，同样不作统计提升或退化结论。完整 JSON、截图与 trace 引用分别保存在 `output/playwright/message-presentation/profile-before.json`、`profile-after.json`。
+- 除主入口外，聊天懒加载 JS 96705→97725 字节（gzip 28417→28882），聊天 CSS 109556→97050（gzip 11259→10342）。主入口与聊天这四项资源合计原始体积减少 7812 字节、gzip 增加 359 字节，没有隐藏新增高亮依赖。详细数值见同目录 `bundle.json`。
+- 主进程 491027、app-server 子进程 491058 和 5 个验收会话保留；正式 13510 静态资源校验不变，配置/认证/模型目录哈希在浏览器验收后不变。回执同目录 `deployment.json` 明确 `backupCreated:false`、`backendRestarted:false`。未推送 GitHub 或发布 npm。
