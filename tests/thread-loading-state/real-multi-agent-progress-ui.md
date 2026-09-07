@@ -167,3 +167,20 @@ URL 为 `http://127.0.0.1:13511/#/thread/01a0797c-faa5-70a0-b29e-b4c92c0bb03c`�
 发布后：`python3 output/playwright/agent-progress-classic/deploy.py` 已发布前端 `664cba0`，后端继续 `21f23ef`；33 个实际 HTTP 文件匹配，原服务/CLI 进程、6 个验收会话和配置保留，正式 13510 未变，无重启和备份。`LIVE_PREVIEW=1 SMOKE=1 node scripts/verify-agent-progress-polish.cjs` 的 375×812 深色复验通过，直接使用线上静态产物；完整六组明暗已在同构建通过，不重复执行无变化的测试。明细为 `output/playwright/agent-progress-classic/live-browser.json`，线上截图为 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-classic/live-compact-375-dark.png`。
 
 ![13511 原内容灰色状态卡深色复验](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-classic/live-compact-375-dark.png)
+
+### 当前配色：白底、灰边与统一的深色底面
+
+用户随后确认浅色白底方案。内容、运行标记和统计逻辑不变；浅色状态卡纯白，深色为 `#242426`，详情/手机入口/弹层标题共用底色，取消原深色入口独立黑块。
+
+| Before | After | Why |
+| --- | --- | --- |
+| 状态卡沿用全局偏蓝灰表面 | 浅色纯白、深色中性深灰 | 卡片和页面有明确层次 |
+| 深色“查看代理活动”入口为单独黑块 | 与主卡和弹层标题共用底色、细分隔线 | 整体更统一 |
+
+沿用前节相同 TestChat 和六组视口；执行 `pnpm run build:frontend` 与 `node scripts/verify-agent-progress-polish.cjs`。六组均通过；除原断言外，明确检查卡片、详情、手机入口及弹层标题背景为浅色 `rgb(255,255,255)`、深色 `rgb(36,36,38)`，灰边、灰色运行标记及无蓝色内阴影继续符合要求。主状态完整文字、三/六/零子任务、刷新和焦点仍正确。静态发布后使用 `LIVE_PREVIEW=1 SMOKE=1 node scripts/verify-agent-progress-polish.cjs` 检查线上手机深色。
+
+报告改存 `output/playwright/agent-progress-surface/browser.json`，同目录 `bundle.json` 记录四项主入口/聊天资源原始体积 +649 字节、gzip +103；只增加静态样式，没有新增产品请求、事件或定时器。未更改后端或模型设置。截图绝对路径为 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-surface/after-{compact,expanded}-{1440,375,768}-{light,dark}.png`；测试 URL 仍为 `http://127.0.0.1:13511/#/thread/01a0797c-faa5-70a0-b29e-b4c92c0bb03c`。关闭回放上下文即可清理，回退只需静态发布目标前端，不回退子任务统计修复。
+
+![白底灰边状态卡](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-surface/after-compact-375-light.png)
+
+![深色统一底面状态卡](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-surface/after-compact-375-dark.png)

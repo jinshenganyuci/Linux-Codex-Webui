@@ -4146,3 +4146,29 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
 @media (prefers-reduced-motion: reduce) {
   :root .message-code-action:active { transform: none; }
 }
+
+/* Solid status surfaces keep the original content distinct from the page. */
+:root:not(.dark) .turn-progress-card {
+  --progress-surface: #fff;
+  --progress-divider: rgb(0 0 0 / 8%);
+  background: var(--progress-surface);
+}
+
+:root.dark .turn-progress-card {
+  --progress-surface: #242426;
+  --progress-divider: rgb(255 255 255 / 10%);
+  background: var(--progress-surface);
+}
+
+:root .turn-progress-card .turn-progress-body,
+:root .turn-progress-card .turn-progress-mobile-open,
+:root .turn-progress-card .turn-progress-mobile-sheet-header {
+  background: var(--progress-surface);
+  border-color: var(--progress-divider);
+}
+
+:root:not(.dark) .turn-progress-card .turn-progress-body.turn-progress-body-mobile-open,
+:root.dark .turn-progress-card .turn-progress-body.turn-progress-body-mobile-open {
+  background: var(--progress-surface);
+  border-color: var(--progress-divider);
+}

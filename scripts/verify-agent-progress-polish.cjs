@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const base = 'http://127.0.0.1:13511'
-const out = path.resolve('output/playwright/agent-progress-classic')
+const out = path.resolve('output/playwright/agent-progress-surface')
 const threadId = JSON.parse(fs.readFileSync('output/playwright/chatgpt-preview/thread.json')).id
 const before = process.env.BASELINE === '1'
 const live = process.env.LIVE_PREVIEW === '1'
@@ -78,7 +78,8 @@ function snapshot(now, count = 3) {
         assert((await card.locator('.turn-progress-summary').first().innerText()).includes('1 个活动 · 已完成 2/3'))
         assert.equal(await card.locator('.turn-progress-tree').isVisible(), false)
         assert(/Model:.*Thinking:.*Speed:/.test(await card.locator('.turn-progress-main-model-details').innerText()))
-        const colors = await card.evaluate(n => ({ border: getComputedStyle(n).borderTopColor, shadow: getComputedStyle(n).boxShadow, dot: getComputedStyle(n.querySelector('.turn-progress-pulse')).backgroundColor, status: getComputedStyle(n.querySelector('.turn-progress-status')).color }))
+        const colors = await card.evaluate(n => ({ background: getComputedStyle(n).backgroundColor, border: getComputedStyle(n).borderTopColor, shadow: getComputedStyle(n).boxShadow, dot: getComputedStyle(n.querySelector('.turn-progress-pulse')).backgroundColor, status: getComputedStyle(n.querySelector('.turn-progress-status')).color }))
+        assert.equal(colors.background, theme === 'dark' ? 'rgb(36, 36, 38)' : 'rgb(255, 255, 255)')
         assert.equal(colors.border, theme === 'dark' ? 'rgba(255, 255, 255, 0.14)' : 'rgba(0, 0, 0, 0.12)')
         assert(!colors.shadow.includes('inset'), 'Old blue inset highlight remains')
         assert.equal(colors.dot, 'rgb(133, 133, 139)')
@@ -95,6 +96,7 @@ function snapshot(now, count = 3) {
       await toggle.click()
       const body = card.locator('.turn-progress-body')
       await body.waitFor({ state: 'visible' })
+      assert.equal(await body.evaluate(n => getComputedStyle(n).backgroundColor), theme === 'dark' ? 'rgb(36, 36, 38)' : 'rgb(255, 255, 255)')
       assert.equal(await body.getByRole('listitem').count(), 3)
       assert.equal(await body.locator('.turn-progress-agent-model-details').count(), 3)
       assert((await body.locator('.turn-progress-agent-model-details').first().innerText()).includes('Model: gpt-6-astra · Thinking: ultra'))
@@ -103,6 +105,9 @@ function snapshot(now, count = 3) {
       assert.equal(resultRequests, 1)
       if (viewport.width < 768) {
         assert.equal(await body.getAttribute('aria-modal'), 'true')
+        for (const surface of [toggle, card.locator('.turn-progress-mobile-sheet-header')]) {
+          assert.equal(await surface.evaluate(n => getComputedStyle(n).backgroundColor), theme === 'dark' ? 'rgb(36, 36, 38)' : 'rgb(255, 255, 255)')
+        }
         await card.locator('.turn-progress-close').focus(); await page.keyboard.press('Shift+Tab')
         assert(await body.evaluate(n => n.contains(document.activeElement)))
       }
@@ -128,7 +133,7 @@ function snapshot(now, count = 3) {
       assert((await card.locator('.turn-progress-summary').first().innerText()).includes('0 个活动 · 已完成 0/0'))
       await detailsToggle(card, viewport.width < 768).waitFor()
       assert.deepEqual(errors, []); assert.deepEqual(mutations, [])
-      results.push({ url: page.url(), viewport, theme, height: rect.height, children: 3, reloadChildren: 3, nestedSix: true, originalContentRestored: true, neutralRunningStyle: true, resultRequests, progressRequests, errors, mutations, screenshots: [compactScreenshot, expandedScreenshot] })
+      results.push({ url: page.url(), viewport, theme, height: rect.height, children: 3, reloadChildren: 3, nestedSix: true, originalContentRestored: true, neutralRunningStyle: true, solidThemeSurface: true, resultRequests, progressRequests, errors, mutations, screenshots: [compactScreenshot, expandedScreenshot] })
       await page.unrouteAll({ behavior: 'ignoreErrors' }); await context.close(); console.log('PASS', viewport.width, theme, rect.height)
     }
   } catch (error) {
