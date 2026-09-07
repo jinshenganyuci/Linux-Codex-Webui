@@ -53,6 +53,20 @@ describe('thread model preferences', () => {
     })
   })
 
+  it('persists independent speed choices and merges model-only and speed-only writes', async () => {
+    await writeThreadModelPreference('a', { model: 'gpt-6-astra', reasoningEffort: 'low', speedMode: 'fast' })
+    await writeThreadModelPreference('b', { model: 'gpt-6-astra', reasoningEffort: 'low', speedMode: 'standard' })
+    await writeThreadModelPreference('a', { model: 'gpt-5.6-sol', reasoningEffort: 'high' })
+    await writeThreadModelPreference('a', { model: 'stale-model', reasoningEffort: 'low', speedMode: 'standard' }, { speedOnly: true })
+    expect(await readThreadModelPreferences()).toEqual({
+      a: { model: 'gpt-5.6-sol', reasoningEffort: 'high', speedMode: 'standard' },
+      b: { model: 'gpt-6-astra', reasoningEffort: 'low', speedMode: 'standard' },
+    })
+    await writeThreadModelPreference('a', { model: 'gpt-5.6-sol', reasoningEffort: 'high', speedMode: 'fast' }, { preserveSpeed: true })
+    expect((await readThreadModelPreferences()).a.speedMode).toBe('standard')
+    await expect(writeThreadModelPreference('c', { model: 'gpt-6-astra', reasoningEffort: 'low', speedMode: 'invalid' })).rejects.toThrow('Invalid')
+  })
+
   it('backs up malformed state before accepting a new preference', async () => {
     await writeFile(getThreadModelPreferencesPath(), '{broken', { encoding: 'utf8', mode: 0o600 })
 

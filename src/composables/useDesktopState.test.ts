@@ -50,6 +50,7 @@ const gatewayMocks = vi.hoisted(() => ({
   normalizeAgentProgressSnapshot: vi.fn((value) => value),
   persistThreadTitle: vi.fn(),
   persistThreadModelPreference: vi.fn(),
+  persistThreadSpeedMode: vi.fn(),
   persistRequestUserInputSummary: vi.fn(),
   patchNewChatDefaults: vi.fn(),
   patchThreadCollaborationPreferences: vi.fn(),
@@ -249,6 +250,7 @@ beforeEach(() => {
   gatewayMocks.getAgentResult.mockResolvedValue({ threadId: '', text: '', truncated: false })
   gatewayMocks.normalizeAgentProgressSnapshot.mockImplementation((value) => value)
   gatewayMocks.persistThreadModelPreference.mockImplementation(async (_threadId, preference) => preference)
+  gatewayMocks.persistThreadSpeedMode.mockImplementation(async (_threadId, preference) => preference)
   gatewayMocks.persistRequestUserInputSummary.mockImplementation(async (summary) => summary)
   gatewayMocks.patchNewChatDefaults.mockImplementation(async (patch) => ({
     version: 1,
@@ -2728,7 +2730,7 @@ describe('provider model selection', () => {
     await state.updateSelectedSpeedMode('fast')
     await state.sendMessageToNewThread('fast request', '/tmp/project')
 
-    expect(gatewayMocks.setCodexSpeedMode).toHaveBeenCalledWith('fast')
+    expect(gatewayMocks.setCodexSpeedMode).not.toHaveBeenCalled()
     expect(gatewayMocks.startThreadWithTurn).toHaveBeenCalledWith(
       '/tmp/project',
       'fast request',
@@ -2757,7 +2759,7 @@ describe('provider model selection', () => {
     await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
     await state.updateSelectedSpeedMode('fast')
     await state.sendMessageToNewThread('explicit ultra and Fast', '/tmp/project')
-    expect(gatewayMocks.setCodexSpeedMode).toHaveBeenCalledWith('fast', 'priority')
+    expect(gatewayMocks.setCodexSpeedMode).not.toHaveBeenCalled()
     expect(gatewayMocks.startThreadWithTurn).toHaveBeenCalledWith(
       '/tmp/project', 'explicit ultra and Fast', [], 'gpt-6-astra', 'ultra', undefined, [], 'default', 'priority', undefined,
     )
@@ -2805,7 +2807,7 @@ describe('provider model selection', () => {
     )
 
     await state.updateSelectedSpeedMode('standard')
-    expect(gatewayMocks.setCodexSpeedMode).toHaveBeenCalledWith('standard')
+    expect(gatewayMocks.setCodexSpeedMode).not.toHaveBeenCalled()
   })
 
   it('reuses a recently loaded model catalog for the same provider', async () => {
@@ -4903,74 +4905,105 @@ describe('notification recovery', () => {
   })
 })
 
-describe('global Fast preference', () => {
+describe('per-thread Fast preference', () => {
   async function setupFastState() {
     installTestWindow()
     nativeGatewayMocks.getNativeCapabilities.mockResolvedValue({ ...EMPTY_NATIVE_CAPABILITIES, threadSettings: true })
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [{ projectName: 'Project', threads: [thread('fast-a', '/tmp/project'), thread('fast-b', '/tmp/project')] }], nextCursor: null })
     gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
     gatewayMocks.getThreadDetail.mockResolvedValue({ model: 'gpt-6-astra', modelProvider: 'myproxy', messages: [], inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {} })
-    const catalog = modelCapabilities({ id: 'gpt-6-astra', supportsFastMode: true, supportedReasoningEfforts: ['low', 'high', 'ultra'], defaultReasoningEffort: 'low' }).map(model => ({ ...model, fastServiceTier: 'priority' }))
-    gatewayMocks.getAvailableModels.mockResolvedValue(catalog)
-    let saved: 'standard' | 'fast' = 'standard'
-    const readConfig = () => ({ model: 'gpt-6-astra', providerId: 'myproxy', reasoningEffort: 'low' as const, speedMode: saved })
-    gatewayMocks.getCurrentModelConfig.mockImplementation(async () => readConfig())
-    gatewayMocks.setCodexSpeedMode.mockImplementation(async (mode: 'standard' | 'fast') => { saved = mode })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities({ id: 'gpt-6-astra', supportsFastMode: true, supportedReasoningEfforts: ['low', 'high', 'ultra'], defaultReasoningEffort: 'low' }).map(model => ({ ...model, fastServiceTier: 'priority' })))
+    // A legacy global Fast setting must not leak into either chat or a new draft.
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-6-astra', providerId: 'myproxy', reasoningEffort: 'low', speedMode: 'fast' })
+    const saved: Record<string, { model: string; reasoningEffort: 'low'; speedMode?: 'standard' | 'fast' }> = {
+      'fast-a': { model: 'gpt-6-astra', reasoningEffort: 'low' }, 'fast-b': { model: 'gpt-6-astra', reasoningEffort: 'low' },
+    }
+    gatewayMocks.getThreadModelPreferences.mockImplementation(async () => structuredClone(saved))
+    gatewayMocks.persistThreadSpeedMode.mockImplementation(async (id, preference) => { saved[id] = { ...saved[id], ...preference }; return saved[id] })
     const state = useDesktopState()
     state.primeSelectedThread('fast-a')
     await state.refreshAll({ includeSelectedThreadMessages: true, awaitAncillaryRefreshes: true })
-    return { state, readConfig }
+    return { state, saved }
   }
 
-  it('keeps one saved setting across native threads, reloads, new browsers, and disabling', async () => {
-    const { state, readConfig } = await setupFastState()
+  it('keeps A fast and B standard across switching and a fresh browser', async () => {
+    const { state, saved } = await setupFastState()
+    expect(state.selectedSpeedMode.value).toBe('standard')
     await state.updateSelectedSpeedMode('fast')
-    expect(gatewayMocks.setCodexSpeedMode).toHaveBeenCalledExactlyOnceWith('fast', 'priority')
-    expect(readConfig().speedMode).toBe('fast')
+    expect(gatewayMocks.persistThreadSpeedMode).toHaveBeenCalledExactlyOnceWith('fast-a', { model: 'gpt-6-astra', reasoningEffort: 'low', speedMode: 'fast' })
     await state.selectThread('fast-b')
-    expect(state.selectedSpeedMode.value).toBe('fast')
-    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    expect(state.selectedSpeedMode.value).toBe('standard')
+    await state.selectThread('fast-a')
     expect(state.selectedSpeedMode.value).toBe('fast')
     installTestWindow()
     const fresh = useDesktopState()
-    fresh.primeSelectedThread('fast-b')
+    fresh.primeSelectedThread('fast-a')
     await fresh.refreshAll({ includeSelectedThreadMessages: true, awaitAncillaryRefreshes: true })
     expect(fresh.selectedSpeedMode.value).toBe('fast')
+    await fresh.selectThread('fast-b')
+    expect(fresh.selectedSpeedMode.value).toBe('standard')
+    await fresh.updateSelectedSpeedMode('fast')
+    await fresh.selectThread('fast-a')
     await fresh.updateSelectedSpeedMode('standard')
-    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
-    expect(state.selectedSpeedMode.value).toBe('standard')
-    expect(readConfig().speedMode).toBe('standard')
+    expect(saved['fast-b'].speedMode).toBe('fast')
+    expect(saved['fast-a'].speedMode).toBe('standard')
+    expect(gatewayMocks.setCodexSpeedMode).not.toHaveBeenCalled()
   })
 
-  it.each(['before', 'during'] as const)('rejects a stale config read started %s saving Fast', async (timing) => {
+  it('allows B to save while A is pending and isolates A failure from B', async () => {
     const { state } = await setupFastState()
-    const staleConfig = { model: 'gpt-6-astra', providerId: 'myproxy', reasoningEffort: 'low' as const, speedMode: 'standard' as const }
-    let finishRead!: (config: typeof staleConfig) => void
-    gatewayMocks.getCurrentModelConfig.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve }))
-    let finishWrite!: () => void
-    gatewayMocks.setCodexSpeedMode.mockImplementationOnce(() => new Promise<void>(resolve => { finishWrite = resolve }))
-    const saving = timing === 'during' ? state.updateSelectedSpeedMode('fast') : null
-    const refreshing = state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
-    await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'))
-    const save = saving ?? state.updateSelectedSpeedMode('fast')
-    await vi.waitFor(() => expect(finishWrite).toBeTypeOf('function'))
-    finishWrite(); await save
-    finishRead(staleConfig); await refreshing
+    let rejectWrite!: (error: Error) => void
+    gatewayMocks.persistThreadSpeedMode.mockImplementationOnce(() => new Promise((_r, reject) => { rejectWrite = reject }))
+    const saving = state.updateSelectedSpeedMode('fast')
+    await state.updateSelectedSpeedMode('fast')
+    expect(gatewayMocks.persistThreadSpeedMode).toHaveBeenCalledTimes(1)
+    await state.selectThread('fast-b')
+    expect(state.isUpdatingSpeedMode.value).toBe(false)
+    await state.updateSelectedSpeedMode('fast')
+    rejectWrite(new Error('speed save failed')); await saving
+    expect(state.selectedSpeedMode.value).toBe('fast')
+    await state.selectThread('fast-a')
+    expect(state.selectedSpeedMode.value).toBe('standard')
+    expect(state.isUpdatingSpeedMode.value).toBe(false)
+    expect(state.error.value).toContain('speed save failed')
+  })
+
+  it('does not let model-only writes carry a stale speed or erase the current speed', async () => {
+    const { state } = await setupFastState()
+    await state.updateSelectedSpeedMode('fast')
+    await state.updateSelectedModelIdForThread('fast-a', 'gpt-6-astra')
+    expect(gatewayMocks.persistThreadModelPreference.mock.calls.at(-1)?.[1]).not.toHaveProperty('speedMode')
     expect(state.selectedSpeedMode.value).toBe('fast')
   })
 
-  it('rolls back a failed global write and avoids duplicate writes while saving', async () => {
+  it('keeps startup preference reads from overwriting a manual speed change', async () => {
+    const { saved } = await setupFastState()
+    let finish!: (v: typeof saved) => void
+    gatewayMocks.getThreadModelPreferences.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const fresh = useDesktopState()
+    fresh.primeSelectedThread('fast-a')
+    fresh.availableModelCapabilities.value = { 'gpt-6-astra': { ...modelCapabilities({ id: 'gpt-6-astra', supportsFastMode: true })[0]!, fastServiceTier: 'priority' } }
+    const loading = fresh.refreshAll({ includeSelectedThreadMessages: true, awaitAncillaryRefreshes: true })
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    await fresh.updateSelectedSpeedMode('fast')
+    finish({ 'fast-a': { model: 'gpt-6-astra', reasoningEffort: 'low', speedMode: 'standard' } }); await loading
+    expect(fresh.selectedSpeedMode.value).toBe('fast')
+  })
+
+  it('uses a draft choice for its first turn and resets the next new chat to standard', async () => {
     const { state } = await setupFastState()
-    let rejectWrite!: (error: Error) => void
-    gatewayMocks.setCodexSpeedMode.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectWrite = reject }))
-    const saving = state.updateSelectedSpeedMode('fast')
-    await state.updateSelectedSpeedMode('fast')
-    await vi.waitFor(() => expect(rejectWrite).toBeTypeOf('function'))
-    rejectWrite(new Error('config write failed')); await saving
-    expect(gatewayMocks.setCodexSpeedMode).toHaveBeenCalledTimes(1)
+    state.primeSelectedThread('')
     expect(state.selectedSpeedMode.value).toBe('standard')
-    expect(state.isUpdatingSpeedMode.value).toBe(false)
-    expect(state.error.value).toContain('config write failed')
+    await state.updateSelectedSpeedMode('fast')
+    expect(gatewayMocks.persistThreadSpeedMode).not.toHaveBeenCalled()
+    gatewayMocks.startThreadWithTurn.mockResolvedValue({ threadId: 'fast-new', turnId: 'turn-new', model: 'gpt-6-astra', modelProvider: 'myproxy' })
+    await state.sendMessageToNewThread('new Fast chat', '/tmp/project')
+    expect(gatewayMocks.startThreadWithTurn.mock.calls.at(-1)?.[8]).toBe('priority')
+    expect(state.selectedSpeedMode.value).toBe('fast')
+    state.primeSelectedThread('')
+    expect(state.selectedSpeedMode.value).toBe('standard')
+    state.primeSelectedThread('fast-new')
+    expect(state.selectedSpeedMode.value).toBe('fast')
   })
 })
 
@@ -5024,15 +5057,7 @@ describe('native steering integration', () => {
     state.stopPolling()
   })
 
-  it('persists a global speed change even from an existing native thread', async () => {
-    nativeGatewayMocks.getNativeCapabilities.mockResolvedValue({ ...EMPTY_NATIVE_CAPABILITIES, threadSettings: true })
-    const state = await runningThread()
-    state.selectedSpeedMode.value = 'fast'
-    await state.updateSelectedSpeedMode('standard')
-    expect(state.selectedSpeedMode.value).toBe('standard')
-    expect(gatewayMocks.setCodexSpeedMode).toHaveBeenCalledExactlyOnceWith('standard')
-    state.stopPolling()
-  })
+
 })
 
 describe('authoritative thread runtime reconciliation', () => {

@@ -2976,11 +2976,12 @@ async function persistSuccessfulTurnModelPreference(threadIdInput: unknown, turn
   const preference = normalizeThreadModelPreference({
     model: readNonEmptyString(turnParams?.model),
     reasoningEffort: readNonEmptyString(turnParams?.effort),
+    ...(turnParams?.serviceTier === null ? { speedMode: 'standard' } : turnParams?.serviceTier === 'priority' || turnParams?.serviceTier === 'fast' ? { speedMode: 'fast' } : {}),
   })
   if (!threadId || !preference) return
 
   try {
-    await writeThreadModelPreference(threadId, preference)
+    await writeThreadModelPreference(threadId, preference, { preserveSpeed: true })
   } catch (error) {
     console.warn('[thread-model-preferences] Failed to persist a successful turn preference:', getErrorMessage(error, 'Unknown error'))
   }
@@ -8766,7 +8767,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           return
         }
 
-        if (req.method === 'PUT') {
+        if (req.method === 'PUT' || req.method === 'PATCH') {
           const body = asRecord(await readJsonBody(req))
           const threadId = readNonEmptyString(body?.threadId)
           const preference = normalizeThreadModelPreference(body)
@@ -8774,11 +8775,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             setJson(res, 400, { error: 'Missing threadId' })
             return
           }
-          if (!preference) {
+          if (!preference || (req.method === 'PATCH' && !preference.speedMode)) {
             setJson(res, 400, { error: 'Invalid thread model preference' })
             return
           }
-          const saved = await writeThreadModelPreference(threadId, preference)
+          const saved = await writeThreadModelPreference(threadId, preference, { speedOnly: req.method === 'PATCH' })
           setJson(res, 200, { data: { threadId, ...saved } })
           return
         }

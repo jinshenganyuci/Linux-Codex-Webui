@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getArchivedThreadsPage, getAvailableModelIds, getAvailableModels, getFullThreadCommandOutput, getNewChatDefaults, getOlderThreadMessages, getPinnedThreadState, getSidebarLayoutPreferences, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, listThreadItems, patchNewChatDefaults, patchSidebarLayoutPreferences, permanentlyDeleteThread, persistPinnedThreadIds, persistThreadModelPreference, resumeThread, startThread, startThreadTurn, startThreadWithTurn, unarchiveThread } from './codexGateway'
+import { getArchivedThreadsPage, getAvailableModelIds, getAvailableModels, getFullThreadCommandOutput, getNewChatDefaults, getOlderThreadMessages, getPinnedThreadState, getSidebarLayoutPreferences, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, listThreadItems, patchNewChatDefaults, patchSidebarLayoutPreferences, permanentlyDeleteThread, persistPinnedThreadIds, persistThreadModelPreference, persistThreadSpeedMode, resumeThread, startThread, startThreadTurn, startThreadWithTurn, unarchiveThread } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -243,6 +243,15 @@ describe('thread model preferences', () => {
       model: 'gpt-5.6-sol',
       reasoningEffort: 'ultra',
     })
+  })
+
+  it('patches just the selected thread speed and rejects an older backend that drops it', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: { model: 'gpt-6-astra', reasoningEffort: 'low', speedMode: 'fast' } }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(persistThreadSpeedMode('a', { model: 'gpt-6-astra', reasoningEffort: 'low', speedMode: 'fast' })).resolves.toMatchObject({ speedMode: 'fast' })
+    expect(fetchMock).toHaveBeenCalledWith('/codex-api/thread-model-preferences', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ threadId: 'a', model: 'gpt-6-astra', reasoningEffort: 'low', speedMode: 'fast' }) }))
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ data: { model: 'gpt-6-astra', reasoningEffort: 'low' } }), { status: 200 }))
+    await expect(persistThreadSpeedMode('a', { model: 'gpt-6-astra', reasoningEffort: 'low', speedMode: 'fast' })).rejects.toThrow('not saved')
   })
 
   it('rejects unsuccessful preference writes', async () => {

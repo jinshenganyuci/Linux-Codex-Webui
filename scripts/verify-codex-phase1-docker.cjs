@@ -109,6 +109,25 @@ async function checkUi(browser, name, port) {
     assert.deepEqual(after.data, ['gpt-5.6-luna'])
     reports.push({ name: 'provider-switch', port: 4194, before: before.data, after: after.data, screenshot: await checkUi(browser, 'provider-switch', 4194) })
     console.log('provider-switch: passed')
+    if (process.env.VERIFY_THREAD_FAST === '1') {
+      await rpc(4194, 'config/batchWrite', { edits: [{ keyPath: 'service_tier', value: 'priority', mergeStrategy: 'upsert' }, { keyPath: 'features.fast_mode', value: true, mergeStrategy: 'upsert' }], reloadUserConfig: true })
+      const speeds = []
+      for (const serviceTier of ['priority', null]) {
+        const t = (await rpc(4194, 'thread/start', { model: 'gpt-5.6-luna', cwd: '/project', serviceTier })).thread
+        await rpc(4194, 'turn/start', { threadId: t.id, model: 'gpt-5.6-luna', effort: 'low', serviceTier, input: [{ type: 'text', text: 'THREAD_SPEED_FIXTURE' }] })
+        let done = false
+        for (let i = 0; i < 40; i++) { const t2 = (await rpc(4194, 'thread/read', { threadId: t.id, includeTurns: true })).thread; if (t2.turns.some(turn => turn.status === 'failed')) { done = true; break } await wait(250) }
+        assert(done)
+        speeds.push({ threadId: t.id, serviceTier })
+      }
+      const captured = docker('exec', containers.at(-1), 'cat', '/tmp/codex-provider-tiers.jsonl').split('\n').filter(Boolean).map(line => JSON.parse(line))
+      assert.deepEqual(captured.map(row => row.serviceTier), ['priority', null], 'Standard must override a legacy global priority setting on the actual upstream request')
+      const prefs = (await fetchJson(4194, '/codex-api/thread-model-preferences')).data
+      assert.equal(prefs[speeds[0].threadId].speedMode, 'fast'); assert.equal(prefs[speeds[1].threadId].speedMode, 'standard')
+      reports.push({ name: 'per-thread-speed', port: 4194, legacyGlobalTier: 'priority', captured, speeds, preferencesIndependent: true })
+      console.log('per-thread-speed: passed')
+    }
+
     writeFileSync(resolve(output, `${reportPrefix}-docker-report.json`), JSON.stringify(reports, null, 2))
     console.log(JSON.stringify(reports, null, 2))
   } catch (error) {

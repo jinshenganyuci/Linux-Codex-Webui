@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { open, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import type { ReasoningEffort } from '../types/codex.js'
+import type { ReasoningEffort, SpeedMode } from '../types/codex.js'
 
 const STATE_VERSION = 1
 const STATE_FILE_NAME = 'linux-codex-webui-thread-model-preferences.json'
@@ -24,6 +24,7 @@ const REASONING_EFFORTS = new Set<ReasoningEffort>([
 export type ThreadModelPreference = {
   model: string
   reasoningEffort: ReasoningEffort
+  speedMode?: SpeedMode
 }
 
 export type ThreadModelPreferenceState = Record<string, ThreadModelPreference>
@@ -56,7 +57,8 @@ export function normalizeThreadModelPreference(value: unknown): ThreadModelPrefe
     ? record.reasoningEffort.trim().toLowerCase() as ReasoningEffort
     : null
   if (!model || !reasoningEffort || !REASONING_EFFORTS.has(reasoningEffort)) return null
-  return { model, reasoningEffort }
+  if (record?.speedMode !== undefined && record.speedMode !== 'fast' && record.speedMode !== 'standard') return null
+  return { model, reasoningEffort, ...(record?.speedMode !== undefined ? { speedMode: record.speedMode as SpeedMode } : {}) }
 }
 
 export function normalizeThreadModelPreferenceState(value: unknown): ThreadModelPreferenceState {
@@ -214,19 +216,21 @@ export async function readThreadModelPreferences(): Promise<ThreadModelPreferenc
 export async function writeThreadModelPreference(
   threadIdInput: unknown,
   preferenceInput: unknown,
+  options: { speedOnly?: boolean; preserveSpeed?: boolean } = {},
 ): Promise<ThreadModelPreference> {
   const threadId = normalizeThreadId(threadIdInput)
   const preference = normalizeThreadModelPreference(preferenceInput)
   if (!threadId) throw new Error('Missing threadId')
   if (!preference) throw new Error('Invalid thread model preference')
 
-  return await mutateThreadModelPreferences((current) => ({
-    state: {
-      ...current,
-      [threadId]: preference,
-    },
-    result: preference,
-  }))
+  return await mutateThreadModelPreferences((current) => {
+    const existing = current[threadId]
+    const saved = options.speedOnly && existing
+      ? { ...existing, speedMode: preference.speedMode }
+      : { ...existing, ...preference }
+    if (options.preserveSpeed && existing?.speedMode !== undefined) saved.speedMode = existing.speedMode
+    return { state: { ...current, [threadId]: saved }, result: saved }
+  })
 }
 
 export async function deleteThreadModelPreference(threadIdInput: unknown): Promise<void> {

@@ -43,12 +43,12 @@ import {
   getWorkspaceRootsState,
   normalizeAgentProgressSnapshot,
   setCodexRuntimeConfig,
-  setCodexSpeedMode,
   setThreadQueueState,
   setWorkspaceRootsState,
   getThreadTitleCache,
   persistThreadTitle,
   persistThreadModelPreference,
+  persistThreadSpeedMode,
   persistRequestUserInputSummary,
   patchNewChatDefaults,
   patchThreadCollaborationPreferences,
@@ -1651,7 +1651,8 @@ export function useDesktopState() {
   const selectedModelId = ref(readSelectedModel(selectedModelIdByContext.value, selectedThreadId.value))
   const selectedReasoningEffort = ref<ReasoningEffort | ''>('medium')
   const selectedSpeedMode = ref<SpeedMode>('standard')
-  let speedModeRevision = 0
+  const newThreadDraftSpeedMode = ref<SpeedMode>('standard')
+  const pendingSpeedWrites = ref<Record<string, boolean>>({})
   const selectedCodexPermissionMode = ref<CodexPermissionMode>(loadSelectedCodexPermissionMode())
   const activeProviderId = ref('')
   const codexCliMissingError = ref('')
@@ -1714,7 +1715,7 @@ export function useDesktopState() {
   const isLoadingMessages = ref(false)
   const isSendingMessage = ref(false)
   const isInterruptingTurn = ref(false)
-  const isUpdatingSpeedMode = ref(false)
+  const isUpdatingSpeedMode = computed(() => pendingSpeedWrites.value[selectedThreadId.value] === true)
   const isUpdatingPermissionMode = ref(false)
   const isUpdatingNewChatDefaults = ref(false)
   const isRollingBack = ref(false)
@@ -2132,6 +2133,10 @@ export function useDesktopState() {
     return threadModelPreferencesById.value[normalizedThreadId] ?? null
   }
 
+  function readSpeedModeForThread(threadId: string): SpeedMode {
+    return threadId.trim() ? readThreadModelPreference(threadId)?.speedMode ?? 'standard' : newThreadDraftSpeedMode.value
+  }
+
   function hasCachedThreadModelSelection(threadId: string): boolean {
     const normalizedThreadId = threadId.trim()
     return Boolean(normalizedThreadId && normalizeStoredModelId(selectedModelIdByContext.value[normalizedThreadId]))
@@ -2149,6 +2154,7 @@ export function useDesktopState() {
     const normalizedPreference: ThreadModelPreference = {
       model: normalizedModelId,
       reasoningEffort: preference.reasoningEffort,
+      ...((preference.speedMode ?? readThreadModelPreference(normalizedThreadId)?.speedMode) ? { speedMode: preference.speedMode ?? readThreadModelPreference(normalizedThreadId)?.speedMode } : {}),
     }
     threadModelPreferencesById.value = {
       ...threadModelPreferencesById.value,
@@ -2164,6 +2170,7 @@ export function useDesktopState() {
     if (selectedThreadId.value === normalizedThreadId) {
       selectedModelId.value = normalizedModelId
       selectedReasoningEffort.value = normalizedPreference.reasoningEffort
+      selectedSpeedMode.value = normalizedPreference.speedMode ?? 'standard'
     }
   }
 
@@ -2171,7 +2178,7 @@ export function useDesktopState() {
     first: ThreadModelPreference | null | undefined,
     second: ThreadModelPreference | null | undefined,
   ): boolean {
-    return first?.model === second?.model && first?.reasoningEffort === second?.reasoningEffort
+    return first?.model === second?.model && first?.reasoningEffort === second?.reasoningEffort && first?.speedMode === second?.speedMode
   }
 
   function queueThreadModelPreferenceWrite(threadId: string): Promise<void> {
@@ -2183,9 +2190,9 @@ export function useDesktopState() {
     const run = previous
       .catch(() => {})
       .then(async () => {
-        const saved = await persistThreadModelPreference(normalizedThreadId, snapshot)
+        const saved = await persistThreadModelPreference(normalizedThreadId, { model: snapshot.model, reasoningEffort: snapshot.reasoningEffort })
         if (sameThreadModelPreference(readThreadModelPreference(normalizedThreadId), snapshot)) {
-          cacheThreadModelPreference(normalizedThreadId, saved)
+          cacheThreadModelPreference(normalizedThreadId, { model: saved.model, reasoningEffort: saved.reasoningEffort })
         }
       })
       .catch((unknownError) => {
@@ -2253,12 +2260,14 @@ export function useDesktopState() {
   }
 
   function resetNewThreadDraftToDefaults(): void {
+    newThreadDraftSpeedMode.value = 'standard'
     newThreadSelectionInitialized = true
     newThreadModelManuallySelected = false
     newThreadReasoningManuallySelected = false
     newThreadDraftModelId.value = resolveNewChatDefaultModelId()
     if (selectedThreadId.value.trim()) return
 
+    selectedSpeedMode.value = newThreadDraftSpeedMode.value
     selectedModelId.value = newThreadDraftModelId.value
     selectedReasoningEffort.value = resolveNewChatDefaultReasoningEffort(newThreadDraftModelId.value)
   }
@@ -2287,6 +2296,7 @@ export function useDesktopState() {
     }
     const preference = readThreadModelPreference(nextThreadId)
     if (!nextThreadId.trim() && previousThreadId.trim()) {
+      newThreadDraftSpeedMode.value = 'standard'
       newThreadSelectionInitialized = false
       newThreadDraftModelId.value = ''
       newThreadModelManuallySelected = false
@@ -2295,6 +2305,7 @@ export function useDesktopState() {
     const nextModelId = nextThreadId.trim()
       ? preference?.model ?? readModelIdForThread(nextThreadId)
       : newThreadDraftModelId.value || resolveNewChatDefaultModelId()
+    selectedSpeedMode.value = readSpeedModeForThread(nextThreadId)
     selectedModelId.value = preference?.model ?? readProviderCompatibleSelectedModel(nextModelId)
     selectedReasoningEffort.value = preference?.reasoningEffort || resolveNewChatDefaultReasoningEffort() || selectedReasoningEffort.value
     reconcileSelectedReasoningEffort(selectedModelId.value)
@@ -2532,37 +2543,36 @@ export function useDesktopState() {
 
   async function updateSelectedSpeedMode(mode: SpeedMode): Promise<void> {
     const nextMode: SpeedMode = mode === 'fast' ? 'fast' : 'standard'
-    if (isUpdatingSpeedMode.value || selectedSpeedMode.value === nextMode) {
+    const threadId = selectedThreadId.value.trim()
+    if (pendingSpeedWrites.value[threadId] || selectedSpeedMode.value === nextMode) return
+    const model = readModelIdForThread(threadId)
+    if (nextMode === 'fast' && !isFastModeSupportedForModel(model)) {
+      error.value = 'Fast mode is not available for the selected model.'
       return
     }
-
-    if (nextMode === 'fast') {
-      const contextId = selectedThreadId.value.trim() || NEW_THREAD_COLLABORATION_MODE_CONTEXT
-      if (!isFastModeSupportedForModel(readModelIdForThread(contextId))) {
-        error.value = 'Fast mode is not available for the selected model.'
-        return
-      }
+    if (!threadId) {
+      newThreadDraftSpeedMode.value = nextMode
+      selectedSpeedMode.value = nextMode
+      return
     }
-
-    const previousMode = selectedSpeedMode.value
-    speedModeRevision += 1
-    selectedSpeedMode.value = nextMode
-    isUpdatingSpeedMode.value = true
+    const reasoningEffort = selectedReasoningEffort.value || readReasoningEffortForThread(threadId)
+    if (!model || !reasoningEffort) return
+    const previousMode = readSpeedModeForThread(threadId)
+    const snapshot = { model, reasoningEffort, speedMode: nextMode }
+    pendingSpeedWrites.value = { ...pendingSpeedWrites.value, [threadId]: true }
+    cacheThreadModelPreference(threadId, snapshot)
     error.value = ''
-
     try {
-      // Fast is a global preference, including when the current thread uses native settings.
-      const contextId = selectedThreadId.value.trim() || NEW_THREAD_COLLABORATION_MODE_CONTEXT
-      const tier = availableModelCapabilities.value[readModelIdForThread(contextId)]?.fastServiceTier
-      if (tier) await setCodexSpeedMode(nextMode, tier)
-      else await setCodexSpeedMode(nextMode)
+      await persistThreadSpeedMode(threadId, snapshot)
+      // Replace the entry even on acknowledgement, invalidating reads started during this write.
+      cacheThreadModelPreference(threadId, { ...readThreadModelPreference(threadId)!, speedMode: nextMode })
     } catch (unknownError) {
-      selectedSpeedMode.value = previousMode
-      error.value = unknownError instanceof Error ? unknownError.message : 'Failed to update Fast mode'
+      cacheThreadModelPreference(threadId, { ...readThreadModelPreference(threadId)!, speedMode: previousMode })
+      error.value = unknownError instanceof Error ? unknownError.message : 'Failed to save thread speed'
     } finally {
-      // Also invalidate reads that started while the write was pending.
-      speedModeRevision += 1
-      isUpdatingSpeedMode.value = false
+      const next = { ...pendingSpeedWrites.value }
+      delete next[threadId]
+      pendingSpeedWrites.value = next
     }
   }
 
@@ -2692,7 +2702,7 @@ export function useDesktopState() {
     // Cache entries are replaced immutably, so preserve any entry touched since this read began.
     persisted = { ...persisted }
     for (const [threadId, preference] of Object.entries(threadModelPreferencesById.value)) {
-      if (preference !== preferencesAtRequest[threadId]) persisted[threadId] = preference
+      if (preference !== preferencesAtRequest[threadId] || pendingSpeedWrites.value[threadId]) persisted[threadId] = preference
     }
     threadModelPreferencesById.value = persisted
 
@@ -2717,6 +2727,7 @@ export function useDesktopState() {
       selectedModelId.value = selectedPreference.model
       selectedReasoningEffort.value = selectedPreference.reasoningEffort
     }
+    selectedSpeedMode.value = readSpeedModeForThread(selectedThreadId.value)
     hasLoadedThreadModelPreferences = true
   }
 
@@ -2811,13 +2822,9 @@ export function useDesktopState() {
 
   async function refreshModelPreferences(options?: { providerChanged?: boolean; includeProviderModels?: boolean }): Promise<void> {
     const selectedThreadAtRequest = selectedThreadId.value
-    const speedRevisionAtRequest = speedModeRevision
     codexCliMissingError.value = ''
     try {
       const currentConfig = await getCurrentModelConfig()
-      if (speedRevisionAtRequest === speedModeRevision && !isUpdatingSpeedMode.value) {
-        selectedSpeedMode.value = currentConfig.speedMode
-      }
       const normalizedConfiguredModelId = currentConfig.model.trim()
       runtimeDefaultModelId.value = normalizedConfiguredModelId
       runtimeDefaultReasoningEffort.value = currentConfig.reasoningEffort
@@ -6829,6 +6836,7 @@ export function useDesktopState() {
         cacheThreadModelPreference(nextThreadId, {
           model: forkedModel,
           reasoningEffort: selectedReasoningEffort,
+          speedMode: 'standard',
         })
         void queueThreadModelPreferenceWrite(nextThreadId)
       }
@@ -6896,6 +6904,7 @@ export function useDesktopState() {
         cacheThreadModelPreference(forkedThreadId, {
           model: forkedModel,
           reasoningEffort: sourceReasoningEffort,
+          speedMode: 'standard',
         })
         void queueThreadModelPreferenceWrite(forkedThreadId)
       }
@@ -7194,6 +7203,7 @@ export function useDesktopState() {
         cacheThreadModelPreference(threadId, {
           model: resolvedModel,
           reasoningEffort: selectedEffort,
+          speedMode,
         })
         void queueThreadModelPreferenceWrite(threadId)
       }
@@ -7278,7 +7288,7 @@ export function useDesktopState() {
     collaborationModeDeveloperInstructions?: string,
   ): Promise<void> {
     const reasoningEffort = selectedReasoningEffort.value
-    const speedMode = speedModeOverride ?? selectedSpeedMode.value
+    const speedMode = speedModeOverride ?? readSpeedModeForThread(threadId)
     const collaborationMode = collaborationModeOverride === 'plan' ? 'plan' : collaborationModeOverride === 'default'
       ? 'default'
       : selectedCollaborationMode.value

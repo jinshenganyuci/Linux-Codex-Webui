@@ -1,7 +1,7 @@
 ### Composer mode scoping and Fast mode support
 
 #### Feature/Change Name
-Plan mode is scoped to the current chat, persists through the WebUI backend across browsers, and Fast mode is saved globally for all chats in the current WebUI service while following the live Codex model catalog. A one-turn Ask-first option can request structured clarification without changing the thread's saved mode.
+Plan mode is scoped to the current chat, persists through the WebUI backend across browsers, and Fast mode is saved independently for each chat while following the live Codex model catalog. A one-turn Ask-first option can request structured clarification without changing the thread's saved mode.
 
 #### Prerequisites/Setup
 1. Dev server running (`pnpm run dev`)
@@ -46,7 +46,7 @@ Plan mode is scoped to the current chat, persists through the WebUI backend acro
 ---
 
 
-### 全局快速模式：唯一入口与刷新持久化（2026-09-07）
+### 历史全局快速模式验收（已由下方会话独立方案取代）
 
 #### 前置条件
 - 使用隔离验收服务 `http://127.0.0.1:13511`，至少一个已完成的 TestChat；不得用正式 13510 做例行测试。
@@ -123,3 +123,21 @@ PHASE1_DOCKER_IMAGE=linux-codex-webui-global-fast:20260907 CODEX_ACCEPTANCE_REPO
 正式 13510 首页，1440×900 深色，模型配置已无速度菜单：
 
 ![正式桌面模型配置](/root/codex工作目录/Linux-Codex-Webui/output/playwright/global-fast-production-13510/models-1440-dark.png)
+
+
+### 当前方案：按会话独立保存快速模式
+
+#### 前置条件与操作
+- 在独立 13511 中使用两个已完成 TestChat（A/B）和另一浏览器；配置文件即使保留旧 `service_tier = "priority"`，尚未单独选择速度的会话也默认标准。
+- 打开 A 的「＋」，启用 Fast；切到 B 应关闭，回到 A 保留开启。刷新 A/B、另开浏览器重复；A 关闭或开启不得改变 B。
+- 保存 A 时切到 B，B 应能独立操作。模拟 A 保存失败，回到 A 是之前已保存的值，B 的状态不变。延迟偏好读取不能覆盖较新的本地选择。
+- 保存 Fast 的同时改模型，速度 PATCH 不能覆盖新模型，模型 PUT 不能覆盖速度；重载后两者均正确。
+- 首页新会话默认关闭，发送前打开只用于该次新聊天；成功首回合后以 threadId 保存，下一次新聊天/分支恢复标准。未发送草稿的速度是临时选择，刷新首页恢复标准。
+- 活动回合的速度不被自动改写；已有队列保持提交时快照，执行旧快照不会把新选择写回旧值。关闭时必须在实际请求中清除旧全局/会话 priority，不能只把开关画成关闭。
+- 检查桌面 1440×900、手机 375×812、平板 768×1024 明暗；当前会话显示“仅当前会话，刷新后保留”，新聊天提示只用于新聊天；模型配置里仍无速度菜单。
+
+#### 维护与兼容
+- GET/PUT `/codex-api/thread-model-preferences` 沿用已有格式，新增可选 `speedMode`；PATCH 携带 threadId、速度和首次初始化所需模型/推理信息，只修改速度。模型更新忽略过期速度快照，文件锁合并保留其他会话。
+- 旧记录没有速度字段时按 standard 读取，不批量改写历史记录；旧全局 config.toml 不变。需要完整前后端升级，旧后端不支持 PATCH 时必须报错回退，不能假装成功。
+- 上方全局 Fast 章节和其部署记录仅保留为历史；旧 `verify-global-fast-mode.cjs` 已停止运行以免误写全局配置，当前验证使用 `verify-thread-fast-mode.cjs`。
+- 验收只临时修改两个 TestChat 的偏好，结束后逐条恢复，不覆盖整个偏好文件；不修改全局配置或正式 13510。回退需部署目标版本的前后端，不能只切前端。

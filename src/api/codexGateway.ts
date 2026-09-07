@@ -135,6 +135,7 @@ export type CodexRuntimeConfig = {
 export type ThreadModelPreference = {
   model: string
   reasoningEffort: ReasoningEffort
+  speedMode?: SpeedMode
 }
 
 export type ThreadModelPreferenceState = Record<string, ThreadModelPreference>
@@ -3032,7 +3033,8 @@ function normalizeThreadModelPreference(value: unknown): ThreadModelPreference |
   const record = asRecord(value)
   const model = readString(record?.model)
   const reasoningEffort = normalizeReasoningEffort(record?.reasoningEffort)
-  return model && reasoningEffort ? { model, reasoningEffort } : null
+  const speedMode = record?.speedMode === 'fast' || record?.speedMode === 'standard' ? record.speedMode : undefined
+  return model && reasoningEffort ? { model, reasoningEffort, ...(speedMode ? { speedMode } : {}) } : null
 }
 
 export async function getThreadModelPreferences(): Promise<ThreadModelPreferenceState> {
@@ -3067,6 +3069,24 @@ export async function persistThreadModelPreference(
   }
   const saved = normalizeThreadModelPreference(asRecord(payload)?.data)
   if (!saved) throw new Error('Thread model preference response was invalid')
+  return saved
+}
+
+export async function persistThreadSpeedMode(
+  threadId: string,
+  preference: ThreadModelPreference & { speedMode: SpeedMode },
+): Promise<ThreadModelPreference> {
+  const response = await fetchWithTimeout('/codex-api/thread-model-preferences', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ threadId, ...preference }),
+  })
+  const payload = await response.json().catch(() => null) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to save thread model preference (${response.status})`))
+  }
+  const saved = normalizeThreadModelPreference(asRecord(payload)?.data)
+  if (!saved || saved.speedMode !== preference.speedMode) throw new Error('Thread speed preference was not saved')
   return saved
 }
 

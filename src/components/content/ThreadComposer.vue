@@ -299,7 +299,7 @@
               <span class="thread-composer-attach-setting-copy">
                 <span class="thread-composer-attach-setting-label">{{ t('Fast mode') }}</span>
                 <span class="thread-composer-attach-setting-description">{{ speedModeDescription }}</span>
-                <span class="thread-composer-attach-setting-description">{{ t('Shared by all chats; preserved after reload.') }}</span>
+                <span class="thread-composer-attach-setting-description">{{ t(activeThreadId ? 'Only this chat; preserved after reload.' : 'For this new chat only.') }}</span>
               </span>
               <span
                 class="thread-composer-attach-switch"
