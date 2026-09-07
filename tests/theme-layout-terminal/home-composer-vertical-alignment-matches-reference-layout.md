@@ -20,3 +20,7 @@
 
 #### Rollback/Cleanup
 - Revert the `.new-thread-empty` style in [src/App.vue](../../src/App.vue).
+
+#### 2026-09-07 手机短窗口补充
+- 高度充足时仍居中；内容超出可用高度时从顶部开始，在输入框上方独立滚动，不通过压缩图标或让按钮溢出维持居中。
+- 具体尺寸、文字放大、多行草稿与点击验证见 [iOS 页面回归](ios-interface-and-scrollbars.md#手机首页高度不足与项目按钮遮挡回归)。

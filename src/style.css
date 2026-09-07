@@ -3848,3 +3848,31 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
 @media (max-width: 767px) { :root .thread-composer-skill-control .search-dropdown-trigger { padding: 0; } }
 
 :root .native-controls-segments[data-keyboard='true'] .native-controls-selection { transition: none; }
+
+/* Home content owns its scroll space; the composer keeps a separate, fixed flex row. */
+:root .content-root .content-grid-home { overflow: hidden; }
+:root .content-root .new-thread-empty {
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  justify-content: flex-start;
+}
+:root .new-thread-empty > * { flex-shrink: 0; }
+:root .new-thread-empty > :first-child { margin-top: auto; }
+:root .new-thread-empty > :last-child { margin-bottom: auto; }
+@media (max-width: 767px) {
+  :root .content-root .new-thread-empty { padding: 16px; gap: 8px; }
+  :root .new-thread-suggestions { margin: 12px 0; }
+  :root .new-thread-suggestions button { min-height: 88px; gap: 12px; }
+  :root .new-thread-suggestions svg { flex-shrink: 0; }
+}
+@media (max-width: 767px) and (max-height: 740px) {
+  :root .new-thread-hero-mark { width: 40px; height: 40px; border-radius: 14px; margin-bottom: 0; }
+  :root .new-thread-hero-mark svg { width: 24px; height: 24px; }
+  :root .new-thread-suggestions button { min-height: 80px; gap: 8px; }
+  :root .new-thread-suggestions svg { width: 18px; height: 18px; padding: 5px; }
+}
+@media (max-width: 767px) and (max-height: 740px) {
+  :root .new-thread-suggestions button { flex-direction: row; align-items: center; justify-content: flex-start; min-height: 64px; padding: 10px; gap: 10px; }
+  :root .new-thread-suggestions span { min-width: 0; flex: 1; }
+}
