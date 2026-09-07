@@ -42,12 +42,10 @@ function within(box, v, label) { assert(box, label); assert(box.x >= -1 && box.y
             await page.locator('.conversation-item[data-role="assistant"]').first().waitFor();
             await page.locator('.native-controls-trigger').waitFor({ state: 'attached' });
             await page.waitForTimeout(2500);
-            const openControls = async () => { if (viewport.width >= 768)
-                await page.locator('.native-controls-trigger').click();
-            else {
+            const openControls = async () => {
                 await page.locator('.thread-composer-attach-trigger').click();
                 await page.locator('.thread-composer-attach-menu').getByRole('button', { name: /^会话控制 / }).click();
-            } };
+            };
             const initialCalls = calls.slice();
             const geometry = await page.evaluate(() => { const b = s => { const r = document.querySelector(s).getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }; return { composer: b('.thread-composer-shell'), message: b('.message-row[data-role="assistant"]'), list: b('.conversation-list'), main: b('.desktop-main'), overflow: document.documentElement.scrollWidth > innerWidth, background: getComputedStyle(document.querySelector('.thread-composer-shell')).backgroundColor }; });
             assert(!geometry.overflow, 'page horizontal overflow');
@@ -77,7 +75,7 @@ function within(box, v, label) { assert(box, label); assert(box.x >= -1 && box.y
             assert.equal(await objective.inputValue(), '保留这份目标草稿，不执行也不保存', 'draft lost');
             await page.keyboard.press('Escape');
             assert.equal(await page.locator('.native-controls-dialog').count(), 0, 'Esc dismiss');
-            assert(await page.locator(viewport.width >= 768 ? '.native-controls-trigger' : '.thread-composer-attach-trigger').evaluate(el => el === document.activeElement), 'focus restore');
+            assert(await page.locator('.thread-composer-attach-trigger').evaluate(el => el === document.activeElement), 'focus restore');
             await page.locator('.thread-composer-attach-trigger').click();
             await page.locator('.thread-composer-attach-menu').waitFor();
             within(await page.locator('.thread-composer-attach-menu').boundingBox(), viewport, 'add menu');
@@ -86,12 +84,8 @@ function within(box, v, label) { assert(box, label); assert(box.x >= -1 && box.y
             assert(await objective.isVisible(), 'plus goal entry');
             await page.keyboard.press('Escape');
             // Real permission list is read only. Its teleported popup must not dismiss the parent.
-            if (viewport.width >= 768)
-                await page.locator('.thread-composer-permission-control').click();
-            else {
-                await openControls();
-                await page.getByRole('button', { name: '运行与权限', exact: true }).click();
-            }
+            await openControls();
+            await page.getByRole('button', { name: '运行与权限', exact: true }).click();
             await page.getByTestId('native-permission-picker').locator('button').click();
             const search = page.locator('.composer-dropdown-menu-wrap input');
             await search.last().fill('read');
@@ -102,22 +96,12 @@ function within(box, v, label) { assert(box, label); assert(box.x >= -1 && box.y
             assert.equal(await page.locator('.composer-dropdown-menu-wrap').count(), 0, 'second Esc closes cleared submenu');
             await page.keyboard.press('Escape');
             assert.equal(await page.locator('.native-controls-dialog').count(), 0);
-            if (viewport.width >= 768) {
-                await page.locator('.model-reasoning-trigger').click();
-                await page.locator('.model-reasoning-layer').waitFor();
-                await page.waitForTimeout(2300);
-                within(await page.locator('.model-reasoning-layer').boundingBox(), viewport, 'model');
-                await page.screenshot({ path: path.join(out, `model-${label}.png`) });
-                await page.mouse.click(geometry.message.x, 150);
-            }
-            else {
-                await page.locator('.thread-composer-mobile-settings-trigger').click();
-                await page.locator('.thread-composer-mobile-settings-sheet').waitFor();
-                await page.waitForTimeout(2300);
-                within(await page.locator('.thread-composer-mobile-settings-sheet').boundingBox(), viewport, 'mobile settings');
-                await page.screenshot({ path: path.join(out, `model-${label}.png`) });
-                await page.locator('.thread-composer-mobile-settings-close').click();
-            }
+            await page.locator('.model-reasoning-trigger').click();
+            await page.locator('.model-reasoning-layer').waitFor();
+            await page.waitForTimeout(2300);
+            within(await page.locator('.model-reasoning-layer').boundingBox(), viewport, 'model');
+            await page.screenshot({ path: path.join(out, `model-${label}.png`) });
+            await page.mouse.click(geometry.message.x, 150);
             await page.goto(base + '/#/', { waitUntil: 'domcontentloaded' });
             await page.locator('.new-thread-suggestions').waitFor();
             await page.waitForTimeout(2300);

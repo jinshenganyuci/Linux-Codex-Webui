@@ -950,6 +950,12 @@
                     await-submit-acknowledgement
                     :native-permissions-available="nativeThreadControls.state.capabilities.permissions"
                     :native-permission-profile="nativeThreadControls.state.settings?.permissionProfile"
+                    :native-permission-profiles="nativeThreadControls.state.profiles"
+                    :native-permission-loading="nativeThreadControls.state.permissionsLoading"
+                    :native-permission-error="nativeThreadControls.state.error"
+                    :native-permission-busy="nativeThreadControls.state.busy || nativeThreadControls.state.loading"
+                    @load-native-permissions="nativeThreadControls.loadPermissions()"
+                    @select-native-permission="onSelectNativeComposerPermission"
                     @open-native-permissions="onOpenNativePermissions"
                     @open-native-goal="nativeControlsRef?.open('goal')"
                     @open-native-extensions="nativeExtensionsOpen = true"
@@ -3855,6 +3861,11 @@ function onSelectSpeedMode(mode: SpeedMode): void {
 
 function onSelectCodexPermissionMode(mode: CodexPermissionMode): void {
   void updateSelectedCodexPermissionMode(mode)
+}
+
+function onSelectNativeComposerPermission(id: string): void {
+  if (!nativeThreadControls.state.profiles.some(profile => profile.id === id && profile.allowed)) return
+  void nativeThreadControls.applySettings({ permissions: id })
 }
 
 async function onOpenNativePermissions(): Promise<void> {

@@ -233,7 +233,8 @@ function positionPanel() {
   if (window.innerWidth < 768) {
     panelStyle.value = { left: '8px', right: '8px', bottom: `${Math.max(0, window.innerHeight - height - offset) + 8}px`, maxHeight: `${Math.max(120, sheetExpanded.value ? height - 32 : Math.min(height - 32, height * 0.74))}px`, ...(sheetExpanded.value ? { height: `${Math.max(120, height - 32)}px` } : {}) }
   } else {
-    const rect = trigger.value?.getBoundingClientRect()
+    const anchor = trigger.value?.getClientRects().length ? trigger.value : document.querySelector<HTMLElement>('.thread-composer-attach-trigger')
+    const rect = anchor?.getBoundingClientRect()
     const bottom = rect ? window.innerHeight - rect.top + 10 : 140
     panelStyle.value = { left: `${Math.max(16, Math.min(rect?.left ?? 16, window.innerWidth - 536))}px`, bottom: `${bottom}px`, width: '520px', maxHeight: `${Math.max(160, Math.min(640, window.innerHeight - bottom - 16))}px` }
   }

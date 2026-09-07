@@ -19,6 +19,7 @@ export type NativeThreadControllerState = {
   goal: NativeGoal | null
   queue: NativeSubmission[]
   profiles: NativePermissionProfile[]
+  permissionsLoading: boolean
   loading: boolean
   busy: boolean
   expanded: boolean
@@ -29,7 +30,7 @@ export type NativeThreadControllerState = {
 export function createNativeThreadController() {
   const state = reactive<NativeThreadControllerState>({
     threadId: '', capabilities: { ...EMPTY_NATIVE_CAPABILITIES }, mode: null, settings: null,
-    goal: null, queue: [], profiles: [], loading: false, busy: false, expanded: false, error: '', message: '',
+    goal: null, queue: [], profiles: [], permissionsLoading: false, loading: false, busy: false, expanded: false, error: '', message: '',
   })
   let selection = 0
   let settingsRevision = 0
@@ -79,14 +80,24 @@ export function createNativeThreadController() {
     }).catch(error => { if (current(threadId, revision)) state.error = message(error) })
   }
 
+  let permissionsPromise: Promise<void> | null = null
+  async function loadPermissions(): Promise<void> {
+    if (!state.threadId || !state.capabilities.permissions || state.profiles.length) return
+    if (permissionsPromise) return permissionsPromise
+    const threadId = state.threadId, revision = selection
+    state.permissionsLoading = true
+    const pending = getNativePermissionProfiles().then(profiles => {
+      if (current(threadId, revision)) state.profiles = profiles
+    }).catch(error => { if (current(threadId, revision)) state.error = message(error) })
+    permissionsPromise = pending
+    try { await pending } finally { if (permissionsPromise === pending) { permissionsPromise = null; state.permissionsLoading = false } }
+  }
+
   async function loadDetails(): Promise<void> {
-    const threadId = state.threadId
-    const revision = selection
+    const threadId = state.threadId, revision = selection
     await Promise.all([
       goalLoaded ? Promise.resolve() : loadGoal(),
-      state.capabilities.permissions ? getNativePermissionProfiles().then(profiles => {
-        if (current(threadId, revision)) state.profiles = profiles
-      }) : Promise.resolve(),
+      loadPermissions(),
     ]).catch(error => { if (current(threadId, revision)) state.error = message(error) })
   }
 
@@ -102,6 +113,8 @@ export function createNativeThreadController() {
     state.settings = null
     state.queue = []
     state.profiles = []
+    permissionsPromise = null
+    state.permissionsLoading = false
     state.error = ''
     state.message = ''
     state.busy = pendingThread === threadId && Boolean(threadId)
@@ -259,5 +272,5 @@ export function createNativeThreadController() {
   function dispose(): void { selection += 1; cancelQueueTimer(); state.threadId = ''; queuePromise = null }
   async function reload(): Promise<void> { invalidateNativeCapabilities(); await select(state.threadId) }
 
-  return { state, select, expand, refreshQueue, applySettings, saveGoal, removeGoal, changeQueueMode, enqueue, changeQueue, observe, dispose, reload }
+  return { state, select, expand, loadPermissions, refreshQueue, applySettings, saveGoal, removeGoal, changeQueueMode, enqueue, changeQueue, observe, dispose, reload }
 }

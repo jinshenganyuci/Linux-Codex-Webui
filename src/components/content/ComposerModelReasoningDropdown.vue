@@ -1,405 +1,194 @@
 <template>
   <div ref="rootRef" class="model-reasoning-dropdown">
-    <button
-      ref="triggerRef"
-      class="model-reasoning-trigger"
-      type="button"
-      :aria-label="triggerAccessibleLabel"
-      :title="triggerAccessibleLabel"
-      :aria-expanded="isOpen"
-      :aria-controls="layerId"
-      aria-haspopup="listbox"
-      :disabled="disabled"
-      @click="toggleMenu"
-    >
+    <button ref="triggerRef" class="model-reasoning-trigger" :class="{ 'is-open': isOpen }" type="button"
+      :aria-label="triggerAccessibleLabel" :title="triggerAccessibleLabel" :aria-expanded="isOpen" :aria-controls="layerId" aria-haspopup="dialog"
+      :disabled="disabled" @pointerdown.prevent @click="toggleMenu($event)">
       <IconTablerBolt v-if="isFastModeSelected" class="model-reasoning-trigger-fast-icon" />
-      <span class="model-reasoning-trigger-summary">
-        {{ compactSelectedModelLabel }} <span aria-hidden="true">·</span> {{ selectedReasoningLabel }}
-      </span>
-      <IconTablerChevronDown class="model-reasoning-trigger-chevron" />
+      <span class="model-reasoning-trigger-summary"><span class="model-reasoning-trigger-model">{{ compactSelectedModelLabel }}</span> <span>{{ selectedReasoningLabel }}</span></span>
     </button>
-
     <Teleport to="body">
-      <div
-        v-if="isOpen"
-        :id="layerId"
-        ref="layerRef"
-        class="model-reasoning-layer"
-        :class="[
-          isMobileLayout ? 'is-mobile-layout' : `is-model-${modelMenuSide}`,
-          { 'is-model-open': isModelMenuOpen },
-        ]"
-        :style="layerStyle"
-        @keydown.esc.stop.prevent="closeMenu(true)"
-      >
-        <div ref="menuRef" class="model-reasoning-menu">
-          <div class="model-reasoning-menu-label">{{ t('Reasoning') }}</div>
-          <p v-if="capabilityNotice" class="model-reasoning-capability-note">{{ capabilityNotice }}</p>
-          <ul class="model-reasoning-list" role="listbox" :aria-label="t('Reasoning')">
-            <li v-for="option in reasoningOptions" :key="option.value">
-              <button
-                class="model-reasoning-option"
-                :class="{ 'is-selected': selectedReasoningEffort === option.value }"
-                type="button"
-                role="option"
-                :aria-selected="selectedReasoningEffort === option.value"
-                @click="selectReasoning(option.value)"
-              >
-                <span>{{ option.label }}</span>
-                <span class="model-reasoning-check">{{ selectedReasoningEffort === option.value ? '✓' : '' }}</span>
-              </button>
-            </li>
-          </ul>
-
-          <div class="model-reasoning-divider" />
-
-          <button
-            class="model-reasoning-model-row"
-            :class="{ 'is-open': isModelMenuOpen }"
-            type="button"
-            @pointerenter="onModelRowPointerEnter"
-            @click="onModelRowClick"
-          >
-            <span class="model-reasoning-model-row-label">{{ selectedModelLabel || t('Model') }}</span>
-            <IconTablerChevronRight class="model-reasoning-model-row-chevron" />
-          </button>
+      <div v-if="isOpen && isMobileLayout && isModelMenuOpen" class="model-config-backdrop" :style="{ zIndex: (layerZIndex || 80) - 1 }" @pointerdown.self="closeMenu()" />
+      <div v-if="isOpen" :id="layerId" ref="layerRef" class="model-reasoning-layer" :class="{ 'is-mobile-layout': isMobileLayout, 'is-model-open': isModelMenuOpen }"
+        :style="layerStyle" role="dialog" :aria-label="isModelMenuOpen ? '模型配置' : t('Reasoning')" :aria-modal="isMobileLayout && isModelMenuOpen || undefined" @keydown="onLayerKey">
+        <div v-if="!isModelMenuOpen" class="model-reasoning-menu">
+          <div class="model-reasoning-heading">
+            <button class="model-reasoning-model-row" type="button" aria-label="选择模型与速度" @click="openModelMenu">
+              <span class="model-reasoning-current-effort" :class="{ 'is-ultra': previewEffort === 'ultra' }">{{ previewLabel }} <IconTablerChevronRight /></span>
+              <span class="model-reasoning-current-model">{{ compactSelectedModelLabel }}</span>
+            </button>
+            <button class="model-reasoning-reset" type="button" title="恢复模型默认强度" aria-label="恢复模型默认强度" :disabled="!resetEffort || disabled" @click="resetReasoning">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 4v5h5M4.8 8a8 8 0 1 1-.7 7" /></svg>
+            </button>
+          </div>
+          <ReasoningEffortSlider v-if="reasoningOptions.length" :key="selectedModel" :model-value="effectiveEffort" :options="reasoningOptions" :disabled="disabled"
+            @preview="previewEffort = $event" @update:model-value="selectReasoning" />
+          <p v-else class="model-reasoning-empty">当前模型未提供可调强度</p>
         </div>
-
-        <div v-if="isModelMenuOpen" ref="modelMenuRef" class="model-reasoning-model-menu">
-          <div class="model-reasoning-menu-label">{{ t('Model') }}</div>
-          <ul v-if="modelOptions.length > 0" class="model-reasoning-list" role="listbox" :aria-label="t('Model')">
+        <div v-else class="model-reasoning-model-menu">
+          <div class="model-config-grabber" aria-hidden="true" />
+          <div class="model-config-heading"><button type="button" aria-label="返回思考强度" @click="backToReasoning">‹</button><h2>配置</h2></div>
+          <ul class="model-reasoning-list" role="listbox" :aria-label="t('Model')">
             <li v-for="option in modelOptions" :key="option.value">
-              <button
-                class="model-reasoning-option"
-                :class="{ 'is-selected': selectedModel === option.value }"
-                type="button"
-                role="option"
-                :aria-selected="selectedModel === option.value"
-                @click="selectModel(option.value)"
-              >
-                <span>{{ option.label }}</span>
-                <span class="model-reasoning-check">{{ selectedModel === option.value ? '✓' : '' }}</span>
+              <button class="model-reasoning-option" :class="{ 'is-selected': selectedModel === option.value }" type="button" role="option"
+                :aria-selected="selectedModel === option.value" @click="selectModel(option.value)">
+                <span>{{ compactModelLabel(option.label) }}</span><span class="model-reasoning-check" aria-hidden="true">{{ selectedModel === option.value ? '✓' : '' }}</span>
               </button>
             </li>
           </ul>
-          <div v-else class="model-reasoning-empty">{{ t('No results') }}</div>
+          <div class="model-config-speed">
+            <button class="model-config-speed-trigger" type="button" :aria-expanded="speedOpen" @click="speedOpen = !speedOpen">
+              <span>速度</span><span>{{ selectedSpeedMode === 'fast' ? '快速' : '标准' }} <IconTablerChevronDown /></span>
+            </button>
+            <div v-if="speedOpen" class="model-config-speed-options" role="group" aria-label="速度">
+              <button v-for="mode in (['standard', 'fast'] as const)" :key="mode" type="button" :aria-pressed="selectedSpeedMode === mode"
+                :disabled="disabled || speedDisabled || (mode === 'fast' && !isFastModeSupported)" @click="selectSpeed(mode)">
+                <span>{{ mode === 'fast' ? '快速' : '标准' }}<small>{{ mode === 'fast' ? (isFastModeSupported ? '优先处理，用量可能更高' : '此模型暂不可用') : '默认处理速度' }}</small></span><span>{{ selectedSpeedMode === mode ? '✓' : '' }}</span>
+              </button>
+            </div>
+          </div>
+          <details v-if="capabilityNotice" class="model-config-capability"><summary>模型能力说明</summary><p>{{ capabilityNotice }}</p></details>
+          <button class="model-config-done" type="button" @click="closeMenu(true)">完成</button>
         </div>
       </div>
     </Teleport>
   </div>
 </template>
-
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import type { ReasoningEffort, SpeedMode } from '../../types/codex'
 import IconTablerBolt from '../icons/IconTablerBolt.vue'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
-
-type DropdownOption<T extends string = string> = {
-  value: T
-  label: string
-}
-
+import ReasoningEffortSlider from './ReasoningEffortSlider.vue'
+type DropdownOption<T extends string = string> = { value: T; label: string }
 const props = defineProps<{
-  selectedModel: string
-  selectedReasoningEffort: ReasoningEffort | ''
-  selectedSpeedMode: SpeedMode
-  isFastModeSupported?: boolean
-  capabilityNotice?: string
-  modelOptions: DropdownOption[]
-  reasoningOptions: DropdownOption<ReasoningEffort>[]
-  disabled?: boolean
-  openDirection?: 'up' | 'down'
-  layerZIndex?: number
+  selectedModel: string; selectedReasoningEffort: ReasoningEffort | ''; selectedSpeedMode: SpeedMode
+  defaultReasoningEffort?: ReasoningEffort | null; isFastModeSupported?: boolean; speedDisabled?: boolean; capabilityNotice?: string
+  modelOptions: DropdownOption[]; reasoningOptions: DropdownOption<ReasoningEffort>[]; disabled?: boolean; openDirection?: 'up' | 'down'; layerZIndex?: number
 }>()
-
-const emit = defineEmits<{
-  'update:selected-model': [value: string]
-  'update:selected-reasoning-effort': [value: ReasoningEffort]
-}>()
-
+const emit = defineEmits<{ 'update:selected-model': [value: string]; 'update:selected-reasoning-effort': [value: ReasoningEffort]; 'update:selected-speed-mode': [value: SpeedMode] }>()
 const { t } = useUiLanguage()
-const rootRef = ref<HTMLElement | null>(null)
-const triggerRef = ref<HTMLButtonElement | null>(null)
-const layerRef = ref<HTMLElement | null>(null)
-const menuRef = ref<HTMLElement | null>(null)
-const modelMenuRef = ref<HTMLElement | null>(null)
-const isOpen = ref(false)
-const isModelMenuOpen = ref(false)
-const isMobileLayout = ref(false)
-const modelMenuSide = ref<'left' | 'right'>('left')
-const layerStyle = ref<Record<string, string>>({})
+const rootRef = ref<HTMLElement | null>(null), triggerRef = ref<HTMLButtonElement | null>(null), layerRef = ref<HTMLElement | null>(null)
+const isOpen = ref(false), isModelMenuOpen = ref(false), isMobileLayout = ref(false), speedOpen = ref(false)
+const layerStyle = ref<Record<string,string>>({}), previewEffort = ref<ReasoningEffort | ''>('')
 const layerId = `model-reasoning-${useId()}`
-
-const selectedModelLabel = computed(() => {
-  const selected = props.modelOptions.find((option) => option.value === props.selectedModel)
-  return selected?.label || formatModelLabel(props.selectedModel)
+const compactModelLabel = (label: string) => label.trim().replace(/^gpt[-\s]?/i, '').replace(/-(astra|sol|terra|luna)/ig, (_, name: string) => ` ${name[0]!.toUpperCase()}${name.slice(1).toLowerCase()}`)
+const compactSelectedModelLabel = computed(() => compactModelLabel(props.modelOptions.find(o => o.value === props.selectedModel)?.label || props.selectedModel || t('Model')))
+const resetEffort = computed(() => props.reasoningOptions.find(o => o.value === props.defaultReasoningEffort)?.value || '')
+const effectiveEffort = computed(() => props.reasoningOptions.find(o => o.value === props.selectedReasoningEffort)?.value || resetEffort.value || props.reasoningOptions[0]?.value || '')
+const selectedReasoningLabel = computed(() => props.reasoningOptions.find(o => o.value === effectiveEffort.value)?.label || t('Thinking'))
+const previewLabel = computed(() => props.reasoningOptions.find(o => o.value === previewEffort.value)?.label || selectedReasoningLabel.value)
+const isFastModeSelected = computed(() => props.selectedSpeedMode === 'fast' && props.isFastModeSupported)
+const triggerAccessibleLabel = computed(() => `${t('Model')}: ${compactSelectedModelLabel.value}, ${t('Reasoning')}: ${selectedReasoningLabel.value}`)
+let frame = 0, observer: ResizeObserver | null = null
+function positionMenu() {
+  if (!isOpen.value || !rootRef.value) return
+  const vv = window.visualViewport, leftEdge = vv?.offsetLeft || 0, topEdge = vv?.offsetTop || 0, width = vv?.width || innerWidth, height = vv?.height || innerHeight
+  const mobile = width < 768; isMobileLayout.value = mobile
+  const config = mobile && isModelMenuOpen.value, menuWidth = config ? width : Math.min(mobile ? 360 : 282, width - 24)
+  const rect = rootRef.value.getBoundingClientRect(), menuHeight = Math.min(layerRef.value?.offsetHeight || 144, height - 20)
+  const left = config ? leftEdge : Math.max(leftEdge + 12, Math.min(rect.right - menuWidth, leftEdge + width - menuWidth - 12))
+  const top = config ? topEdge + height - menuHeight : Math.max(topEdge + 10, Math.min(props.openDirection === 'down' ? rect.bottom + 8 : rect.top - menuHeight - 12, topEdge + height - menuHeight - 10))
+  layerStyle.value = { position:'fixed',left:`${left}px`,top:`${top}px`,width:`${menuWidth}px`,maxHeight:`${height - 20}px`,zIndex:String(props.layerZIndex || 80) }
+}
+function schedulePosition() { if (!frame && isOpen.value) frame = requestAnimationFrame(() => { frame = 0; positionMenu() }) }
+function closeMenu(restoreFocus = false) { isOpen.value = false; isModelMenuOpen.value = false; speedOpen.value = false; if (restoreFocus) void nextTick(() => triggerRef.value?.focus({preventScroll:true})) }
+function toggleMenu(event?: MouseEvent) { if (!props.disabled) { if (isOpen.value) closeMenu(); else { previewEffort.value = effectiveEffort.value; isOpen.value = true; if (event?.detail === 0) void nextTick(() => layerRef.value?.querySelector<HTMLElement>('[role=slider], button')?.focus({preventScroll:true})) } } }
+function openModelMenu() { isModelMenuOpen.value = true; void nextTick(() => layerRef.value?.querySelector<HTMLButtonElement>('.model-reasoning-option.is-selected')?.focus({preventScroll:true})) }
+function backToReasoning() { isModelMenuOpen.value = false; speedOpen.value = false; void nextTick(() => layerRef.value?.querySelector<HTMLButtonElement>('.model-reasoning-model-row')?.focus({preventScroll:true})) }
+function selectReasoning(value: ReasoningEffort) { if (!props.disabled && props.reasoningOptions.some(o => o.value === value)) { previewEffort.value = value; emit('update:selected-reasoning-effort', value) } }
+function resetReasoning() { if (resetEffort.value) selectReasoning(resetEffort.value) }
+function selectModel(value: string) { if (!props.disabled) emit('update:selected-model',value) }
+function selectSpeed(value: SpeedMode) { if (props.disabled || props.speedDisabled || (value === 'fast' && !props.isFastModeSupported)) return; if (value !== props.selectedSpeedMode) emit('update:selected-speed-mode',value); speedOpen.value = false }
+function outside(event: Event) { if (!(event.target instanceof Node) || rootRef.value?.contains(event.target) || layerRef.value?.contains(event.target)) return; closeMenu() }
+function globalKey(event: Event) { if (event instanceof KeyboardEvent && event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); closeMenu(true) } }
+function onLayerKey(event: KeyboardEvent) {
+  if (event.key === 'Escape') { event.stopPropagation(); event.preventDefault(); if (speedOpen.value) speedOpen.value = false; else if (isModelMenuOpen.value) backToReasoning(); else closeMenu(true) }
+  if (event.key === 'Tab') {
+    const elements = [...layerRef.value!.querySelectorAll<HTMLElement>('button:not(:disabled), [tabindex="0"], summary')].filter(el => el.getClientRects().length)
+    const first = elements[0], last = elements.at(-1)
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+    if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+  }
+}
+function listeners(add: boolean) {
+  const method = add ? 'addEventListener' : 'removeEventListener'
+  window[method]('pointerdown',outside); window[method]('keydown',globalKey); window[method]('resize',schedulePosition); window[method]('scroll',schedulePosition,true)
+  window.visualViewport?.[method]('resize',schedulePosition); window.visualViewport?.[method]('scroll',schedulePosition)
+}
+watch(isOpen, async open => {
+  listeners(open); observer?.disconnect(); observer = null
+  if (!open) { cancelAnimationFrame(frame); frame = 0; return }
+  positionMenu(); await nextTick(); if (!isOpen.value) return
+  positionMenu(); observer = new ResizeObserver(schedulePosition); if (layerRef.value) observer.observe(layerRef.value)
 })
-
-const compactSelectedModelLabel = computed(() => compactModelLabel(selectedModelLabel.value || t('Model')))
-
-const selectedReasoningLabel = computed(() => {
-  const selected = props.reasoningOptions.find((option) => option.value === props.selectedReasoningEffort)
-  return selected?.label || t('Thinking')
-})
-
-const isFastModeSelected = computed(() => props.selectedSpeedMode === 'fast' && props.isFastModeSupported === true)
-
-const triggerAccessibleLabel = computed(() =>
-  `${t('Model')}: ${selectedModelLabel.value || t('Model')}, ${t('Reasoning')}: ${selectedReasoningLabel.value}${isFastModeSelected.value ? `, ${t('Fast mode')}: ${t('enabled')}` : ''}`,
-)
-
-function formatModelLabel(modelId: string): string {
-  return modelId.trim().replace(/^gpt/i, 'GPT')
-}
-
-function compactModelLabel(label: string): string {
-  const trimmed = label.trim()
-  return trimmed.replace(/^GPT[-\s]?/i, '')
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value))
-}
-
-function updateMenuPosition(): void {
-  if (!isOpen.value) return
-  const root = rootRef.value
-  if (!root || typeof window === 'undefined') return
-
-  const rect = root.getBoundingClientRect()
-  const visualViewport = window.visualViewport
-  const viewportLeft = visualViewport?.offsetLeft ?? 0
-  const viewportTop = visualViewport?.offsetTop ?? 0
-  const viewportWidth = visualViewport?.width ?? window.innerWidth
-  const viewportHeight = visualViewport?.height ?? window.innerHeight
-  const viewportPadding = 8
-  const gap = 8
-  const mobile = viewportWidth < 640
-  isMobileLayout.value = mobile
-
-  const mainWidth = mobile ? Math.min(292, viewportWidth - viewportPadding * 2) : 196
-  const modelWidth = mobile ? mainWidth : 232
-  const modelSide = rect.right + gap + modelWidth + viewportPadding <= viewportLeft + viewportWidth ? 'right' : 'left'
-  modelMenuSide.value = modelSide
-
-  let left = rect.right - mainWidth
-  if (!mobile && isModelMenuOpen.value && modelSide === 'left') {
-    left = Math.max(left, viewportLeft + viewportPadding + modelWidth + gap)
-  }
-  if (!mobile && isModelMenuOpen.value && modelSide === 'right') {
-    left = Math.min(left, viewportLeft + viewportWidth - mainWidth - modelWidth - gap - viewportPadding)
-  }
-  left = clamp(left, viewportLeft + viewportPadding, Math.max(viewportLeft + viewportPadding, viewportLeft + viewportWidth - mainWidth - viewportPadding))
-
-  const layerHeight = layerRef.value?.offsetHeight ?? menuRef.value?.offsetHeight ?? 260
-  let top = props.openDirection === 'down'
-    ? rect.bottom + gap
-    : rect.top - layerHeight - gap
-  if (top + layerHeight > viewportTop + viewportHeight - viewportPadding) {
-    top = viewportTop + viewportHeight - layerHeight - viewportPadding
-  }
-  top = Math.max(viewportTop + viewportPadding, top)
-
-  layerStyle.value = {
-    position: 'fixed',
-    left: `${left}px`,
-    top: `${top}px`,
-    width: `${mainWidth}px`,
-    ...(typeof props.layerZIndex === 'number' ? { zIndex: String(props.layerZIndex) } : {}),
-  }
-}
-
-function toggleMenu(): void {
-  if (props.disabled) return
-  isOpen.value = !isOpen.value
-  if (!isOpen.value) {
-    isModelMenuOpen.value = false
-  }
-}
-
-function closeMenu(restoreFocus = false): void {
-  isOpen.value = false
-  isModelMenuOpen.value = false
-  if (restoreFocus) {
-    void nextTick(() => triggerRef.value?.focus({ preventScroll: true }))
-  }
-}
-
-function openModelMenu(): void {
-  if (props.disabled) return
-  isModelMenuOpen.value = true
-}
-
-function onModelRowPointerEnter(event: PointerEvent): void {
-  if (isMobileLayout.value) return
-  if (event.pointerType !== 'mouse') return
-  openModelMenu()
-}
-
-function onModelRowClick(): void {
-  if (props.disabled) return
-  if (!isMobileLayout.value) {
-    openModelMenu()
-    return
-  }
-  isModelMenuOpen.value = !isModelMenuOpen.value
-}
-
-function selectReasoning(value: ReasoningEffort): void {
-  emit('update:selected-reasoning-effort', value)
-  closeMenu(true)
-}
-
-function selectModel(value: string): void {
-  emit('update:selected-model', value)
-  closeMenu(true)
-}
-
-function onDocumentPointerDown(event: PointerEvent): void {
-  if (!isOpen.value) return
-  const target = event.target
-  if (!(target instanceof Node)) return
-  if (rootRef.value?.contains(target)) return
-  if (layerRef.value?.contains(target)) return
-  closeMenu()
-}
-
-function onWindowLayoutChange(): void {
-  if (!isOpen.value) return
-  updateMenuPosition()
-}
-
-watch([isOpen, isModelMenuOpen], ([open]) => {
-  if (!open) return
-  void nextTick(() => {
-    updateMenuPosition()
-    window.requestAnimationFrame(updateMenuPosition)
-  })
-})
-
-onMounted(() => {
-  window.addEventListener('pointerdown', onDocumentPointerDown)
-  window.addEventListener('resize', onWindowLayoutChange)
-  window.addEventListener('scroll', onWindowLayoutChange, true)
-  window.visualViewport?.addEventListener('resize', onWindowLayoutChange)
-  window.visualViewport?.addEventListener('scroll', onWindowLayoutChange)
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('pointerdown', onDocumentPointerDown)
-  window.removeEventListener('resize', onWindowLayoutChange)
-  window.removeEventListener('scroll', onWindowLayoutChange, true)
-  window.visualViewport?.removeEventListener('resize', onWindowLayoutChange)
-  window.visualViewport?.removeEventListener('scroll', onWindowLayoutChange)
-})
+watch([isModelMenuOpen, speedOpen], () => { void nextTick(schedulePosition) })
+watch(effectiveEffort, value => { previewEffort.value = value })
+watch(() => props.disabled, value => { if (value) closeMenu() })
+onBeforeUnmount(() => { listeners(false); observer?.disconnect(); cancelAnimationFrame(frame) })
 </script>
-
 <style scoped>
-@reference "tailwindcss";
-
-.model-reasoning-dropdown {
-  @apply relative inline-flex min-w-0 w-full;
-}
-
-.model-reasoning-trigger {
-  @apply inline-flex min-h-7 w-full min-w-0 items-center gap-1 border-0 bg-transparent px-0 py-0.5 text-sm leading-tight text-zinc-500 outline-none transition hover:text-zinc-800 disabled:cursor-not-allowed disabled:text-zinc-400;
-}
-
-.model-reasoning-trigger-fast-icon {
-  @apply -ml-0.5 h-3.5 w-3.5 shrink-0 text-orange-500;
-}
-
-.model-reasoning-trigger-summary {
-  @apply min-w-0 flex-1 truncate whitespace-nowrap pb-px text-left;
-}
-
-.model-reasoning-trigger-chevron {
-  @apply mt-px h-3.5 w-3.5 shrink-0 text-zinc-500;
-}
-
-.model-reasoning-layer {
-  @apply z-50;
-}
-
-.model-reasoning-menu,
-.model-reasoning-model-menu {
-  @apply rounded-lg border border-zinc-200 bg-white p-1 shadow-lg;
-}
-
-.model-reasoning-menu-label {
-  @apply px-2 py-1 text-xs text-zinc-500;
-}
-
-.model-reasoning-list {
-  @apply m-0 max-h-64 list-none overflow-y-auto p-0;
-}
-
-.model-reasoning-option,
-.model-reasoning-model-row {
-  @apply flex min-h-8 w-full items-center justify-between gap-3 rounded-lg border-0 bg-transparent px-2 py-1 text-left text-sm text-zinc-700 transition hover:bg-zinc-100;
-}
-
-.model-reasoning-option.is-selected,
-.model-reasoning-model-row.is-open {
-  @apply bg-zinc-100 text-zinc-900;
-}
-
-.model-reasoning-check {
-  @apply w-4 shrink-0 text-right text-zinc-600;
-}
-
-.model-reasoning-divider {
-  @apply my-1 h-px bg-zinc-100;
-}
-
-.model-reasoning-model-row-label {
-  @apply min-w-0 truncate;
-}
-
-.model-reasoning-model-row-chevron {
-  @apply h-4 w-4 shrink-0 text-zinc-500;
-}
-
-.model-reasoning-model-menu {
-  @apply w-[14.5rem];
-}
-
-.model-reasoning-layer:not(.is-mobile-layout) .model-reasoning-model-menu {
-  @apply absolute bottom-0;
-}
-
-.model-reasoning-layer.is-model-left .model-reasoning-model-menu {
-  right: calc(100% + 0.5rem);
-}
-
-.model-reasoning-layer.is-model-right .model-reasoning-model-menu {
-  left: calc(100% + 0.5rem);
-}
-
-.model-reasoning-layer.is-mobile-layout .model-reasoning-model-menu {
-  @apply mt-1 w-full;
-}
-
-.model-reasoning-layer.is-mobile-layout.is-model-open .model-reasoning-menu {
-  @apply hidden;
-}
-
-.model-reasoning-layer.is-mobile-layout.is-model-open .model-reasoning-model-menu {
-  @apply mt-0;
-}
-
-.model-reasoning-empty {
-  @apply px-2 py-2 text-sm text-zinc-500;
-}
-
-@media (hover: none), (pointer: coarse) {
-  .model-reasoning-trigger,
-  .model-reasoning-option,
-  .model-reasoning-model-row {
-    min-height: 2.75rem;
-  }
+.model-reasoning-dropdown { display:inline-flex; min-width:0; }
+.model-reasoning-trigger { display:inline-flex; align-items:center; gap:4px; min-height:32px; padding:4px 8px; border:0; background:transparent; border-radius:999px; color:var(--mac-muted); white-space:nowrap; cursor:pointer; }
+.model-reasoning-trigger:hover, .model-reasoning-trigger.is-open { background:var(--mac-hover); }
+.model-reasoning-trigger-summary { overflow:hidden; text-overflow:ellipsis; }
+.model-reasoning-trigger-fast-icon { width:16px; height:16px; flex-shrink:0; }
+.model-reasoning-layer { color:var(--mac-text); overflow:auto; overscroll-behavior:contain; border-radius:22px; }
+.model-reasoning-menu { padding:12px 16px 10px; }
+.model-reasoning-heading { position:relative; display:flex; justify-content:center; min-height:54px; }
+.model-reasoning-model-row { display:flex; flex-direction:column; align-items:center; gap:2px; border:0; padding:0 34px 6px; background:transparent; cursor:pointer; }
+.model-reasoning-current-effort { display:inline-flex; align-items:center; gap:2px; color:#3295ff; font-size:15px; font-weight:600; }
+.model-reasoning-current-effort.is-ultra { color:#9454ff; }
+.model-reasoning-current-effort svg { width:14px; height:14px; color:var(--mac-muted); }
+.model-reasoning-current-model { color:var(--mac-muted); font-size:13px; }
+.model-reasoning-reset { position:absolute; top:0; right:-6px; display:grid; place-items:center; width:32px; height:32px; border:0; border-radius:50%; background:transparent; color:var(--mac-muted); cursor:pointer; }
+.model-reasoning-reset svg { width:19px; height:19px; }
+.model-reasoning-reset:hover { background:var(--mac-hover); }
+.model-reasoning-reset:disabled { opacity:.4; cursor:default; }
+.model-reasoning-model-menu { padding:12px; }
+.model-config-heading { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.model-config-heading h2 { font-size:14px; font-weight:500; color:var(--mac-muted); margin:0; }
+.model-config-heading button { border:0; background:transparent; color:var(--mac-text); font-size:24px; width:28px; height:28px; border-radius:50%; cursor:pointer; }
+.model-reasoning-list { margin:0; padding:0; list-style:none; max-height: min(40vh,360px); overflow:auto; }
+.model-reasoning-option { display:flex; align-items:center; justify-content:space-between; width:100%; padding:8px 10px; min-height:36px; border:0; background:transparent; border-radius:10px; color:var(--mac-text); text-align:left; font-size:14px; cursor:pointer; }
+.model-reasoning-option:hover { background:var(--mac-hover); }
+.model-reasoning-check { font-size:19px; color:var(--mac-muted); }
+.model-config-speed { position:relative; margin-top:12px; }
+.model-config-speed-trigger { display:flex; align-items:center; justify-content:space-between; width:100%; border:0; border-radius:12px; background:var(--mac-hover); color:var(--mac-text); padding:10px 12px; font-size:14px; cursor:pointer; }
+.model-config-speed-trigger > span:last-child { display:flex; align-items:center; gap:8px; color:var(--mac-muted); }
+.model-config-speed-trigger svg { width:16px; height:16px; }
+.model-config-speed-options { border:1px solid var(--mac-border); border-radius:14px; padding:4px; margin-top:6px; }
+.model-config-speed-options button { display:flex; align-items:center; justify-content:space-between; width:100%; padding:9px; border:0; border-radius:10px; background:transparent; color:var(--mac-text); text-align:left; cursor:pointer; }
+.model-config-speed-options button:hover { background:var(--mac-hover); }
+.model-config-speed-options button:disabled { opacity:.45; cursor:default; }
+.model-config-speed-options small { display:block; color:var(--mac-muted); font-size:12px; margin-top:3px; }
+.model-config-capability { margin:10px 6px; font-size:12px; color:var(--mac-muted); }
+.model-config-capability p { margin:6px 0; }
+.model-config-done { display:block; margin-top:12px; width:100%; padding:10px; border:0; border-radius:999px; background:var(--mac-text); color:var(--mac-main); cursor:pointer; font-weight:600; }
+.model-config-backdrop { position:fixed; inset:0; background:rgb(0 0 0 / 15%); }
+.model-config-grabber { display:none; }
+.model-reasoning-empty { font-size:13px; color:var(--mac-muted); text-align:center; }
+@media (max-width:767px) {
+  .model-reasoning-trigger { min-height:44px; padding-inline:4px; font-size:14px; }
+  .model-reasoning-trigger-model { color:var(--mac-text); font-weight:600; }
+  .model-reasoning-menu { padding:18px 20px 16px; }
+  .model-reasoning-heading { min-height:60px; }
+  .model-reasoning-model-row { flex-direction:row-reverse; padding:0 20px 12px; gap:6px; }
+  .model-reasoning-current-effort, .model-reasoning-current-model { font-size:18px; font-weight:600; }
+  .model-reasoning-current-model { color:var(--mac-text); }
+  .model-reasoning-current-effort { color:var(--mac-muted); }
+  .model-reasoning-reset { top:-8px; right:-14px; width:36px; height:36px; }
+  .model-reasoning-model-menu { padding:8px 24px max(20px,env(safe-area-inset-bottom)); }
+  .model-config-grabber { display:block; margin:0 auto 12px; width:36px; height:4px; border-radius:99px; background:var(--mac-border-strong); }
+  .model-config-heading { position:relative; justify-content:center; margin:8px 0 24px; }
+  .model-config-heading h2 { font-size:20px; font-weight:650; color:var(--mac-text); }
+  .model-config-heading button { position:absolute; left:0; }
+  .model-reasoning-list { border-radius:22px; max-height:46vh; }
+  .model-reasoning-option { padding:14px 16px; min-height:54px; font-size:17px; border-radius:0; background:var(--mac-hover); border-bottom:2px solid var(--mac-solid); }
+  .model-reasoning-check { font-size:24px; }
+  .model-config-speed { margin-top:24px; }
+  .model-config-speed-trigger { padding:16px; border-radius:22px; font-size:17px; }
+  .model-config-done { min-height:50px; margin-top:20px; font-size:18px; }
 }
 </style>

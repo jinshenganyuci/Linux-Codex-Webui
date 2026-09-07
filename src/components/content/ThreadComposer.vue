@@ -206,8 +206,30 @@
 
           <div v-if="isAttachMenuOpen" class="thread-composer-attach-menu">
             <div class="thread-composer-menu-label">添加</div>
+            <button v-if="!isMobile && isDictationSupported" class="thread-composer-attach-item" type="button" :disabled="isInteractionDisabled" @click="isAttachMenuOpen = false; onDictationToggle()">语音输入</button>
+            <ComposerPermissionDropdown v-if="isMobile" class="thread-composer-mobile-permission"
+              :native="nativePermissionsAvailable" :native-profile="nativePermissionProfile" :profiles="nativePermissionProfiles || []"
+              :model-value="selectedCodexPermissionMode" :disabled="isPermissionModeDisabled || nativePermissionBusy" :error="nativePermissionError" :loading="nativePermissionLoading"
+              @opened="emit('load-native-permissions')" @update:model-value="onPermissionModeSelect" @select-native="emit('select-native-permission', $event)" />
+            <ComposerSearchDropdown
+              class="thread-composer-control thread-composer-skill-control thread-composer-skill-menu-control"
+              :options="skillDropdownOptions"
+              :selected-values="selectedSkillPaths"
+              :placeholder="t('Skills')"
+              :search-placeholder="t('Search skills and prompts...')"
+              :create-label="t('Add new prompt')"
+              :allow-remove="true"
+              :remove-label="t('Remove prompt')"
+              :display-label-override="isMobile ? mobileSkillSummary : undefined"
+              :auto-focus-search="!isMobile"
+              open-direction="up"
+              :disabled="isComposerConfigDisabled"
+              @toggle="onSkillDropdownToggle"
+              @create="onCreatePrompt"
+              @remove="onRemovePrompt"
+            />
             <template v-if="$slots['session-controls']">
-              <button v-if="isMobile" type="button" class="thread-composer-attach-item" @click="isAttachMenuOpen = false; emit('open-native-permissions')">会话控制 <span class="thread-composer-menu-description">运行、权限与队列</span></button>
+              <button type="button" class="thread-composer-attach-item" @click="isAttachMenuOpen = false; emit('open-native-permissions')">会话控制 <span class="thread-composer-menu-description">运行、权限与队列</span></button>
               <button type="button" class="thread-composer-attach-item" @click="isAttachMenuOpen = false; emit('open-native-goal')">目标 <span class="thread-composer-menu-description">设置持续完成的任务</span></button>
               <button type="button" class="thread-composer-attach-item" @click="isAttachMenuOpen = false; emit('open-native-extensions')">扩展 <span class="thread-composer-menu-description">插件、语音与远控</span></button>
             </template>
@@ -323,78 +345,20 @@
           </div>
 
           <template v-if="!isDictationRecording">
-            <slot name="session-controls" />
-            <button
-              v-if="!isMobile && nativePermissionsAvailable"
-              type="button"
-              class="thread-composer-control thread-composer-permission-control"
-              :disabled="disabled"
-              title="本会话的原生权限；不修改全局默认"
-              @click="emit('open-native-permissions')"
-            >{{ nativePermissionProfile || '会话权限' }}</button>
-            <ComposerDropdown
-              v-else-if="!isMobile"
-              class="thread-composer-control thread-composer-permission-control"
-              :model-value="selectedCodexPermissionMode"
-              :options="permissionModeOptions"
-              :placeholder="t('Codex permissions')"
-              open-direction="up"
-              :disabled="isPermissionModeDisabled"
-              @update:model-value="onPermissionModeSelect"
+            <div class="thread-composer-session-slot"><slot name="session-controls" /></div>
+            <ComposerPermissionDropdown
+              v-if="!isMobile" class="thread-composer-control thread-composer-permission-control"
+              :native="nativePermissionsAvailable" :native-profile="nativePermissionProfile" :profiles="nativePermissionProfiles || []"
+              :model-value="selectedCodexPermissionMode" :disabled="isPermissionModeDisabled || nativePermissionBusy"
+              :error="nativePermissionError" :loading="nativePermissionLoading" @opened="emit('load-native-permissions')"
+              @update:model-value="onPermissionModeSelect" @select-native="emit('select-native-permission', $event)"
             />
 
-            <ComposerSearchDropdown
-              class="thread-composer-control thread-composer-skill-control"
-              :options="skillDropdownOptions"
-              :selected-values="selectedSkillPaths"
-              :placeholder="t('Skills')"
-              :search-placeholder="t('Search skills and prompts...')"
-              :create-label="t('Add new prompt')"
-              :allow-remove="true"
-              :remove-label="t('Remove prompt')"
-              :display-label-override="isMobile ? mobileSkillSummary : undefined"
-              :auto-focus-search="!isMobile"
-              open-direction="up"
-              :disabled="isComposerConfigDisabled"
-              @toggle="onSkillDropdownToggle"
-              @create="onCreatePrompt"
-              @remove="onRemovePrompt"
-            />
+
           </template>
         </div>
 
-        <button
-          v-if="isMobile && !isDictationRecording"
-          ref="mobileSettingsTriggerRef"
-          class="thread-composer-mobile-settings-trigger"
-          type="button"
-          :aria-label="mobileComposerSettingsAccessibleLabel"
-          :aria-expanded="isMobileSettingsOpen"
-          aria-controls="thread-composer-mobile-settings-sheet"
-          aria-haspopup="dialog"
-          :disabled="isComposerConfigDisabled"
-          @click="openMobileSettings"
-        >
-          <IconTablerSettings class="thread-composer-mobile-settings-icon" />
-          <span class="thread-composer-mobile-settings-summary">{{ mobileComposerSettingsSummary }}</span>
-          <IconTablerChevronDown class="thread-composer-mobile-settings-chevron" />
-        </button>
 
-        <ComposerModelReasoningDropdown
-          v-if="!isDictationRecording && !isMobile"
-          class="thread-composer-control thread-composer-model-reasoning-control"
-          :selected-model="selectedModel"
-          :selected-reasoning-effort="selectedReasoningEffort"
-          :selected-speed-mode="selectedSpeedMode"
-          :is-fast-mode-supported="isFastModeSupported"
-          :model-options="modelOptions"
-          :reasoning-options="reasoningOptions"
-          open-direction="up"
-          :disabled="isComposerConfigDisabled"
-          :capability-notice="modelCapabilityNotice"
-          @update:selected-model="onModelSelect"
-          @update:selected-reasoning-effort="onReasoningEffortSelect"
-        />
 
         <button
           v-if="!isDictationRecording && isPlanModeSelected"
@@ -432,8 +396,70 @@
             {{ dictationDurationLabel }}
           </span>
 
+          <div
+            v-if="contextUsageView"
+            ref="contextUsageRootRef"
+            class="thread-composer-context"
+            :class="[
+              `is-${contextUsageView.tone}`,
+              { 'is-open': isContextDetailsOpen },
+            ]"
+            @keydown.esc.stop.prevent="closeContextUsageDetails"
+          >
+            <button
+              class="thread-composer-context-button"
+              type="button"
+              :style="contextUsageRingStyle"
+              :aria-label="contextUsageButtonAriaLabel"
+              :aria-expanded="isContextDetailsOpen"
+              @click.stop="toggleContextUsageDetails"
+            >
+              <svg class="thread-composer-context-ring" viewBox="0 0 20 20" fill="none" stroke-width="3" aria-hidden="true"><circle cx="10" cy="10" r="7" /><circle cx="10" cy="10" r="7" pathLength="100" :stroke-dasharray="`${contextUsageUsedPercent} 100`" stroke-linecap="round" /></svg>
+              <span class="thread-composer-context-button-label">{{ contextUsagePercentLabel }}</span>
+            </button>
+            <div
+              class="thread-composer-context-popover"
+              :class="{ 'is-detail': isContextDetailsOpen }"
+              role="status"
+            >
+              <div class="thread-composer-context-popover-title">{{ t('Context') }}</div>
+              <div class="thread-composer-context-popover-summary">
+                {{ contextUsageView.summaryText }}
+              </div>
+              <dl v-if="isContextDetailsOpen" class="thread-composer-context-popover-list">
+                <template v-for="row in contextUsageView.detailRows" :key="row.label">
+                  <dt>{{ row.label }}</dt>
+                  <dd>{{ row.value }}</dd>
+                </template>
+              </dl>
+              <div v-else class="thread-composer-context-popover-hint">
+                {{ contextUsageView.detailRows[0]?.value }}
+              </div>
+            </div>
+          </div>
+
+        <ComposerModelReasoningDropdown
+          :key="activeThreadId"
+          v-if="!isDictationRecording"
+          class="thread-composer-control thread-composer-model-reasoning-control"
+          :selected-model="selectedModel"
+          :selected-reasoning-effort="selectedReasoningEffort"
+          :selected-speed-mode="selectedSpeedMode"
+          :is-fast-mode-supported="isFastModeSupported"
+          :model-options="modelOptions"
+          :reasoning-options="reasoningOptions"
+          :default-reasoning-effort="modelCapabilities?.[selectedModel]?.defaultReasoningEffort"
+          :speed-disabled="isSpeedToggleDisabled"
+          open-direction="up"
+          :disabled="isComposerConfigDisabled"
+          :capability-notice="modelCapabilityNotice"
+          @update:selected-speed-mode="onSpeedModeSelect"
+          @update:selected-model="onModelSelect"
+          @update:selected-reasoning-effort="onReasoningEffortSelect"
+        />
+
           <button
-            v-if="isDictationSupported"
+            v-if="isDictationSupported && (isMobile || isDictationRecording)"
             class="thread-composer-mic"
             :class="{
               'thread-composer-mic--active': dictationState === 'recording',
@@ -454,46 +480,6 @@
             <IconTablerMicrophone v-else class="thread-composer-mic-icon" />
           </button>
 
-          <div
-            v-if="contextUsageView"
-            ref="contextUsageRootRef"
-            class="thread-composer-context"
-            :class="[
-              `is-${contextUsageView.tone}`,
-              { 'is-open': isContextDetailsOpen },
-            ]"
-            @keydown.esc.stop.prevent="closeContextUsageDetails"
-          >
-            <button
-              class="thread-composer-context-button"
-              type="button"
-              :style="contextUsageRingStyle"
-              :aria-label="contextUsageButtonAriaLabel"
-              :aria-expanded="isContextDetailsOpen"
-              @click.stop="toggleContextUsageDetails"
-            >
-              <span class="thread-composer-context-button-label">{{ contextUsagePercentLabel }}</span>
-            </button>
-            <div
-              class="thread-composer-context-popover"
-              :class="{ 'is-detail': isContextDetailsOpen }"
-              role="status"
-            >
-              <div class="thread-composer-context-popover-title">{{ t('Context') }}</div>
-              <div class="thread-composer-context-popover-summary">
-                {{ contextUsageView.summaryText }}
-              </div>
-              <dl v-if="isContextDetailsOpen" class="thread-composer-context-popover-list">
-                <template v-for="row in contextUsageView.detailRows" :key="row.label">
-                  <dt>{{ row.label }}</dt>
-                  <dd>{{ row.value }}</dd>
-                </template>
-              </dl>
-              <div v-else class="thread-composer-context-popover-hint">
-                {{ t('Click for context details') }}
-              </div>
-            </div>
-          </div>
 
           <button
             v-if="isTurnInProgress && !hasSubmitContent"
@@ -533,167 +519,7 @@
         </div>
       </div>
     </Teleport>
-    <Teleport to="body">
-      <Transition name="mobile-settings">
-        <div
-          v-if="isMobileSettingsOpen"
-          class="thread-composer-mobile-settings-backdrop"
-          @click.self="closeMobileSettings"
-        >
-          <section
-            id="thread-composer-mobile-settings-sheet"
-            ref="mobileSettingsSheetRef"
-            class="thread-composer-mobile-settings-sheet"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="thread-composer-mobile-settings-title"
-            tabindex="-1"
-            @keydown="onMobileSettingsKeydown"
-          >
-            <div class="thread-composer-mobile-settings-grabber" aria-hidden="true" />
-            <div class="thread-composer-mobile-settings-header">
-              <button
-                v-if="mobileSettingsView !== 'root'"
-                ref="mobileSettingsBackRef"
-                class="thread-composer-mobile-settings-back"
-                type="button"
-                :aria-label="t('Back')"
-                :title="t('Back')"
-                @click="openMobileSettingsView('root')"
-              >
-                <IconTablerChevronLeft class="thread-composer-mobile-settings-back-icon" />
-              </button>
-              <div class="thread-composer-mobile-settings-heading">
-                <p class="thread-composer-mobile-settings-eyebrow">{{ t('Settings') }}</p>
-                <h2 id="thread-composer-mobile-settings-title" class="thread-composer-mobile-settings-title">
-                  {{ mobileSettingsTitle }}
-                </h2>
-              </div>
-              <button
-                ref="mobileSettingsCloseRef"
-                class="thread-composer-mobile-settings-close"
-                type="button"
-                :aria-label="t('Close')"
-                :title="t('Close')"
-                @click="closeMobileSettings"
-              >
-                <IconTablerX class="thread-composer-mobile-settings-close-icon" />
-              </button>
-            </div>
 
-            <div v-if="mobileSettingsView === 'root'" class="thread-composer-mobile-settings-list">
-              <button
-                ref="mobileSettingsFirstRowRef"
-                class="thread-composer-mobile-settings-row"
-                type="button"
-                :disabled="isPermissionModeDisabled"
-                @click="openMobileSettingsView('permission')"
-              >
-                <span class="thread-composer-mobile-settings-row-copy">
-                  <span class="thread-composer-mobile-settings-row-label">{{ nativePermissionsAvailable ? '会话权限' : t('Codex permissions') }}</span>
-                  <span class="thread-composer-mobile-settings-row-value">{{ nativePermissionsAvailable ? nativePermissionProfile || '待 CLI 确认' : selectedPermissionLabel }}</span>
-                </span>
-                <IconTablerChevronRight class="thread-composer-mobile-settings-row-chevron" />
-              </button>
-              <button
-                class="thread-composer-mobile-settings-row"
-                type="button"
-                :disabled="isComposerConfigDisabled"
-                @click="openMobileSettingsView('model')"
-              >
-                <span class="thread-composer-mobile-settings-row-copy">
-                  <span class="thread-composer-mobile-settings-row-label">{{ t('Model') }}</span>
-                  <span class="thread-composer-mobile-settings-row-value">{{ selectedModelLabel || t('Model') }}</span>
-                </span>
-                <IconTablerChevronRight class="thread-composer-mobile-settings-row-chevron" />
-              </button>
-              <button
-                class="thread-composer-mobile-settings-row"
-                type="button"
-                :disabled="isComposerConfigDisabled"
-                @click="openMobileSettingsView('reasoning')"
-              >
-                <span class="thread-composer-mobile-settings-row-copy">
-                  <span class="thread-composer-mobile-settings-row-label">{{ t('Reasoning') }}</span>
-                  <span class="thread-composer-mobile-settings-row-value">{{ selectedReasoningLabel }}</span>
-                </span>
-                <IconTablerChevronRight class="thread-composer-mobile-settings-row-chevron" />
-              </button>
-            </div>
-
-            <div
-              v-else-if="mobileSettingsView === 'permission'"
-              class="thread-composer-mobile-settings-options"
-              role="listbox"
-              :aria-label="t('Codex permissions')"
-            >
-              <button
-                v-for="option in permissionModeOptions"
-                :key="option.value"
-                class="thread-composer-mobile-settings-option"
-                :class="{ 'is-selected': selectedCodexPermissionMode === option.value }"
-                type="button"
-                role="option"
-                :aria-selected="selectedCodexPermissionMode === option.value"
-                @click="selectMobilePermission(option.value)"
-              >
-                <span>{{ option.label }}</span>
-                <span class="thread-composer-mobile-settings-check" aria-hidden="true">
-                  {{ selectedCodexPermissionMode === option.value ? '✓' : '' }}
-                </span>
-              </button>
-            </div>
-
-            <div
-              v-else-if="mobileSettingsView === 'model'"
-              class="thread-composer-mobile-settings-options"
-              role="listbox"
-              :aria-label="t('Model')"
-            >
-              <button
-                v-for="option in modelOptions"
-                :key="option.value"
-                class="thread-composer-mobile-settings-option"
-                :class="{ 'is-selected': selectedModel === option.value }"
-                type="button"
-                role="option"
-                :aria-selected="selectedModel === option.value"
-                @click="selectMobileModel(option.value)"
-              >
-                <span>{{ option.label }}</span>
-                <span class="thread-composer-mobile-settings-check" aria-hidden="true">
-                  {{ selectedModel === option.value ? '✓' : '' }}
-                </span>
-              </button>
-            </div>
-
-            <div
-              v-else
-              class="thread-composer-mobile-settings-options"
-              role="listbox"
-              :aria-label="t('Reasoning')"
-            >
-              <p class="model-reasoning-capability-note">{{ modelCapabilityNotice }}</p>
-              <button
-                v-for="option in reasoningOptions"
-                :key="option.value"
-                class="thread-composer-mobile-settings-option"
-                :class="{ 'is-selected': selectedReasoningEffort === option.value }"
-                type="button"
-                role="option"
-                :aria-selected="selectedReasoningEffort === option.value"
-                @click="selectMobileReasoning(option.value)"
-              >
-                <span>{{ option.label }}</span>
-                <span class="thread-composer-mobile-settings-check" aria-hidden="true">
-                  {{ selectedReasoningEffort === option.value ? '✓' : '' }}
-                </span>
-              </button>
-            </div>
-          </section>
-        </div>
-      </Transition>
-    </Teleport>
     <input
       ref="photoLibraryInputRef"
       class="thread-composer-hidden-input"
@@ -765,6 +591,8 @@ import IconTablerSettings from '../icons/IconTablerSettings.vue'
 import IconTablerX from '../icons/IconTablerX.vue'
 import ComposerDropdown from './ComposerDropdown.vue'
 import ComposerModelReasoningDropdown from './ComposerModelReasoningDropdown.vue'
+import ComposerPermissionDropdown from './ComposerPermissionDropdown.vue'
+import type { NativePermissionProfile } from '../../nativeThreadControls'
 import ComposerSearchDropdown from './ComposerSearchDropdown.vue'
 import {
   buildSlashCommandInsertion,
@@ -784,10 +612,7 @@ type SkillSourceBadge = {
 }
 
 type SkillItem = { name: string; displayName?: string; description: string; path: string; scope?: string; enabled?: boolean }
-type PermissionModeOption = {
-  value: CodexPermissionMode
-  label: string
-}
+
 
 type ComposerAutocompleteOption = {
   key: string
@@ -812,6 +637,10 @@ const props = defineProps<{
   selectedCodexPermissionMode: CodexPermissionMode
   nativePermissionsAvailable?: boolean
   nativePermissionProfile?: string | null
+  nativePermissionProfiles?: NativePermissionProfile[]
+  nativePermissionLoading?: boolean
+  nativePermissionError?: string
+  nativePermissionBusy?: boolean
   skills?: SkillItem[]
   threadTokenUsage?: UiThreadTokenUsage | null
   codexQuota?: UiRateLimitSnapshot | null
@@ -866,10 +695,12 @@ const emit = defineEmits<{
   'update:selected-speed-mode': [mode: SpeedMode]
   'update:selected-codex-permission-mode': [mode: CodexPermissionMode]
   'open-native-permissions': []
+  'load-native-permissions': []
+  'select-native-permission': [id: string]
   'open-native-goal': []
   'open-native-extensions': []
 }>()
-const { t } = useUiLanguage()
+const { t, uiLanguage } = useUiLanguage()
 
 const CLARIFY_BEFORE_PLANNING_INSTRUCTIONS = [
   'Stay in planning mode and do not modify files or execute the plan.',
@@ -956,20 +787,9 @@ const photoLibraryInputRef = ref<HTMLInputElement | null>(null)
 const cameraCaptureInputRef = ref<HTMLInputElement | null>(null)
 const folderPickerInputRef = ref<HTMLInputElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
-const mobileSettingsTriggerRef = ref<HTMLButtonElement | null>(null)
-const mobileSettingsSheetRef = ref<HTMLElement | null>(null)
-const mobileSettingsCloseRef = ref<HTMLButtonElement | null>(null)
-const mobileSettingsBackRef = ref<HTMLButtonElement | null>(null)
-const mobileSettingsFirstRowRef = ref<HTMLButtonElement | null>(null)
 const { isMobile } = useMobile()
 const isAttachMenuOpen = ref(false)
 const isContextDetailsOpen = ref(false)
-const isMobileSettingsOpen = ref(false)
-type MobileSettingsView = 'root' | 'permission' | 'model' | 'reasoning'
-const mobileSettingsView = ref<MobileSettingsView>('root')
-let mobileSettingsBackground: HTMLElement | null = null
-let mobileSettingsBackgroundWasInert = false
-let previousBodyOverflow = ''
 const mentionStartIndex = ref<number | null>(null)
 const mentionQuery = ref('')
 const fileMentionSuggestions = ref<ComposerFileSuggestion[]>([])
@@ -1003,19 +823,13 @@ const reasoningEffortLabels: Record<ReasoningEffort, string> = {
 }
 const reasoningOptions = computed<Array<{ value: ReasoningEffort; label: string }>>(() => {
   const supported = props.modelCapabilities?.[props.selectedModel]?.supportedReasoningEfforts ?? []
-  const efforts = supported.length > 0 ? supported : fallbackReasoningEfforts
-  return efforts.map((value) => ({ value, label: reasoningEffortLabels[value] }))
+  const capability = props.modelCapabilities?.[props.selectedModel]
+  const efforts = capability?.reasoningSupport === 'unsupported' ? [] : supported.length > 0 ? supported : fallbackReasoningEfforts
+  const chinese: Record<ReasoningEffort, string> = { none: '关闭', minimal: '最小', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高', ultra: 'Ultra' }
+  return [...new Set(efforts)].sort((a, b) => Object.keys(reasoningEffortLabels).indexOf(a) - Object.keys(reasoningEffortLabels).indexOf(b)).map((value) => ({ value, label: uiLanguage.value === 'zh-CN' ? chinese[value] : reasoningEffortLabels[value] }))
 })
 function formatModelLabel(modelId: string): string {
   return modelId.trim().replace(/^gpt/i, 'GPT')
-}
-
-function compactReasoningEffortLabel(value: ReasoningEffort | ''): string {
-  if (value === 'minimal') return 'Min'
-  if (value === 'medium') return 'Med'
-  if (value === 'xhigh') return 'XH'
-  if (value) return reasoningEffortLabels[value]
-  return t('Thinking')
 }
 
 const modelOptions = computed(() =>
@@ -1125,46 +939,6 @@ const isSpeedToggleDisabled = computed(() =>
 const isPermissionModeDisabled = computed(() =>
   isComposerConfigDisabled.value || props.isUpdatingPermissionMode === true,
 )
-const permissionModeOptions = computed<PermissionModeOption[]>(() => [
-  {
-    value: 'request-approval',
-    label: t('Request approval'),
-  },
-  {
-    value: 'auto-approve',
-    label: t('Auto approve'),
-  },
-  {
-    value: 'full-access',
-    label: t('Full access'),
-  },
-])
-const selectedPermissionLabel = computed(() => (
-  permissionModeOptions.value.find((option) => option.value === props.selectedCodexPermissionMode)?.label
-  ?? t('Codex permissions')
-))
-const selectedModelLabel = computed(() => (
-  modelOptions.value.find((option) => option.value === props.selectedModel)?.label
-  ?? formatModelLabel(props.selectedModel)
-))
-const selectedReasoningLabel = computed(() => (
-  reasoningOptions.value.find((option) => option.value === props.selectedReasoningEffort)?.label
-  ?? t('Thinking')
-))
-const mobileComposerSettingsSummary = computed(() => {
-  const compactModel = selectedModelLabel.value.trim().replace(/^GPT[-\s]?/i, '') || t('Model')
-  const compactReasoning = compactReasoningEffortLabel(props.selectedReasoningEffort)
-  return `${compactModel} · ${compactReasoning}`
-})
-const mobileComposerSettingsAccessibleLabel = computed(() => (
-  `${t('Settings')}: ${t('Model')} ${selectedModelLabel.value || t('Model')}, ${t('Reasoning')} ${selectedReasoningLabel.value}, ${t('Codex permissions')} ${selectedPermissionLabel.value}`
-))
-const mobileSettingsTitle = computed(() => {
-  if (mobileSettingsView.value === 'permission') return t('Codex permissions')
-  if (mobileSettingsView.value === 'model') return t('Model')
-  if (mobileSettingsView.value === 'reasoning') return t('Reasoning')
-  return t('Settings')
-})
 const speedModeDescription = computed(() => {
   if (props.isUpdatingSpeedMode) {
     return t('Saving speed setting...')
@@ -1719,6 +1493,11 @@ function onReasoningEffortSelect(value: string): void {
   emit('update:selected-reasoning-effort', value as ReasoningEffort)
 }
 
+function onSpeedModeSelect(value: SpeedMode): void {
+  if (isSpeedToggleDisabled.value || (value === 'fast' && !isFastModeSupported.value)) return
+  emit('update:selected-speed-mode', value)
+}
+
 function onToggleSpeedMode(): void {
   if (isSpeedToggleDisabled.value) return
   if (props.selectedSpeedMode !== 'fast' && !isFastModeSupported.value) return
@@ -1779,118 +1558,6 @@ function onDictationPressEnd(): void {
 function toggleAttachMenu(): void {
   if (isInteractionDisabled.value) return
   isAttachMenuOpen.value = !isAttachMenuOpen.value
-}
-
-function openMobileSettings(): void {
-  if (!isMobile.value || isComposerConfigDisabled.value) return
-  isAttachMenuOpen.value = false
-  closeContextUsageDetails()
-  closeComposerAutocomplete()
-  closeFileMention()
-  inputRef.value?.blur()
-  mobileSettingsView.value = 'root'
-  isMobileSettingsOpen.value = true
-  setMobileSettingsBackgroundLocked(true)
-  void nextTick(() => {
-    mobileSettingsCloseRef.value?.focus({ preventScroll: true })
-  })
-}
-
-function closeMobileSettings(): void {
-  dismissMobileSettings(true)
-}
-
-function dismissMobileSettings(restoreFocus: boolean): void {
-  if (!isMobileSettingsOpen.value) return
-  isMobileSettingsOpen.value = false
-  mobileSettingsView.value = 'root'
-  setMobileSettingsBackgroundLocked(false)
-  if (restoreFocus) {
-    void nextTick(() => {
-      mobileSettingsTriggerRef.value?.focus({ preventScroll: true })
-    })
-  }
-}
-
-function setMobileSettingsBackgroundLocked(locked: boolean): void {
-  if (typeof document === 'undefined') return
-  if (locked) {
-    previousBodyOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    const background = document.querySelector<HTMLElement>('.desktop-layout')
-    mobileSettingsBackground = background
-    mobileSettingsBackgroundWasInert = background?.hasAttribute('inert') ?? false
-    if (background && !mobileSettingsBackgroundWasInert) background.setAttribute('inert', '')
-    return
-  }
-
-  document.body.style.overflow = previousBodyOverflow
-  if (mobileSettingsBackground && !mobileSettingsBackgroundWasInert) {
-    mobileSettingsBackground.removeAttribute('inert')
-  }
-  mobileSettingsBackground = null
-  mobileSettingsBackgroundWasInert = false
-}
-
-function openMobileSettingsView(view: MobileSettingsView): void {
-  if (view === 'permission' && props.nativePermissionsAvailable) {
-    closeMobileSettings()
-    emit('open-native-permissions')
-    return
-  }
-  mobileSettingsView.value = view
-  void nextTick(() => {
-    if (view === 'root') {
-      mobileSettingsFirstRowRef.value?.focus({ preventScroll: true })
-      return
-    }
-    mobileSettingsBackRef.value?.focus({ preventScroll: true })
-  })
-}
-
-function selectMobilePermission(value: CodexPermissionMode): void {
-  onPermissionModeSelect(value)
-  openMobileSettingsView('root')
-}
-
-function selectMobileModel(value: string): void {
-  onModelSelect(value)
-  openMobileSettingsView('root')
-}
-
-function selectMobileReasoning(value: ReasoningEffort): void {
-  onReasoningEffortSelect(value)
-  openMobileSettingsView('root')
-}
-
-function onMobileSettingsKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    closeMobileSettings()
-    return
-  }
-  if (event.key !== 'Tab') return
-
-  const sheet = mobileSettingsSheetRef.value
-  if (!sheet) return
-  const focusable = Array.from(sheet.querySelectorAll<HTMLElement>(
-    'button:not(:disabled), [href], input:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
-  )).filter((element) => element.getClientRects().length > 0)
-  if (focusable.length === 0) {
-    event.preventDefault()
-    sheet.focus({ preventScroll: true })
-    return
-  }
-
-  const first = focusable[0]
-  const last = focusable[focusable.length - 1]
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault()
-    last.focus({ preventScroll: true })
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault()
-    first.focus({ preventScroll: true })
-  }
 }
 
 function triggerPhotoLibrary(): void {
@@ -2615,7 +2282,7 @@ function onDocumentClick(event: MouseEvent): void {
   if (!target) return
 
   const attachRoot = attachMenuRootRef.value
-  if (isAttachMenuOpen.value && attachRoot && !attachRoot.contains(target)) {
+  if (isAttachMenuOpen.value && attachRoot && !attachRoot.contains(target) && !(target instanceof Element && target.closest('.search-dropdown-menu-wrap, .composer-dropdown-menu-wrap'))) {
     isAttachMenuOpen.value = false
   }
 
@@ -2669,7 +2336,6 @@ onBeforeUnmount(() => {
   if (fileMentionDebounceTimer) {
     clearTimeout(fileMentionDebounceTimer)
   }
-  setMobileSettingsBackgroundLocked(false)
 })
 
 watch(
@@ -2719,13 +2385,9 @@ watch(
   () => props.activeThreadId,
   () => {
     isContextDetailsOpen.value = false
-    dismissMobileSettings(false)
   },
 )
 
-watch(isMobile, (mobile) => {
-  if (!mobile) dismissMobileSettings(false)
-})
 
 watch(
   contextUsageView,
@@ -3516,7 +3178,7 @@ watch(
   }
 
   .thread-composer-model-reasoning-control {
-    @apply hidden;
+    display: inline-flex;
   }
 
   .thread-composer-plan-mode-indicator {

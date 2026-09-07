@@ -12,6 +12,7 @@
       :disabled="disabled"
       @click="onToggle"
     >
+      <slot name="prefix" />
       <component :is="selectedPrefixIcon" v-if="selectedPrefixIcon" class="composer-dropdown-prefix-icon" />
       <span v-if="!iconOnly" class="composer-dropdown-value">{{ selectedLabel }}</span>
       <IconTablerChevronDown class="composer-dropdown-chevron" />
@@ -28,8 +29,10 @@
           'composer-dropdown-menu-wrap-down': openDirection === 'down',
         }"
         :style="menuWrapStyle"
+        @keydown.esc.stop="onMenuEscape"
       >
         <div ref="menuRef" class="composer-dropdown-menu">
+          <slot name="header" />
           <div v-if="enableSearch" class="composer-dropdown-search-wrap">
             <input
               ref="searchInputRef"
@@ -51,7 +54,7 @@
                 :aria-selected="option.value === modelValue"
                 @click="onSelect(option.value)"
               >
-                {{ option.label }}
+                <slot name="option" :option="option">{{ option.label }}</slot>
               </button>
             </li>
             <li v-if="filteredOptions.length === 0" class="composer-dropdown-empty">
@@ -89,6 +92,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
+  opened: []
 }>()
 
 const rootRef = ref<HTMLElement | null>(null)
@@ -100,6 +104,7 @@ const isOpen = ref(false)
 const searchQuery = ref('')
 const menuWrapStyle = ref<Record<string, string>>({})
 let isLayoutListenerAttached = false
+let menuResizeObserver: ResizeObserver | null = null
 const menuId = `composer-dropdown-${useId()}`
 
 const selectedLabel = computed(() => {
@@ -126,6 +131,7 @@ const filteredOptions = computed(() => {
 function onToggle(): void {
   if (props.disabled) return
   isOpen.value = !isOpen.value
+  if (isOpen.value) emit('opened')
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -197,6 +203,12 @@ function onSelect(value: string): void {
   void nextTick(() => triggerRef.value?.focus({ preventScroll: true }))
 }
 
+function onMenuEscape(event: KeyboardEvent): void {
+  if (event.defaultPrevented) return
+  event.preventDefault()
+  onEscapeSearch()
+}
+
 function onEscapeSearch(): void {
   if (searchQuery.value.length > 0) {
     searchQuery.value = ''
@@ -222,11 +234,17 @@ function onDocumentPointerDown(event: PointerEvent): void {
 watch(isOpen, (open) => {
   if (!open) {
     removeLayoutListeners()
+    menuResizeObserver?.disconnect()
+    menuResizeObserver = null
     menuWrapStyle.value = {}
     return
   }
   addLayoutListeners()
   nextTick(() => {
+    if (!isOpen.value) return
+    menuResizeObserver?.disconnect()
+    menuResizeObserver = new ResizeObserver(updateMenuPosition)
+    if (menuRef.value) menuResizeObserver.observe(menuRef.value)
     updateMenuPosition()
     window.requestAnimationFrame(updateMenuPosition)
     if (enableSearch.value) searchInputRef.value?.focus()
@@ -240,6 +258,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('pointerdown', onDocumentPointerDown)
   removeLayoutListeners()
+  menuResizeObserver?.disconnect()
 })
 </script>
 

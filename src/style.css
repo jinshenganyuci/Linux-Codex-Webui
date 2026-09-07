@@ -3736,7 +3736,7 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
   backdrop-filter: blur(18px) saturate(135%);
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
-:root:is(.dark, :not(.dark)) .thread-composer-shell:focus-within { border-color: color-mix(in srgb, var(--mac-accent) 32%, var(--mac-border)); box-shadow: var(--mac-shadow-card), 0 0 0 3px var(--mac-accent-soft); }
+:root:is(.dark, :not(.dark)) .thread-composer-shell:focus-within { border-color: var(--mac-border); box-shadow: 0 2px 12px rgb(0 0 0 / 4%); }
 :root:is(.dark, :not(.dark)) .thread-composer-submit { background: linear-gradient(160deg, #369cff, #007aff); color: white; box-shadow: 0 3px 9px rgb(0 122 255 / 20%); }
 :root:is(.dark, :not(.dark)) .thread-composer-submit:disabled { background: var(--mac-hover); color: var(--mac-faint); opacity: 1; box-shadow: none; }
 :root .native-controls-trigger, :root .thread-composer-attach-trigger { color: var(--mac-accent); }
@@ -3875,4 +3875,73 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
 @media (max-width: 767px) and (max-height: 740px) {
   :root .new-thread-suggestions button { flex-direction: row; align-items: center; justify-content: flex-start; min-height: 64px; padding: 10px; gap: 10px; }
   :root .new-thread-suggestions span { min-width: 0; flex: 1; }
+}
+
+/* Reference composer: quiet frame, compact controls and a shared effort slider. */
+:root:is(.dark, :not(.dark)) .thread-composer-shell {
+  border-radius: 24px; border: 1px solid var(--mac-border); background: var(--mac-solid);
+  box-shadow: 0 2px 12px rgb(0 0 0 / 4%); -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+:root.dark .thread-composer-shell, :root.dark .thread-composer-shell:focus-within { box-shadow: 0 2px 12px rgb(0 0 0 / 12%); }
+:root .thread-composer-session-slot { display: contents; }
+:root .thread-composer-session-slot .native-controls-trigger { display: none; }
+:root .thread-composer-controls { align-items: center; gap: 4px; }
+:root .thread-composer-leading-controls { flex-shrink: 0; }
+:root .thread-composer-actions { margin-left: auto; min-width: 0; gap: 4px; }
+:root .thread-composer-model-reasoning-control { display: inline-flex; width: auto; min-width: 0; flex-shrink: 1; margin-left: 0; }
+:root .model-reasoning-trigger { width: auto; max-width: 230px; font-size: 13px; }
+:root .model-reasoning-trigger-summary { flex: initial; text-align: left; }
+:root:is(.dark, :not(.dark)) .thread-composer-permission-control { max-width: 150px; padding: 0; background: transparent; }
+:root .thread-composer-permission-control .composer-dropdown-trigger { gap: 6px; padding: 5px 8px; min-height: 32px; border-radius: 999px; color: var(--mac-muted); }
+:root .thread-composer-permission-control .composer-dropdown-trigger:hover { background: var(--mac-hover); }
+:root .composer-permission-menu .composer-dropdown-chevron { display: none; }
+:root .composer-dropdown-menu:has(.composer-permission-heading) { width: min(360px, calc(100vw - 24px)); }
+:root .composer-dropdown-menu:has(.composer-permission-heading) .composer-dropdown-option { align-items: center; min-height: 52px; padding: 8px 10px; }
+:root:is(.dark, :not(.dark)) .composer-dropdown-menu:has(.composer-permission-heading) .composer-dropdown-option.is-selected { background: transparent; color: var(--mac-text); }
+:root:is(.dark, :not(.dark)) .thread-composer-attach-trigger { color: var(--mac-muted); }
+:root:is(.dark, :not(.dark)) .thread-composer-submit { width: 34px; height: 34px; background: var(--mac-text); color: var(--mac-main); box-shadow: none; }
+:root:is(.dark, :not(.dark)) .thread-composer-submit:disabled { background: var(--mac-hover); color: var(--mac-faint); box-shadow: none; }
+:root .thread-composer-mic { background: transparent; box-shadow: none; color: var(--mac-muted); }
+:root .thread-composer-mic:not(.thread-composer-mic--active):hover { background: var(--mac-hover); }
+:root .thread-composer-context { --context-usage-accent: var(--mac-muted); }
+:root .thread-composer-context.is-warning { --context-usage-accent: #d19025; }
+:root .thread-composer-context.is-danger { --context-usage-accent: #e15a55; }
+:root:is(.dark, :not(.dark)) .thread-composer-context-button { display: grid; place-items: center; padding: 0; width: 28px; height: 34px; background: transparent; border: 0; box-shadow: none; }
+:root .thread-composer-context-button::before { display: none; }
+:root .thread-composer-context-button-label { display: none; }
+:root .thread-composer-context-ring { width: 15px; height: 15px; transform: rotate(-90deg); }
+:root .thread-composer-context-ring circle:first-child { stroke: var(--mac-border-strong); }
+:root .thread-composer-context-ring circle:last-child { stroke: var(--context-usage-accent); }
+:root .thread-composer-context-popover-summary { color: var(--mac-text); font-weight: 400; }
+:root .thread-composer-context-popover { width: max-content; min-width: 210px; max-width: min(320px, calc(100vw - 32px)); }
+:root .thread-composer-attach-menu { max-height: min(540px, 65dvh); overflow-y: auto; overscroll-behavior: contain; }
+:root .thread-composer-skill-menu-control { width: 100%; max-width: none; }
+:root .thread-composer-skill-menu-control .search-dropdown-trigger { width: 100%; justify-content: space-between; min-height: 40px; padding: 8px 10px; background: transparent; text-align: left; border-radius: 10px; }
+:root .thread-composer-skill-menu-control .search-dropdown-value { max-width: none; }
+:root .thread-composer-skill-menu-control .search-dropdown-trigger:hover { background: var(--mac-hover); }
+:root:is(.dark, :not(.dark)) .model-reasoning-layer { border: 1px solid var(--mac-border); background: var(--mac-solid); box-shadow: 0 8px 24px rgb(0 0 0 / 10%); }
+:root:is(.dark, :not(.dark)) :is(.model-reasoning-menu, .model-reasoning-model-menu) { background: transparent; border: 0; box-shadow: none; border-radius: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
+:root .model-reasoning-model-menu { width: 100%; }
+:root .model-reasoning-model-row { min-height: initial; width: auto; border-radius: 10px; }
+:root:is(.dark, :not(.dark)) .model-reasoning-option.is-selected { background: var(--mac-hover); color: var(--mac-text); }
+:root.dark .model-reasoning-layer { --reasoning-track: #3b3d43; box-shadow: 0 8px 28px rgb(0 0 0 / 26%); }
+:root.dark .model-reasoning-current-effort { color: #55aaff; }
+:root.dark .model-reasoning-current-effort.is-ultra { color: #bd94ff; }
+:root .model-reasoning-layer button:focus-visible, :root .model-reasoning-trigger:focus-visible { outline: 2px solid var(--mac-muted); outline-offset: 2px; }
+@media (max-width: 767px) {
+  :root .thread-composer-shell { border-radius: 26px; }
+  :root .thread-composer-actions { gap: 2px; }
+  :root .model-reasoning-trigger { font-size: 14px; max-width: 190px; }
+  :root .thread-composer-context-button { width: 32px; height: 44px; }
+  :root:is(.dark, :not(.dark)) .thread-composer-submit { width: 40px; height: 40px; }
+  :root .thread-composer-mic, :root .thread-composer-stop { width: 40px; height: 44px; }
+  :root .thread-composer-mobile-permission .composer-dropdown-trigger { padding: 8px 10px; width: 100%; gap: 8px; }
+  :root .model-reasoning-layer.is-model-open { border-radius: 28px 28px 0 0; }
+  :root:is(.dark, :not(.dark)) .model-reasoning-option.is-selected { border-radius: 0; }
+  :root .model-reasoning-option { background: var(--mac-hover); }
+}
+
+@media (max-width:767px) {
+  :root .thread-composer-controls { flex-wrap: wrap; }
+  :root .thread-composer-plan-mode-indicator { order: 1; }
 }

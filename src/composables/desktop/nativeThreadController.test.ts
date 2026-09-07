@@ -41,6 +41,22 @@ describe('native thread controller', () => {
     expect(api.getNativePermissionProfiles).toHaveBeenCalledTimes(1)
   })
 
+  it('coalesces composer permission reads, reuses them in details, and rejects stale thread results', async () => {
+    const controller = create()
+    await controller.select('first')
+    let finish!: (value: unknown) => void
+    api.getNativePermissionProfiles.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const reads = [controller.loadPermissions(), controller.loadPermissions()]
+    expect(api.getNativePermissionProfiles).toHaveBeenCalledTimes(1)
+    await controller.select('second')
+    await controller.loadPermissions()
+    finish([{ id: 'old', allowed: true, description: '' }])
+    await Promise.all(reads)
+    expect(controller.state.profiles.map(p => p.id)).toEqual([':workspace'])
+    await controller.expand()
+    expect(api.getNativePermissionProfiles).toHaveBeenCalledTimes(2)
+  })
+
   it('discards late reads from a different selected thread', async () => {
     let finish!: (value: unknown) => void
     api.getNativeThreadState.mockImplementation((threadId: string) => threadId === 'old' ? new Promise(resolve => { finish = resolve }) : Promise.resolve({ mode: 'legacy', settings: { model: 'new-model' } }))

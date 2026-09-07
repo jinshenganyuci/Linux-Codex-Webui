@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [输入区参考布局与思考强度滑杆](composer-reference-slider.md) |
 | [iOS 磨砂界面、细滚动条与跟手面板](ios-interface-and-scrollbars.md) |
 | [ChatGPT 桌面风格预览与两端布局](chatgpt-desktop-preview.md) |
 | [macOS 磨砂玻璃简白界面与手机触屏可用性](macos-frosted-glass-interface.md) |
