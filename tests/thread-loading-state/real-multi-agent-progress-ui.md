@@ -2,7 +2,7 @@
 
 ## Prerequisites / setup
 
-- Build and start the current checkout on disposable port `4173`.
+- Use the current isolated acceptance service on `13511`; do not create another WebUI listener.
 - Use a Codex model/configuration that can create sub-agents.
 - Prepare one task that creates one sub-agent and one task that creates at least six agents, including one nested child.
 - Prepare both a legacy thread and a paginated thread that can run the one-agent task.
@@ -64,6 +64,15 @@
 
 ## Rollback / cleanup
 
-- Stop only the disposable `4173` verification process if it was started for this test.
+- Preserve the existing acceptance service and its data directory after verification.
 - Do not stop or restart the persistent `5173` server or the formal `13510` console.
 - No persistent test data is required; archive the disposable legacy/paginated test threads if desired.
+
+## 2026-09-07：续用子任务丢失回归
+
+- 前置条件：父会话的第一回合已创建子任务；第二回合只继续交互或接收完成消息，没有新的 started。使用捕获的协议元数据或隔离 13511 回放，不操作正式任务。
+- 操作：第一回合结束后开始下一回合，接收 `subAgentActivity kind=interacted`，再接收 completed；刷新状态恢复，并读取子线程自己的当前回合。还需发送迟到的前一父回合事件，以及子线程向父线程的回复。
+- 预期：仅当前回合真正引用的子任务进入统计，打开详情有正确路径；不会把父线程本身加入子列表。完成引用可恢复节点及结果入口，但没有子回合 ID 的摘要不能结束已知较新子回合；刷新后的真实子历史决定最终状态。再次交互不把已完成节点伪装成执行中。
+- 命令：`pnpm exec vitest run src/server/agentProgressTracker.test.ts src/server/codexAppServerBridge.historyPagination.test.ts`。60 项通过；新增三项在修复前失败。分页恢复的 started/interacted 两种路径各验证三个摘要、三个有界回合页，无完整历史读取。
+- 用户截图对应父会话当前回合的纯协议回放，修复前为 0 个子节点、修复后为 3 个；证据在 `output/playwright/agent-progress-polish/reported-thread-evidence.json` 和 `replayed-{before,after}.json`，只保留元数据和生命周期，不含实际提示词、命令输出或凭据。
+- 清理与回退：没有创建实际子任务或修改原会话；回退需部署旧版前后端。旧版仍会漏掉没有新建事件的续用子任务，不应把回退后的 0/0 解释为没有子任务。

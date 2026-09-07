@@ -2,6 +2,45 @@ import { describe, expect, it } from 'vitest'
 import { AgentProgressTracker } from './agentProgressTracker'
 
 describe('AgentProgressTracker', () => {
+  it('recovers reused children from interactions in a new root turn without a new spawn', () => {
+    const tracker = new AgentProgressTracker()
+    tracker.handleNotification('turn/started', { threadId: 'root', turn: { id: 'first', startedAtMs: 1000 } }, 1, 1000)
+    tracker.handleNotification('item/completed', { threadId: 'root', turnId: 'first', item: { id: 'spawn', type: 'subAgentActivity', kind: 'started', agentThreadId: 'child', agentPath: '/root/audit' } }, 1, 1100)
+    tracker.handleNotification('turn/completed', { threadId: 'root', turn: { id: 'first', status: 'completed' } }, 1, 2000)
+    tracker.handleNotification('turn/started', { threadId: 'root', turn: { id: 'second', startedAtMs: 3000 } }, 1, 3000)
+    tracker.handleNotification('item/completed', { threadId: 'root', turnId: 'second', item: { id: 'reuse', type: 'subAgentActivity', kind: 'interacted', agentThreadId: 'child', agentPath: '/root/audit' } }, 1, 3100)
+    expect(tracker.getSnapshot('root')?.agents).toEqual([expect.objectContaining({ threadId: 'child', parentThreadId: 'root', path: '/root/audit' })])
+    expect(tracker.getDirectChildThreadIds('root')).toEqual(['child'])
+    tracker.handleNotification('item/completed', { threadId: 'root', turnId: 'first', item: { id: 'late', type: 'subAgentActivity', kind: 'interacted', agentThreadId: 'unrelated-old-child' } }, 1, 3200)
+    expect(tracker.getDirectChildThreadIds('root')).toEqual(['child'])
+  })
+
+  it('hydrates interaction-only and completion-only children after reload and keeps real child state', () => {
+    const now = 1_700_000_010_000
+    const tracker = new AgentProgressTracker({ now: () => now })
+    tracker.ingestThreadRead({ thread: { id: 'root', turns: [{ id: 'current', status: 'inProgress', startedAtMs: now - 5000, items: [
+      { id: 'reuse', type: 'subAgentActivity', kind: 'interacted', agentThreadId: 'child', agentPath: '/root/audit' },
+      { id: 'done', type: 'subAgentActivity', kind: 'completed', agentThreadId: 'done-child', agentPath: '/root/done' },
+    ] }] } })
+    expect(tracker.getSnapshot('root')?.agents).toHaveLength(2)
+    expect(tracker.getSnapshot('root')?.agents.find(a => a.threadId === 'done-child')).toMatchObject({ status: 'completed', resultAvailable: true })
+    tracker.ingestThreadRead({ thread: { id: 'child', parentThreadId: 'root', turns: [{ id: 'child-turn', status: 'completed', startedAtMs: now - 4000, completedAtMs: now - 2000, items: [] }] } })
+    expect(tracker.getSnapshot('root')?.agents.find(a => a.threadId === 'child')).toMatchObject({ status: 'completed' })
+    // A result notification without a child turn identity must not hide a genuinely newer child turn.
+    tracker.ingestThreadRead({ thread: { id: 'done-child', parentThreadId: 'root', turns: [{ id: 'new-child-turn', status: 'inProgress', startedAtMs: now - 1000, items: [] }] } })
+    expect(tracker.getSnapshot('root')?.agents.find(a => a.threadId === 'done-child')).toMatchObject({ status: 'running', completedAtMs: null })
+  })
+
+  it('does not let an unscoped parent completion stop a known active child turn or add the root as a child', () => {
+    const tracker = new AgentProgressTracker()
+    tracker.handleNotification('turn/started', { threadId: 'root', turn: { id: 'turn' } }, 1, 1000)
+    tracker.handleNotification('item/completed', { threadId: 'root', turnId: 'turn', item: { id: 'reuse', type: 'subAgentActivity', kind: 'interacted', agentThreadId: 'child' } }, 1, 1100)
+    tracker.handleNotification('turn/started', { threadId: 'child', turn: { id: 'new-child-turn' } }, 1, 1200)
+    tracker.handleNotification('item/completed', { threadId: 'root', turnId: 'turn', item: { id: 'old-result', type: 'subAgentActivity', kind: 'completed', agentThreadId: 'child' } }, 1, 1300)
+    tracker.handleNotification('item/completed', { threadId: 'child', turnId: 'new-child-turn', item: { id: 'reply', type: 'subAgentActivity', kind: 'interacted', agentThreadId: 'root' } }, 1, 1400)
+    expect(tracker.getSnapshot('root')?.agents).toEqual([expect.objectContaining({ threadId: 'child', status: 'running', completedAtMs: null })])
+  })
+
   it('tracks parallel and nested agents from real app-server item shapes', () => {
     let now = 1_000
     const tracker = new AgentProgressTracker({ now: () => now })

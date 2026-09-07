@@ -520,6 +520,23 @@ export class AgentProgressTracker {
           && sourceRootTurnId !== progress.turnId,
         )
         if (targetsStaleRootTurn) return Array.from(changedRoots)
+        // A reused agent does not emit another spawn in the parent's next turn.
+        // Recover references from that turn without carrying unrelated old agents forward.
+        if (
+          childThreadId
+          && childThreadId !== rootThreadId
+          && !progress.agentsByThreadId.has(childThreadId)
+          && (kind === 'interacted' || kind === 'completed' || kind === 'interrupted')
+        ) {
+          if (sourceRootTurnId && progress.turnId && sourceRootTurnId !== progress.turnId) return Array.from(changedRoots)
+          const knownRoot = this.rootByThreadId.get(childThreadId)
+          if (knownRoot && knownRoot !== childThreadId && knownRoot !== rootThreadId) return Array.from(changedRoots)
+          this.registerAgent(rootThreadId, threadId, childThreadId, path, eventAtMs)
+          if (progress.agentsByThreadId.has(childThreadId)) {
+            progress.agentRootTurnIdByThreadId.set(childThreadId, sourceRootTurnId)
+            this.migrateOrphanProgress(childThreadId, rootThreadId, eventAtMs)
+          }
+        }
         this.touchProgress(progress, threadId, eventAtMs)
         if (childThreadId && kind === 'started') {
           const childRoot = this.registerAgent(rootThreadId, threadId, childThreadId, path, eventAtMs)
@@ -543,7 +560,21 @@ export class AgentProgressTracker {
               changedRoots.add(childRoot)
             }
           }
-        } else if (childThreadId && kind === 'interrupted') {
+        } else if (childThreadId && childThreadId !== rootThreadId && kind === 'completed') {
+          const agent = progress.agentsByThreadId.get(childThreadId)
+          if (agent) {
+            agent.resultAvailable = true
+            // Parent summaries have no child turn ID. Once a child lifecycle is
+            // known, its own turn notifications/history remain authoritative.
+            if (!progress.agentTurnIdByThreadId.has(childThreadId) && agent.status !== 'errored' && agent.status !== 'interrupted') {
+              agent.status = 'completed'
+              agent.completedAtMs = eventAtMs
+              agent.currentActivity = ''
+              this.addAgentTerminalEvent(progress, agent, eventAtMs)
+            }
+          }
+          changedRoots.add(rootThreadId)
+        } else if (childThreadId && childThreadId !== rootThreadId && kind === 'interrupted') {
           this.updateAgent(rootThreadId, childThreadId, eventAtMs, (agent) => {
             agent.status = 'interrupted'
             agent.completedAtMs = eventAtMs
@@ -557,7 +588,7 @@ export class AgentProgressTracker {
           const agent = sourceAgent ?? targetAgent
           if (agent) {
             agent.lastActivityAtMs = eventAtMs
-            agent.currentActivity = 'communicating'
+            if (agent.status === 'starting' || agent.status === 'running') agent.currentActivity = 'communicating'
             this.addEvent(progress, {
               id: `agent:${agent.threadId}:interacted:${itemId}`,
               atMs: eventAtMs,
@@ -742,7 +773,7 @@ export class AgentProgressTracker {
         )
         const nodeIsTerminal = node.status === 'completed' || node.status === 'interrupted' || node.status === 'errored'
         ignoreReadState = childTurnOrder === 'older'
-          || (incomingTurnIsRunning && !isDifferentChildTurn && nodeIsTerminal)
+          || (incomingTurnIsRunning && !isDifferentChildTurn && nodeIsTerminal && Boolean(activeChildTurnId || progress.status !== 'running'))
       }
     }
 
@@ -807,10 +838,11 @@ export class AgentProgressTracker {
           latestTurnId,
           startedAtMs,
         )
-        const switchesToNewerChildTurn = isDifferentChildTurn && childTurnOrder === 'newer'
+        const switchesToNewerChildTurn = (isDifferentChildTurn && childTurnOrder === 'newer')
+          || Boolean(latestTurnId && !activeChildTurnId && progress.status === 'running')
         const nodeIsTerminal = node.status === 'completed' || node.status === 'interrupted' || node.status === 'errored'
         const ignoreChildReadState = childTurnOrder === 'older'
-          || (incomingTurnIsRunning && !isDifferentChildTurn && nodeIsTerminal)
+          || (incomingTurnIsRunning && !isDifferentChildTurn && nodeIsTerminal && Boolean(activeChildTurnId || progress.status !== 'running'))
         if (latestTurnId && !ignoreChildReadState) {
           progress.agentTurnIdByThreadId.set(metadata.threadId, latestTurnId)
           progress.agentTurnStartedAtMsByThreadId.set(metadata.threadId, startedAtMs)
@@ -846,7 +878,7 @@ export class AgentProgressTracker {
           node.status = 'running'
           node.completedAtMs = null
           node.currentActivity = 'working'
-          if (isDifferentChildTurn) node.resultAvailable = false
+          if (switchesToNewerChildTurn) node.resultAvailable = false
         }
       }
     }

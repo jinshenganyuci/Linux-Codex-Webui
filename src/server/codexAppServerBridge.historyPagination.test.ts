@@ -265,7 +265,7 @@ describe('paginated RPC proxy command-output limits', () => {
 })
 
 describe('paginated internal agent history reads', () => {
-  it('hydrates root, child, and nested progress with bounded native pages and no full thread/read', async () => {
+  it.each(['started', 'interacted'])('hydrates %s root, child, and nested references with bounded native pages and no full thread/read', async (kind) => {
     const turnsByThreadId: Record<string, unknown[]> = {
       root: [{
         id: 'root-turn',
@@ -274,7 +274,7 @@ describe('paginated internal agent history reads', () => {
         items: [{
           id: 'spawn-child',
           type: 'subAgentActivity',
-          kind: 'started',
+          kind,
           agentThreadId: 'child',
           agentPath: '/child',
         }],
@@ -286,7 +286,7 @@ describe('paginated internal agent history reads', () => {
         items: [{
           id: 'spawn-nested',
           type: 'subAgentActivity',
-          kind: 'started',
+          kind,
           agentThreadId: 'nested',
           agentPath: '/child/nested',
         }],
