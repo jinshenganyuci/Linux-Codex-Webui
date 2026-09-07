@@ -127,6 +127,21 @@ export function agentModelDetailSegments(agent: UiAgentProgressNode): string[] {
   return details
 }
 
+export function compactProgressModelDetails(segments: string[]): Array<{ kind: string; value: string; title: string }> {
+  return segments.filter(segment => segment.trim()).map(title => {
+    const match = /^(Model|Thinking|Speed):\s*(.+)$/u.exec(title)
+    if (!match) return { kind: 'other', value: title, title }
+    const value = match[2]!.trim()
+    if (match[1] === 'Model') return {
+      kind: 'model', title,
+      value: value.replace(/^gpt[-\s]?/iu, '').replace(/-(astra|sol|terra|luna)/giu, (_, name: string) => ` ${name[0]!.toUpperCase()}${name.slice(1).toLowerCase()}`),
+    }
+    if (match[1] === 'Speed') return { kind: 'speed', title, value: value === 'Fast' ? 'Fast mode' : value === 'Standard' ? 'Standard' : value }
+    const efforts: Record<string, string> = { none: 'None', minimal: 'Minimal', low: 'Light reasoning', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Maximum reasoning', ultra: 'Ultra', default: 'Default' }
+    return { kind: 'reasoning', title, value: efforts[value.toLowerCase()] ?? value }
+  })
+}
+
 export function formatProgressDuration(durationMs: number): string {
   const seconds = Math.max(0, Math.floor(durationMs / 1000))
   if (seconds < 60) return `${seconds}s`

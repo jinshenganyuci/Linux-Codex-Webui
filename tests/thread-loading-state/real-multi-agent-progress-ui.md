@@ -11,13 +11,13 @@
 ## Actions and expected results
 
 1. Open a thread and send the one-agent task.
-   - The live card starts in a compact state; `Show agent details` / `展开代理详情` has `aria-expanded=false`.
-   - The card header always shows `Main reasoning model` / `主推理模型` with model, thinking, and speed details; expanding agent details shows only child agents, and collapsing removes the child tree from the accessibility tree.
+   - The live card starts in a compact state; the `Subtasks N` / `子任务 N` control has `aria-expanded=false`. With no children, it reads `Activity log` / `活动记录` without zero-count placeholders.
+   - The card header shows `Main task` / `主任务`, one phase label, duration and compact model/thinking/speed details; expanding shows only child agents, and collapsing removes the details from the accessibility tree.
    - The phase changes between preparing, reasoning, dispatching, waiting, executing, applying changes, and summarizing based on real notifications.
    - Elapsed time and last-activity time advance without displaying a fabricated percentage or ETA.
 2. Send the six-agent task.
    - All agents use the same row layout; no special case is required for four, five, or six agents.
-   - Each child row shows `Model` and `Thinking` from that child's own rollout. Compare agents with different values and confirm they are not copied from the main model or another child; when Codex does not record a child speed, no fabricated `Speed: Standard` or `Speed: Fast` is shown.
+   - Each child row shows compact model and reasoning labels from that child's own rollout, with raw values retained in title attributes. Compare agents with different values and confirm they are not copied from the main model or another child; missing child speed must remain absent.
    - Nested agents are indented beneath their actual parent.
    - Completed, interrupted, failed, running, waiting, stale, and disconnected states are visually distinct.
    - Before reloading the page, a completed root with completed child results shows zero active agents and `Completed N/N`; trailing token-usage or goal notifications do not revert child rows to `Running`.
@@ -76,3 +76,41 @@
 - 命令：`pnpm exec vitest run src/server/agentProgressTracker.test.ts src/server/codexAppServerBridge.historyPagination.test.ts`。60 项通过；新增三项在修复前失败。分页恢复的 started/interacted 两种路径各验证三个摘要、三个有界回合页，无完整历史读取。
 - 用户截图对应父会话当前回合的纯协议回放，修复前为 0 个子节点、修复后为 3 个；证据在 `output/playwright/agent-progress-polish/reported-thread-evidence.json` 和 `replayed-{before,after}.json`，只保留元数据和生命周期，不含实际提示词、命令输出或凭据。
 - 清理与回退：没有创建实际子任务或修改原会话；回退需部署旧版前后端。旧版仍会漏掉没有新建事件的续用子任务，不应把回退后的 0/0 解释为没有子任务。
+
+## 2026-09-07：紧凑状态卡与详情排版
+
+| Before | After | Why |
+| --- | --- | --- |
+| 主状态重复、Model/Thinking/Speed 文字折行 | 主任务状态与耗时同排，模型/强度/速度单独紧凑一排 | 手机可以快速扫读 |
+| 统计和“查看代理活动”分占空间，零子任务显示 0/0 | 数量和分类统计合并到展开按钮；无子任务显示活动记录 | 减少无效信息 |
+| 运行态整圈蓝边，详情名称/路径/打开链接重复 | 中性细边框、状态点，子任务名称本身可点击 | 保留状态区分并减轻视觉负担 |
+
+前置条件：13511 保持独立验收服务，`output/playwright/chatgpt-preview/thread.json` 指向已完成 TestChat。先构建前端。脚本使用 Playwright 修改主题、拦截进度和运行状态，真实页面仍从 13511 加载；这是可重复协议回放，不能报告为本轮实际新建了六个代理。
+
+```bash
+pnpm exec vitest run src/server/agentProgressTracker.test.ts src/server/codexAppServerBridge.historyPagination.test.ts src/components/content/turnProgressUtils.test.ts src/composables/useDesktopState.test.ts
+pnpm run build:frontend
+BASELINE=1 node scripts/verify-agent-progress-polish.cjs
+node scripts/verify-agent-progress-polish.cjs
+# 发布 13511 后，直接检查线上产物，仍只回放协议而不发送消息：
+LIVE_PREVIEW=1 node scripts/verify-agent-progress-polish.cjs
+```
+
+操作及预期：
+
+1. 在 1440×900、375×812、768×1024 明暗主题打开目标 TestChat，显示 3 个子任务，统计为 1 运行、2 完成。默认详情关闭，只有一个主阶段标签，模型信息没有英文字段前缀，零统计不显示。
+2. 展开详情，3 个子行的模型/强度与各自回放数据一致。完成结果在点击前请求 0 次、点击后 1 次。手机以弹层展示，Shift+Tab 不越出弹层，Esc 关闭后焦点返回打开按钮。
+3. 刷新仍显示三个引用；改为六节点含一个二级节点，层级、完成、中断、失败可区分。再回放零节点，按钮只显示活动记录。所有状态无横向溢出，暗色无浅色卡片。
+4. 结束关闭测试浏览器上下文，并等待/忽略仍在进行的拦截请求，避免测试退出时的 TargetClosedError。脚本不调用 spawn/turn/start，不写速度或配置，保留原 TestChat。
+
+已通过：上述 228 项单测、前端构建、六组页面回放。移动端相同摘要高度 150→112px；桌面与平板为 104px。每组四次加载对应四次进度请求，无重复进度轮询；点击结果仅一次。1 万事件回放中位 13.22ms、最大 44.72ms（10 次），节点/事件/去重键/线程映射保持 64/120/240/65。主 JS +312 字节、聊天 JS +1211、主 CSS +1799、聊天 CSS 不变，合计 gzip +970；未测真实低端手机或本轮实际模型并发时延。
+
+实际 URL 为 `http://127.0.0.1:13511/#/thread/01a0797c-faa5-70a0-b29e-b4c92c0bb03c`。完整断言在 `output/playwright/agent-progress-polish/browser.json`，截图绝对路径为 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-polish/after-{compact,expanded}-{1440,375,768}-{light,dark}.png`。前后比较、资源体积及压测记录位于同目录 `baseline.json`、`bundle.json`、`performance.json`。
+
+375×812 浅色，紧凑摘要：
+
+![手机紧凑任务状态卡](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-polish/after-compact-375-light.png)
+
+375×812 深色，子任务详情与按需结果：
+
+![手机深色子任务详情](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-polish/after-expanded-375-dark.png)
