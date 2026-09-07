@@ -1651,6 +1651,7 @@ export function useDesktopState() {
   const selectedModelId = ref(readSelectedModel(selectedModelIdByContext.value, selectedThreadId.value))
   const selectedReasoningEffort = ref<ReasoningEffort | ''>('medium')
   const selectedSpeedMode = ref<SpeedMode>('standard')
+  let speedModeRevision = 0
   const selectedCodexPermissionMode = ref<CodexPermissionMode>(loadSelectedCodexPermissionMode())
   const activeProviderId = ref('')
   const codexCliMissingError = ref('')
@@ -2544,12 +2545,13 @@ export function useDesktopState() {
     }
 
     const previousMode = selectedSpeedMode.value
+    speedModeRevision += 1
     selectedSpeedMode.value = nextMode
     isUpdatingSpeedMode.value = true
     error.value = ''
 
     try {
-      if (selectedThreadId.value && (await getNativeCapabilities()).threadSettings) return
+      // Fast is a global preference, including when the current thread uses native settings.
       const contextId = selectedThreadId.value.trim() || NEW_THREAD_COLLABORATION_MODE_CONTEXT
       const tier = availableModelCapabilities.value[readModelIdForThread(contextId)]?.fastServiceTier
       if (tier) await setCodexSpeedMode(nextMode, tier)
@@ -2558,6 +2560,8 @@ export function useDesktopState() {
       selectedSpeedMode.value = previousMode
       error.value = unknownError instanceof Error ? unknownError.message : 'Failed to update Fast mode'
     } finally {
+      // Also invalidate reads that started while the write was pending.
+      speedModeRevision += 1
       isUpdatingSpeedMode.value = false
     }
   }
@@ -2807,9 +2811,13 @@ export function useDesktopState() {
 
   async function refreshModelPreferences(options?: { providerChanged?: boolean; includeProviderModels?: boolean }): Promise<void> {
     const selectedThreadAtRequest = selectedThreadId.value
+    const speedRevisionAtRequest = speedModeRevision
     codexCliMissingError.value = ''
     try {
       const currentConfig = await getCurrentModelConfig()
+      if (speedRevisionAtRequest === speedModeRevision && !isUpdatingSpeedMode.value) {
+        selectedSpeedMode.value = currentConfig.speedMode
+      }
       const normalizedConfiguredModelId = currentConfig.model.trim()
       runtimeDefaultModelId.value = normalizedConfiguredModelId
       runtimeDefaultReasoningEffort.value = currentConfig.reasoningEffort
@@ -2908,7 +2916,6 @@ export function useDesktopState() {
       if (isNewThreadContext) {
         newThreadSelectionInitialized = true
       }
-      selectedSpeedMode.value = currentConfig.speedMode
     } catch (unknownError) {
       if (isCodexCliMissingError(unknownError)) {
         codexCliMissingError.value = CODEX_CLI_MISSING_MESSAGE

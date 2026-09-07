@@ -413,6 +413,7 @@ const zhCN: Record<string, string> = {
   'enabled': '已启用',
   'disabled': '已禁用',
   'Saving speed setting...': '保存速度设置中...',
+  'Shared by all chats; preserved after reload.': '所有聊天共用，刷新后保留',
   'About 1.5x faster, with credits used at 2x': '速度约提升 1.5 倍，额度消耗为 2 倍',
   'About 1.5x faster, with increased credit usage': '速度约提升 1.5 倍，额度消耗会增加',
   'Fast mode is unavailable for this model. Turn it off to use Standard mode.': '当前模型不支持快速模式，请关闭后使用标准模式。',

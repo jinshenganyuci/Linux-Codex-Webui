@@ -299,6 +299,7 @@
               <span class="thread-composer-attach-setting-copy">
                 <span class="thread-composer-attach-setting-label">{{ t('Fast mode') }}</span>
                 <span class="thread-composer-attach-setting-description">{{ speedModeDescription }}</span>
+                <span class="thread-composer-attach-setting-description">{{ t('Shared by all chats; preserved after reload.') }}</span>
               </span>
               <span
                 class="thread-composer-attach-switch"
@@ -454,11 +455,9 @@
           :model-options="modelOptions"
           :reasoning-options="reasoningOptions"
           :default-reasoning-effort="modelCapabilities?.[selectedModel]?.defaultReasoningEffort"
-          :speed-disabled="isSpeedToggleDisabled"
           open-direction="up"
           :disabled="isComposerConfigDisabled"
           :capability-notice="modelCapabilityNotice"
-          @update:selected-speed-mode="onSpeedModeSelect"
           @update:selected-model="onModelSelect"
           @update:selected-reasoning-effort="onReasoningEffortSelect"
         />
@@ -1501,11 +1500,6 @@ function toggleClarifyBeforePlanning(): void {
 
 function onReasoningEffortSelect(value: string): void {
   emit('update:selected-reasoning-effort', value as ReasoningEffort)
-}
-
-function onSpeedModeSelect(value: SpeedMode): void {
-  if (isSpeedToggleDisabled.value || (value === 'fast' && !isFastModeSupported.value)) return
-  emit('update:selected-speed-mode', value)
 }
 
 function onToggleSpeedMode(): void {
