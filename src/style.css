@@ -2870,21 +2870,25 @@ samp {
   box-shadow: 0 2px 8px rgb(0 0 0 / 18%);
 }
 
-/* Keep the full status content, with neutral running-state decoration. */
-:root .turn-progress-card[data-tone='running'] .turn-progress-pulse,
+/* Keep neutral card surfaces while making active work easy to spot. */
+:root .turn-progress-card[data-tone='running'] .turn-progress-pulse {
+  background-color: #0ea5e9;
+  box-shadow: 0 0 0 4px rgb(14 165 233 / 14%);
+}
+
 :root .turn-progress-agent-dot[data-status='running'] {
-  background-color: #85858b;
-  box-shadow: none;
+  background-color: #0ea5e9;
+  box-shadow: 0 0 0 3px rgb(14 165 233 / 12%);
 }
 
 :root .turn-progress-status[data-status='running'] {
-  background-color: #f0f0f2;
-  color: #57575e;
+  background-color: #f0f9ff;
+  color: #0369a1;
 }
 
 :root.dark .turn-progress-status[data-status='running'] {
-  background-color: #353539;
-  color: #d0d0d5;
+  background-color: #082f49;
+  color: #7dd3fc;
 }
 
 :root .turn-progress-main-model-details,

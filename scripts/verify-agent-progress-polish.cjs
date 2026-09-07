@@ -82,8 +82,8 @@ function snapshot(now, count = 3) {
         assert.equal(colors.background, theme === 'dark' ? 'rgb(36, 36, 38)' : 'rgb(255, 255, 255)')
         assert.equal(colors.border, theme === 'dark' ? 'rgba(255, 255, 255, 0.14)' : 'rgba(0, 0, 0, 0.12)')
         assert(!colors.shadow.includes('inset'), 'Old blue inset highlight remains')
-        assert.equal(colors.dot, 'rgb(133, 133, 139)')
-        assert.equal(colors.status, theme === 'dark' ? 'rgb(208, 208, 213)' : 'rgb(87, 87, 94)')
+        assert.equal(colors.dot, 'rgb(14, 165, 233)')
+        assert.equal(colors.status, theme === 'dark' ? 'rgb(125, 211, 252)' : 'rgb(3, 105, 161)')
       }
       const rect = await card.boundingBox()
       const compactScreenshot = path.join(out, `${before ? 'before' : live ? 'live' : 'after'}-compact-${viewport.width}-${theme}.png`)
@@ -133,7 +133,7 @@ function snapshot(now, count = 3) {
       assert((await card.locator('.turn-progress-summary').first().innerText()).includes('0 个活动 · 已完成 0/0'))
       await detailsToggle(card, viewport.width < 768).waitFor()
       assert.deepEqual(errors, []); assert.deepEqual(mutations, [])
-      results.push({ url: page.url(), viewport, theme, height: rect.height, children: 3, reloadChildren: 3, nestedSix: true, originalContentRestored: true, neutralRunningStyle: true, solidThemeSurface: true, resultRequests, progressRequests, errors, mutations, screenshots: [compactScreenshot, expandedScreenshot] })
+      results.push({ url: page.url(), viewport, theme, height: rect.height, children: 3, reloadChildren: 3, nestedSix: true, originalContentRestored: true, activeColorIndicators: true, neutralCardBorder: true, solidThemeSurface: true, resultRequests, progressRequests, errors, mutations, screenshots: [compactScreenshot, expandedScreenshot] })
       await page.unrouteAll({ behavior: 'ignoreErrors' }); await context.close(); console.log('PASS', viewport.width, theme, rect.height)
     }
   } catch (error) {

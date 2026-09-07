@@ -186,3 +186,28 @@ URL 为 `http://127.0.0.1:13511/#/thread/01a0797c-faa5-70a0-b29e-b4c92c0bb03c`�
 ![深色统一底面状态卡](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-surface/after-compact-375-dark.png)
 
 13511 已静态发布前端 `f8e1bab`；33 个 HTTP 文件验证一致，线上手机深色复验通过，底色与灰色装饰匹配断言，原内容和交互不变。原进程、后端和配置、7 个验收会话保留，13510 不变，无重启和备份。回执和线上检查为 `output/playwright/agent-progress-surface/deployment.json`、`live-browser.json`，截图绝对路径为 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-surface/live-compact-375-dark.png`。
+
+
+### 当前配色：彩色圆点与标签，保留白底且不使用蓝色外框
+
+用户确认“恢复彩色圆点和标签，只去掉蓝色外框”。以下要求覆盖前文灰色运行标记的历史验收，原完整状态内容和白/深灰底面不变。
+
+| Before | After | Why |
+| --- | --- | --- |
+| 主任务和运行中子任务圆点为灰色 | 蓝色圆点与局部柔光 | 让运行状态清晰可见 |
+| 运行状态标签为灰底灰字 | 浅蓝底深蓝字；深色模式深蓝底浅蓝字 | 与运行圆点保持一致 |
+| 白底、浅灰边及完整字段 | 保留原表面和内容，不恢复蓝色外框 | 遵循用户确认的配色范围 |
+
+前置条件：13511 及原有 TestChat；使用受控响应回放三个子任务（一运行、二完成），避免真实发送或中断任务。
+
+操作：
+
+1. 执行 `pnpm run build:frontend`、`node scripts/verify-active-status-colors.cjs`，在 1440×900、375×812、768×1024 的明暗六组中检查真实状态卡。
+2. 主任务圆点应为 `#0ea5e9`，有局部柔光；“运行/推理”标签恢复彩色。卡片底面保持浅色纯白、深色 `#242426`，边框为中性细边，无蓝色内阴影。
+3. 展开代理详情，运行中子任务圆点显示蓝色，完成任务保持绿色；完成、失败、中断、断线与过期状态沿用各自颜色，不能全部变蓝。
+4. 检查原 1.8 秒呼吸动画仍运行，亮暗两帧不改变卡片宽高；切换浏览器“减少动态效果”后停止动画，保留静态彩色提示。
+5. 静态发布后执行 `LIVE_PREVIEW=1 SMOKE=1 node scripts/verify-active-status-colors.cjs`，复验手机明暗两组。原 `verify-agent-progress-polish.cjs` 已同步最新圆点和标签颜色断言。
+
+预期与性能：页面无错误、无真实任务或配置写入，每组只读取一次进度。沿用现有 opacity/transform 动画，不新增计时器、布局动画或轮询；CSS 增加 71 字节（gzip 16）。本次不测真实设备 FPS，以构建体积、动画属性、两帧布局尺寸和请求计数为依据。
+
+清理/回滚：关闭测试浏览器即可清理响应回放，真实状态不会变化。仅静态发布 13511，不重启或备份；回退可重新发布目标前端。截图和 JSON 报告保存在 `output/playwright/active-status-colors/`。
