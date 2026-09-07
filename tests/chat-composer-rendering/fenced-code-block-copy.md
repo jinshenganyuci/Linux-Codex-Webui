@@ -81,3 +81,19 @@ PROFILE_BASE_URL=http://127.0.0.1:13511 PROFILE_ROUTE='#/thread/01a07ac1-1655-73
 - 首条消息 996.4→532.2ms；长任务 2→3 次，最大 149→139ms，同样不作统计提升或退化结论。完整 JSON、截图与 trace 引用分别保存在 `output/playwright/message-presentation/profile-before.json`、`profile-after.json`。
 - 除主入口外，聊天懒加载 JS 96705→97725 字节（gzip 28417→28882），聊天 CSS 109556→97050（gzip 11259→10342）。主入口与聊天这四项资源合计原始体积减少 7812 字节、gzip 增加 359 字节，没有隐藏新增高亮依赖。详细数值见同目录 `bundle.json`。
 - 主进程 491027、app-server 子进程 491058 和 5 个验收会话保留；正式 13510 静态资源校验不变，配置/认证/模型目录哈希在浏览器验收后不变。回执同目录 `deployment.json` 明确 `backupCreated:false`、`backendRestarted:false`。未推送 GitHub 或发布 npm。
+
+
+#### 正式 13510 升级复验（2026-09-07，用户明确授权）
+- 前端 `c7ea54d` 已从 13511 直接发布至 13510，33 个正式 HTTP 资源与验收构建一致；未重新构建未验收版本，后台仍为 `2e17039` / Codex 0.153.4。
+- 精确命令：`python3 output/playwright/message-presentation-production-13510/deploy.py`；`node output/playwright/message-presentation-production-13510/verify.cjs`。实际链接页面 `http://127.0.0.1:13510/#/thread/01a07a8a-cff4-76d1-aea2-0c8e6c8142e9`，实际代码页面 `http://127.0.0.1:13510/#/thread/01a072dd-8015-7e52-b776-5901a0a6518e`，均为已有空闲聊天，不向正式线程发送验收消息。
+- 1440×1000、375×812、768×1024 明暗六组通过：保留 Service Worker，刷新后匹配新版入口；真实链接默认蓝色、href/title/text 非空；真实代码以源片段 SHA-256 定位，复制与原文逐字一致；键盘切换换行、手机 44px 按钮及无横向溢出通过。正式代码文本没有修改，不在验收文件中保留整段聊天副本，元数据只记录测试代码摘要。
+- 无页面错误、模型/速度/权限写入或消息发送；配置、认证和模型文件哈希在验证后不变，616 个会话及两端主进程/子进程保持完好。回执明确 `backupCreated:false`、`backendRestarted:false`，13511 资源不变。
+- 完整报告 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/message-presentation-production-13510/deployment.json`，浏览器结果同目录 `browser.json`；各组截图为同目录 `links-{1440,375,768}-{light,dark}.png`、`code-{1440,375,768}-{light,dark}.png`。
+
+正式 13510，1440×1000 浅色，已有聊天中的蓝色链接：
+
+![正式蓝色链接](/root/codex工作目录/Linux-Codex-Webui/output/playwright/message-presentation-production-13510/links-1440-light.png)
+
+正式 13510，375×812 深色，已有 YAML 代码块及换行按钮：
+
+![正式手机代码块](/root/codex工作目录/Linux-Codex-Webui/output/playwright/message-presentation-production-13510/code-375-dark.png)
