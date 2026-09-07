@@ -23,6 +23,15 @@ async function rpc(port, method, params = {}) {
   if (payload.error) throw new Error(`${method}: ${JSON.stringify(payload.error)}`)
   return payload.result
 }
+async function readReadyThread(port, threadId) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await rpc(port, 'thread/read', { threadId, includeTurns: true }) }
+    catch (error) {
+      if (attempt >= 39 || !/list_turns is not supported yet|no rollout found|not materialized/i.test(error.message)) throw error
+      await wait(250)
+    }
+  }
+}
 const provider = name => `\n[model_providers.${name}]\nname = "Phase1 ${name}"\nbase_url = "http://127.0.0.1:8099/${name}/v1"\nwire_api = "responses"\nrequires_openai_auth = ${name === 'invalid'}\nexperimental_bearer_token = "phase1-fake-only"\nsupports_websockets = false\nrequest_max_retries = 0\nstream_max_retries = 0\n`
 async function start(name, port, config, auth) {
   const home = resolve(root, name)
@@ -74,7 +83,7 @@ async function checkUi(browser, name, port) {
     await rpc(4193, 'turn/start', { threadId, input: [{ type: 'text', text: 'PHASE1_DOCKER_INVALID_AUTH' }], model: 'gpt-6-astra', effort: 'low' })
     let thread
     for (let attempt = 0; attempt < 50; attempt += 1) {
-      thread = (await rpc(4193, 'thread/read', { threadId, includeTurns: true })).thread
+      thread = (await readReadyThread(4193, threadId)).thread
       if (thread.turns.some(turn => turn.status === 'failed')) break
       await wait(500)
     }
@@ -97,7 +106,7 @@ async function checkUi(browser, name, port) {
       screenshots.push(screenshot)
       await page.close()
     }
-    const finalThread = (await rpc(4193, 'thread/read', { threadId, includeTurns: true })).thread
+    const finalThread = (await readReadyThread(4193, threadId)).thread
     assert.equal(finalThread.turns.length, 1)
     reports.push({ name: 'invalid-auth', port: 4193, threadId, status: failedTurn.status, afterRefresh: true, duplicateOverlayCount: 0, noRetryOrModelFallback: true, screenshots })
     console.log('invalid-auth: passed')
@@ -114,14 +123,19 @@ async function checkUi(browser, name, port) {
       const speeds = []
       for (const serviceTier of ['priority', null]) {
         const t = (await rpc(4194, 'thread/start', { model: 'gpt-5.6-luna', cwd: '/project', serviceTier })).thread
-        await rpc(4194, 'turn/start', { threadId: t.id, model: 'gpt-5.6-luna', effort: 'low', serviceTier, input: [{ type: 'text', text: 'THREAD_SPEED_FIXTURE' }] })
+        await rpc(4194, 'turn/start', { threadId: t.id, model: 'gpt-5.6-luna', effort: 'low', serviceTier, input: [{ type: 'text', text: serviceTier ? 'THREAD_SPEED_FIXTURE_FAST' : 'THREAD_SPEED_FIXTURE_STANDARD' }] })
         let done = false
-        for (let i = 0; i < 40; i++) { const t2 = (await rpc(4194, 'thread/read', { threadId: t.id, includeTurns: true })).thread; if (t2.turns.some(turn => turn.status === 'failed')) { done = true; break } await wait(250) }
+        for (let i = 0; i < 40; i++) { const t2 = (await readReadyThread(4194, t.id)).thread; if (t2.turns.some(turn => turn.status === 'failed')) { done = true; break } await wait(250) }
         assert(done)
         speeds.push({ threadId: t.id, serviceTier })
       }
       const captured = docker('exec', containers.at(-1), 'cat', '/tmp/codex-provider-tiers.jsonl').split('\n').filter(Boolean).map(line => JSON.parse(line))
-      assert.deepEqual(captured.map(row => row.serviceTier), ['priority', null], 'Standard must override a legacy global priority setting on the actual upstream request')
+      // Title generation or authentication can add requests; validate the user turns by their unique markers.
+      for (const [marker, tier] of [['THREAD_SPEED_FIXTURE_FAST', 'priority'], ['THREAD_SPEED_FIXTURE_STANDARD', null]]) {
+        const requests = captured.filter(row => row.marker === marker)
+        assert(requests.length > 0)
+        assert(requests.every(row => row.serviceTier === tier), 'Standard must override legacy global priority: ' + JSON.stringify(requests))
+      }
       const prefs = (await fetchJson(4194, '/codex-api/thread-model-preferences')).data
       assert.equal(prefs[speeds[0].threadId].speedMode, 'fast'); assert.equal(prefs[speeds[1].threadId].speedMode, 'standard')
       reports.push({ name: 'per-thread-speed', port: 4194, legacyGlobalTier: 'priority', captured, speeds, preferencesIndependent: true })

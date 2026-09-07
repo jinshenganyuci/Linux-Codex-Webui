@@ -10,7 +10,7 @@ http.createServer((request, response) => {
   let body = ''
   request.on('data', chunk => { body += chunk })
   request.on('end', () => {
-    try { const payload = JSON.parse(body); appendFileSync('/tmp/codex-provider-tiers.jsonl', JSON.stringify({ model: payload.model, serviceTier: payload.service_tier ?? null }) + '\n') } catch {}
+    try { const payload = JSON.parse(body); appendFileSync('/tmp/codex-provider-tiers.jsonl', JSON.stringify({ model: payload.model, serviceTier: payload.service_tier ?? null, marker: JSON.stringify(payload.input ?? []).match(/THREAD_SPEED_FIXTURE_(FAST|STANDARD)/)?.[0] ?? '' }) + '\n') } catch {}
     response.statusCode = 401
     response.end(JSON.stringify({ error: { message: 'PHASE1_INVALID_AUTH: supplied test credential has expired', type: 'invalid_request_error', code: 'invalid_api_key' } }))
   })

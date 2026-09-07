@@ -141,3 +141,43 @@ PHASE1_DOCKER_IMAGE=linux-codex-webui-global-fast:20260907 CODEX_ACCEPTANCE_REPO
 - 旧记录没有速度字段时按 standard 读取，不批量改写历史记录；旧全局 config.toml 不变。需要完整前后端升级，旧后端不支持 PATCH 时必须报错回退，不能假装成功。
 - 上方全局 Fast 章节和其部署记录仅保留为历史；旧 `verify-global-fast-mode.cjs` 已停止运行以免误写全局配置，当前验证使用 `verify-thread-fast-mode.cjs`。
 - 验收只临时修改两个 TestChat 的偏好，结束后逐条恢复，不覆盖整个偏好文件；不修改全局配置或正式 13510。回退需部署目标版本的前后端，不能只切前端。
+
+#### 本次验收命令和结果（2026-09-07）
+
+```bash
+pnpm exec vitest run src/composables/useDesktopState.test.ts src/api/codexGateway.test.ts src/server/threadModelPreferences.test.ts src/server/codexAppServerBridge.threadModelPreferencePersistence.test.ts
+pnpm exec vitest run src/server/codexAppServerBridge.inlinePayload.test.ts src/server/codexAppServerBridge.archive.test.ts src/composables/desktop/nativeThreadController.test.ts src/api/nativeThreadGateway.test.ts
+pnpm run build
+node -e "const {execFileSync}=require('node:child_process');const assert=require('node:assert/strict');assert.match(execFileSync(process.execPath,['dist-cli/index.js','--help'],{encoding:'utf8'}),/Usage: linux-codex-webui/);console.log('PASS CLI help from CJS')"
+pnpm pack --pack-destination /tmp
+docker build -t linux-codex-webui-thread-fast:20260907 /tmp/codex-thread-fast-docker
+VERIFY_THREAD_FAST=1 PHASE1_DOCKER_IMAGE=linux-codex-webui-thread-fast:20260907 CODEX_ACCEPTANCE_REPORT_PREFIX=thread-fast node scripts/verify-codex-phase1-docker.cjs
+node scripts/verify-thread-fast-mode.cjs
+PROFILE_BASE_URL=http://127.0.0.1:13511 PROFILE_ROUTE='#/thread/01a07ac1-1655-7340-bead-0637d5eeab63' PROFILE_WAIT_MS=7000 pnpm run profile:browser
+```
+
+- 单测分别 197、81 项通过，共 8 个文件 278 项。完整构建及 CLI 的 CJS 调用通过；首页标识说明修正后再执行 `pnpm run build:frontend` 并发布，六组页面断言全部通过。
+- 镜像从已有 `linux-codex-webui-global-fast:20260907` 复用 Codex 0.153.4，将当前打包产物安装到 `/opt/thread-fast`；运行 `CODEX_HOME=/codex-home` 和 `linux-codex-webui --port ${PORT:-4190} --no-password --no-open --no-tunnel --no-login`，使用隔离假认证及本地 mock。
+- 容器五项通过：4191 无认证、4192 损坏认证保持当前 Codex-only 行为；4193 无效认证失败回合刷新保留、重复浮层 0；4194 alpha→beta 模型切换，以及两个独立会话的实际 CLI 请求捕获。旧全局 priority 存在时，唯一 Fast 用户标记对应 priority，Standard 用户标记对应空服务等级；偏好各自为 fast/standard。额外无标记请求不计作用户回合。容器与 4191–4194 监听均已清理，报告 `output/playwright/thread-fast-docker-report.json`。
+- 浏览器直接使用 Playwright，因为需修改主题 localStorage、注入延迟和失败；禁用测试上下文的 Service Worker 以可靠拦截。脚本读取现有两个 TestChat 标识文件，要求会话无活动回合；不发送模型消息。A 的开关、B 的开关、失败回退各按 threadId 断言，重新加载及全新浏览器均保持独立；首页每次进入默认标准，未发送草稿不写偏好。共记录 4 次 PATCH（含 1 次预期失败），全局配置写入、发送消息、页面异常均为 0，finally 已逐条恢复原有记录。
+
+实际 URL 为 `http://127.0.0.1:13511/#/thread/01a0797c-faa5-70a0-b29e-b4c92c0bb03c`（A）和 `http://127.0.0.1:13511/#/thread/01a07ac1-1655-7340-bead-0637d5eeab63`（B）。桌面 1440×900、手机 375×812、平板 768×1024 明暗六组截图位于 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/thread-fast/a-fast-{1440,375,768}-{light,dark}.png` 和同目录 `b-standard-{1440,375,768}-{light,dark}.png`；详细断言在 `live-result.json`。
+
+A 会话，375×812 浅色，刷新后保持开启：
+
+![会话 A 刷新后快速模式开启](/root/codex工作目录/Linux-Codex-Webui/output/playwright/thread-fast/a-fast-375-light.png)
+
+B 会话，375×812 深色，独立保持关闭：
+
+![会话 B 独立保持标准模式](/root/codex工作目录/Linux-Codex-Webui/output/playwright/thread-fast/b-standard-375-dark.png)
+
+4193 无效认证，1280×900 深色，失败刷新后保留且无重复浮层：
+
+![独立速度版本认证错误回归](/root/codex工作目录/Linux-Codex-Webui/output/playwright/thread-fast-docker-invalid-auth-dark.png)
+
+#### 性能、部署和清理记录
+
+- 主入口 JS 715307→716330 字节（gzip 222762→222982），CSS 原始大小均 538294 字节；复用现有偏好读取，不新增依赖、轮询、会话历史扫描或请求扇出。按会话 pending 项在 finally 清理，模型 PUT 只写模型字段，速度 PATCH 在原串行锁内合并，避免并发覆盖和无界待办。
+- 当前完成态 B 聊天 profiler 正常渲染，API 总量 128.4 KB；偏好 GET 1 次、447 字节、17.3ms，thread/resume 1 次，无重复历史页请求。唯一 warning 是既有 thread/list 首页 2 次；最慢 API 是模型目录 302.8ms。首条消息 463ms 为单次样本，不声明速度提升；未测供应商真实加速、实机软键盘或低端设备。完整报告和 trace 路径见 `output/playwright/thread-fast/profile.json`，体积见 `bundle.json`。
+- 13511 后端完整发布 `f2019e5`，保留原发布目录和验收 CODEX_HOME，服务重启一次，当前主进程 538954、实际 app-server 子进程 539008 / Codex 0.153.4。因 CLI 懒启动，使用只读 config/read 初始化后验证真实子进程；33 个 HTTP 资源通过，5 个验收会话及原配置/认证/模型文件保留。首页说明修正仅追加前端发布，无第二次重启。
+- 回执 `output/playwright/thread-fast/deployment.json` 标记 `completed:true`、`backendRestarted:true`、`backupCreated:false`；测试记录已恢复、全局配置未改。正式 13510 未升级，仍为此前全局 Fast 版本。未创建备份、未推送 GitHub 或发布 npm。回退必须成套构建并部署目标前后端，保留原数据目录；不能以旧前端配新后端代表回退完成。
