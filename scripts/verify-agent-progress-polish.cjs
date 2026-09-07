@@ -3,11 +3,13 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const base = 'http://127.0.0.1:13511'
-const out = path.resolve('output/playwright/agent-progress-polish')
+const out = path.resolve('output/playwright/agent-progress-classic')
 const threadId = JSON.parse(fs.readFileSync('output/playwright/chatgpt-preview/thread.json')).id
 const before = process.env.BASELINE === '1'
 const live = process.env.LIVE_PREVIEW === '1'
+const smoke = process.env.SMOKE === '1'
 const fixtureTurn = 'agent-progress-ui-replay'
+const detailsToggle = (card, mobile) => card.locator(mobile ? '.turn-progress-mobile-open' : '.turn-progress-agent-details-toggle')
 
 function snapshot(now, count = 3) {
   const names = ['identity_protocol_audit', 'identity_lifecycle_audit', 'proxy_routing_audit', 'nested_check', 'interrupted_check', 'failed_check']
@@ -32,8 +34,8 @@ function snapshot(now, count = 3) {
   const browser = await chromium.launch({ headless: true }), results = []
   let lastPage
   try {
-    const views = before ? [{ width: 375, height: 812 }] : [{ width: 1440, height: 900 }, { width: 375, height: 812 }, { width: 768, height: 1024 }]
-    for (const viewport of views) for (const theme of before ? ['light'] : ['light', 'dark']) {
+    const views = before || smoke ? [{ width: 375, height: 812 }] : [{ width: 1440, height: 900 }, { width: 375, height: 812 }, { width: 768, height: 1024 }]
+    for (const viewport of views) for (const theme of before ? ['light'] : smoke ? ['dark'] : ['light', 'dark']) {
       const now = Date.now()
       const context = await browser.newContext({ viewport, colorScheme: theme, isMobile: viewport.width < 768, hasTouch: viewport.width < 768, serviceWorkers: 'block' })
       await context.addInitScript(value => localStorage.setItem('codex-web-local.dark-mode.v1', value), theme)
@@ -72,25 +74,30 @@ function snapshot(now, count = 3) {
       const card = page.locator('.turn-progress-card')
       await card.waitFor(); await page.waitForTimeout(2300)
       if (!before) {
-        assert((await card.locator('.turn-progress-details-toggle').innerText()).includes('子任务 3'))
-        assert((await card.innerText()).includes('1 运行中'))
-        assert((await card.innerText()).includes('2 已完成'))
-        assert.equal(await card.locator('.turn-progress-body').isVisible(), false)
-        assert(!/Model:|Thinking:|Speed:|0\/0/.test(await card.innerText()))
+        assert((await card.innerText()).includes('主推理模型'))
+        assert((await card.locator('.turn-progress-summary').first().innerText()).includes('1 个活动 · 已完成 2/3'))
+        assert.equal(await card.locator('.turn-progress-tree').isVisible(), false)
+        assert(/Model:.*Thinking:.*Speed:/.test(await card.locator('.turn-progress-main-model-details').innerText()))
+        const colors = await card.evaluate(n => ({ border: getComputedStyle(n).borderTopColor, shadow: getComputedStyle(n).boxShadow, dot: getComputedStyle(n.querySelector('.turn-progress-pulse')).backgroundColor, status: getComputedStyle(n.querySelector('.turn-progress-status')).color }))
+        assert.equal(colors.border, theme === 'dark' ? 'rgba(255, 255, 255, 0.14)' : 'rgba(0, 0, 0, 0.12)')
+        assert(!colors.shadow.includes('inset'), 'Old blue inset highlight remains')
+        assert.equal(colors.dot, 'rgb(133, 133, 139)')
+        assert.equal(colors.status, theme === 'dark' ? 'rgb(208, 208, 213)' : 'rgb(87, 87, 94)')
       }
       const rect = await card.boundingBox()
       const compactScreenshot = path.join(out, `${before ? 'before' : live ? 'live' : 'after'}-compact-${viewport.width}-${theme}.png`)
       await page.screenshot({ path: compactScreenshot })
       if (before) { results.push({ viewport, theme, height: rect.height, screenshot: compactScreenshot }); await page.unrouteAll({ behavior: 'ignoreErrors' }); await context.close(); continue }
-      assert(rect.height <= 128, `Card not compact: ${rect.height}`)
       assert(rect.x >= 0 && rect.x + rect.width <= viewport.width + 1)
       assert.equal(resultRequests, 0, 'Results were eagerly loaded')
-      const toggle = card.locator('.turn-progress-details-toggle')
+      const toggle = detailsToggle(card, viewport.width < 768)
+      assert.equal(await toggle.evaluate(n => getComputedStyle(n).color), theme === 'dark' ? 'rgb(208, 208, 213)' : 'rgb(87, 87, 94)')
       await toggle.click()
       const body = card.locator('.turn-progress-body')
       await body.waitFor({ state: 'visible' })
       assert.equal(await body.getByRole('listitem').count(), 3)
       assert.equal(await body.locator('.turn-progress-agent-model-details').count(), 3)
+      assert((await body.locator('.turn-progress-agent-model-details').first().innerText()).includes('Model: gpt-6-astra · Thinking: ultra'))
       const firstResult = body.locator('.turn-progress-result-button').first()
       await firstResult.click(); await body.locator('.turn-progress-result pre').waitFor()
       assert.equal(resultRequests, 1)
@@ -108,20 +115,20 @@ function snapshot(now, count = 3) {
       } else await toggle.click()
       // Reload proves state recovery renders the same three child references.
       await page.reload({ waitUntil: 'domcontentloaded' }); await card.waitFor(); await page.waitForTimeout(2300)
-      assert((await card.locator('.turn-progress-details-toggle').innerText()).includes('子任务 3'))
+      assert((await card.locator('.turn-progress-summary').first().innerText()).includes('1 个活动 · 已完成 2/3'))
       // Include a nested child and terminal states, then the no-child case.
       count = 6
       await page.reload({ waitUntil: 'domcontentloaded' }); await card.waitFor(); await page.waitForTimeout(1000)
-      await card.locator('.turn-progress-details-toggle').click()
+      await detailsToggle(card, viewport.width < 768).click()
       assert.equal(await card.locator('.turn-progress-agent-row').count(), 6)
       assert.equal(await card.locator('.turn-progress-agent-row[data-depth="2"]').count(), 1)
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
       count = 0
       await page.reload({ waitUntil: 'domcontentloaded' }); await card.waitFor(); await page.waitForTimeout(1000)
-      assert((await card.locator('.turn-progress-details-toggle').innerText()).includes('活动记录'))
-      assert(!/0\/0|0 个活动/.test(await card.innerText()))
+      assert((await card.locator('.turn-progress-summary').first().innerText()).includes('0 个活动 · 已完成 0/0'))
+      await detailsToggle(card, viewport.width < 768).waitFor()
       assert.deepEqual(errors, []); assert.deepEqual(mutations, [])
-      results.push({ url: page.url(), viewport, theme, height: rect.height, children: 3, reloadChildren: 3, nestedSix: true, emptyCountsHidden: true, resultRequests, progressRequests, errors, mutations, screenshots: [compactScreenshot, expandedScreenshot] })
+      results.push({ url: page.url(), viewport, theme, height: rect.height, children: 3, reloadChildren: 3, nestedSix: true, originalContentRestored: true, neutralRunningStyle: true, resultRequests, progressRequests, errors, mutations, screenshots: [compactScreenshot, expandedScreenshot] })
       await page.unrouteAll({ behavior: 'ignoreErrors' }); await context.close(); console.log('PASS', viewport.width, theme, rect.height)
     }
   } catch (error) {

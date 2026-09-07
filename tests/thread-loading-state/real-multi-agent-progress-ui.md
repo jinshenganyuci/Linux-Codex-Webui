@@ -11,13 +11,13 @@
 ## Actions and expected results
 
 1. Open a thread and send the one-agent task.
-   - The live card starts in a compact state; the `Subtasks N` / `子任务 N` control has `aria-expanded=false`. With no children, it reads `Activity log` / `活动记录` without zero-count placeholders.
-   - The card header shows `Main task` / `主任务`, one phase label, duration and compact model/thinking/speed details; expanding shows only child agents, and collapsing removes the details from the accessibility tree.
+   - The live card starts with collapsed agent details; `Show agent details` / `展开代理详情` has `aria-expanded=false` on desktop, while mobile uses `View agent activity` / `查看代理活动`.
+   - The header shows `Main reasoning model` / `主推理模型`, full Model/Thinking/Speed values, phase, active/completed counts and duration. Running-state decorations are neutral gray with no blue border or glow. Expanding shows child agents; collapsing removes their tree from the accessibility tree.
    - The phase changes between preparing, reasoning, dispatching, waiting, executing, applying changes, and summarizing based on real notifications.
    - Elapsed time and last-activity time advance without displaying a fabricated percentage or ETA.
 2. Send the six-agent task.
    - All agents use the same row layout; no special case is required for four, five, or six agents.
-   - Each child row shows compact model and reasoning labels from that child's own rollout, with raw values retained in title attributes. Compare agents with different values and confirm they are not copied from the main model or another child; missing child speed must remain absent.
+   - Each child row shows full Model/Thinking values from that child's own rollout. Compare agents with different values and confirm they are not copied from the main model or another child; missing child speed must remain absent.
    - Nested agents are indented beneath their actual parent.
    - Completed, interrupted, failed, running, waiting, stale, and disconnected states are visually distinct.
    - Before reloading the page, a completed root with completed child results shows zero active agents and `Completed N/N`; trailing token-usage or goal notifications do not revert child rows to `Running`.
@@ -131,3 +131,35 @@ LIVE_PREVIEW=1 node scripts/verify-agent-progress-polish.cjs
 - 完整记录为 `output/playwright/agent-progress-polish/live-browser.json` 与 `deployment.json`；线上复验截图绝对路径为 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-polish/live-{compact,expanded}-{1440,375,768}-{light,dark}.png`。服务端恢复由 60 项跟踪/分页单测及用户实际元数据回放验证，没有将浏览器拦截结果冒充新创建子任务的运行证据。
 
 ![13511 手机紧凑状态卡发布复验](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-polish/live-compact-375-light.png)
+
+## 当前外观：原内容展示与中性灰色状态卡
+
+用户要求恢复上方紧凑方案之前的内容；紧凑方案章节只作为历史记录，子任务恢复逻辑继续保留。
+
+| Before | After | Why |
+| --- | --- | --- |
+| 简写模型、合并统计按钮 | 主推理模型、完整 Model/Thinking/Speed、原统计和详情入口 | 恢复用户喜欢的信息组织 |
+| 原版运行态蓝边、光圈和蓝色按钮 | 灰边、灰色运行点/标签/按钮，无蓝色光圈 | 保留原内容并减少蓝色强调 |
+
+前置条件：沿用独立 13511 与已完成 TestChat，脚本回放运行/子任务数据，不发消息或创建实际代理。
+
+```bash
+pnpm exec vitest run src/components/content/turnProgressUtils.test.ts src/server/agentProgressTracker.test.ts
+pnpm run build:frontend
+node scripts/verify-agent-progress-polish.cjs
+# 前端静态发布后复验一个手机深色用例；六组完整检查已验证同一构建。
+LIVE_PREVIEW=1 SMOKE=1 node scripts/verify-agent-progress-polish.cjs
+```
+
+操作与预期：
+
+1. 在 1440×900、375×812、768×1024 明暗界面打开原 TestChat，主标题为“主推理模型”，模型信息保留 Model/Thinking/Speed 前缀，摘要为“执行中 · 1 个活动 · 已完成 2/3”。手机显示“查看代理活动”，桌面显示“展开代理详情”。
+2. 检查浅色边框为 `rgba(0,0,0,.12)`，深色为 `rgba(255,255,255,.14)`；没有 inset 蓝线；运行圆点为 `rgb(133,133,139)`，状态和按钮为灰色。完成、警告、失败仍保留各自状态色。
+3. 展开显示原子任务名称、打开子线程入口和完整子模型信息；点击完成结果才读取一次。手机 Shift+Tab 不离开弹层，Esc 关闭并返回触发按钮。
+4. 刷新保持三节点统计；六节点含二级节点时层级正确、无横向溢出；零节点显示原来的“0 个活动 · 已完成 0/0”，不再使用紧凑方案的活动记录替代。
+
+结果：54 项相关测试、前端构建、六组浏览器回放通过。手机卡片 150px，桌面/平板 172px；每组四次加载/四次进度读取、一次按需结果读取，无配置或消息写入。四个入口和聊天资源合计 -2315 字节、gzip -822，无新增运行时循环。后端代码未改，`0a8e081` 子任务修复保留。
+
+URL 为 `http://127.0.0.1:13511/#/thread/01a0797c-faa5-70a0-b29e-b4c92c0bb03c`，报告在 `output/playwright/agent-progress-classic/browser.json`，截图绝对路径为 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-classic/after-{compact,expanded}-{1440,375,768}-{light,dark}.png`（compact 文件名表示折叠态，内容已恢复原版）。关闭浏览器即可清理测试上下文，不改原线程、偏好或配置。回退只需从目标提交重建前端并静态发布；无需回退子任务追踪器。
+
+![原内容与灰色手机状态卡](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-classic/after-compact-375-light.png)

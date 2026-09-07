@@ -6,10 +6,28 @@
     aria-atomic="false"
   >
     <header class="turn-progress-header">
-      <div class="turn-progress-title-line">
+      <div class="turn-progress-title-wrap">
         <span class="turn-progress-pulse" aria-hidden="true"></span>
-        <p class="turn-progress-title">{{ progress ? t('Main task') : progressTitle }}</p>
-        <span v-if="progress" class="turn-progress-status" :data-status="rootTone">{{ rootStatusLabel }}</span>
+        <div class="turn-progress-heading">
+          <div v-if="progress" class="turn-progress-title-line">
+            <p class="turn-progress-title">{{ t('Main reasoning model') }}</p>
+            <span class="turn-progress-status" :data-status="rootTone">{{ rootStatusLabel }}</span>
+          </div>
+          <p v-else class="turn-progress-title">{{ progressTitle }}</p>
+          <p v-if="progress && overlay.mainModelDetails?.length" class="turn-progress-main-model-details">
+            {{ overlay.mainModelDetails.join(' · ') }}
+          </p>
+          <p v-if="progress" class="turn-progress-summary">
+            {{ progressTitle }} · {{ t('{active} active · {completed}/{total} completed', {
+              active: counts.active,
+              completed: counts.completed,
+              total: counts.total,
+            }) }}
+          </p>
+          <p v-else-if="overlay.activityDetails.length > 0" class="turn-progress-summary">
+            {{ overlay.activityDetails.join(' · ') }}
+          </p>
+        </div>
       </div>
       <div class="turn-progress-header-meta">
         <span v-if="connectionWarning" class="turn-progress-connection" :data-state="connectionState">
@@ -21,14 +39,6 @@
             : t('Duration {time}', { time: elapsedText }) }}
         </span>
       </div>
-      <p v-if="progress && mainModelDetails.length" class="turn-progress-main-model-details">
-        <span v-for="detail in mainModelDetails" :key="detail.title" :data-kind="detail.kind" :title="detail.title">
-          <IconTablerBolt v-if="detail.kind === 'speed' && detail.value === 'Fast mode'" aria-hidden="true" />
-          {{ t(detail.value) }}
-        </span>
-      </p>
-      <p v-if="progress && (connectionWarning || rootStale)" class="turn-progress-summary">{{ progressTitle }}</p>
-      <p v-else-if="!progress && overlay.activityDetails.length" class="turn-progress-summary">{{ overlay.activityDetails.join(' · ') }}</p>
     </header>
 
     <div v-if="overlay.runtimeNotices?.length" class="runtime-notices" role="status" aria-live="polite">
@@ -39,29 +49,20 @@
     </div>
 
     <button
-      v-if="progress && (counts.total > 0 || progress.events.length > 0)"
+      v-if="progress && isMobile"
       ref="mobileOpenButtonRef"
       type="button"
-      class="turn-progress-details-toggle"
-      :aria-expanded="isMobile ? mobileOpen : agentDetailsOpen"
-      :aria-controls="agentDetailsId"
-      @click="isMobile ? mobileOpen = true : agentDetailsOpen = !agentDetailsOpen"
+      class="turn-progress-mobile-open"
+      :aria-expanded="mobileOpen"
+      @click="mobileOpen = true"
     >
-      <span class="turn-progress-details-label">{{ counts.total ? t('Subtasks {count}', { count: counts.total }) : t('Activity log') }}</span>
-      <span v-if="counts.total" class="turn-progress-counts">
-        <span v-if="counts.active" data-status="running">{{ t('{count} running', { count: counts.active }) }}</span>
-        <span v-if="counts.completed">{{ t('{count} completed', { count: counts.completed }) }}</span>
-        <span v-if="counts.interrupted">{{ t('{count} interrupted', { count: counts.interrupted }) }}</span>
-        <span v-if="counts.failed" data-status="failed">{{ t('{count} failed', { count: counts.failed }) }}</span>
-      </span>
-      <IconTablerChevronDown class="turn-progress-details-chevron" :class="{ 'is-open': isMobile ? mobileOpen : agentDetailsOpen }" aria-hidden="true" />
+      {{ t('View agent activity') }}
+      <span aria-hidden="true">↑</span>
     </button>
 
     <div
       v-if="progress"
-      v-show="isMobile ? mobileOpen : agentDetailsOpen"
       ref="mobileSheetRef"
-      :id="agentDetailsId"
       class="turn-progress-body"
       :class="{ 'turn-progress-body-mobile-open': mobileOpen }"
       :role="isMobile && mobileOpen ? 'dialog' : undefined"
@@ -78,8 +79,21 @@
         <button ref="mobileCloseButtonRef" type="button" class="turn-progress-close" :aria-label="t('Close')" @click="mobileOpen = false">×</button>
       </div>
 
+      <button
+        v-if="!isMobile"
+        type="button"
+        class="turn-progress-agent-details-toggle"
+        :aria-expanded="agentDetailsOpen"
+        :aria-controls="agentDetailsId"
+        @click="agentDetailsOpen = !agentDetailsOpen"
+      >
+        {{ agentDetailsOpen ? t('Hide agent details') : t('Show agent details') }}
+        <span aria-hidden="true">{{ agentDetailsOpen ? '−' : '+' }}</span>
+      </button>
+
       <div
-        v-if="orderedAgents.length"
+        v-show="agentDetailsOpen || isMobile"
+        :id="agentDetailsId"
         class="turn-progress-tree"
         role="list"
         :aria-label="t('Agent tree')"
@@ -96,13 +110,15 @@
           <span class="turn-progress-agent-dot" :data-status="agentTone(agent)" aria-hidden="true"></span>
           <div class="turn-progress-agent-copy">
             <div class="turn-progress-agent-line">
-              <a :href="`#/thread/${encodeURIComponent(agent.threadId)}`" class="turn-progress-agent-link" :title="agent.path || agent.threadId"><strong>{{ agentDisplayName(agent, index) }}</strong><IconTablerChevronRight aria-hidden="true" /></a>
+              <strong>{{ agentDisplayName(agent, index) }}</strong>
+              <a :href="`#/thread/${encodeURIComponent(agent.threadId)}`" class="turn-progress-agent-link">打开子线程</a>
+              <span v-if="agent.path" class="turn-progress-agent-path">{{ agent.path }}</span>
               <span class="turn-progress-status" :data-status="agentTone(agent)">
                 {{ t(agentStatusTranslationKey(agent.status, agentIsStale(agent))) }}
               </span>
             </div>
             <p v-if="agentModelDetailSegments(agent).length" class="turn-progress-agent-model-details">
-              <span v-for="detail in compactProgressModelDetails(agentModelDetailSegments(agent))" :key="detail.title" :title="detail.title">{{ t(detail.value) }}</span>
+              {{ agentModelDetailSegments(agent).join(' · ') }}
             </p>
             <p v-if="agent.taskSummary" class="turn-progress-agent-task">{{ agent.taskSummary }}</p>
             <p class="turn-progress-agent-meta">
@@ -183,16 +199,12 @@ import type { CSSProperties } from 'vue'
 import type { UiAgentProgressNode, UiLiveOverlay } from '../../types/codex'
 import { useMobile } from '../../composables/useMobile'
 import { useUiLanguage } from '../../composables/useUiLanguage'
-import IconTablerBolt from '../icons/IconTablerBolt.vue'
-import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
-import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
 import {
   agentDisplayName,
   agentDurationMs,
   agentModelDetailSegments,
   agentStatusTranslationKey,
   countAgentProgress,
-  compactProgressModelDetails,
   formatProgressDuration,
   isAgentNodeStale,
   isAgentProgressStale,
@@ -228,7 +240,6 @@ const orderedAgents = computed(() => progress.value ? orderedAgentProgressNodes(
 const counts = computed(() => progress.value
   ? countAgentProgress(progress.value)
   : { total: 0, active: 0, completed: 0, interrupted: 0, failed: 0 })
-const mainModelDetails = computed(() => compactProgressModelDetails(props.overlay.mainModelDetails ?? []))
 const rootStale = computed(() => progress.value
   ? isAgentProgressStale(progress.value, nowMs.value, connectionState.value)
   : false)

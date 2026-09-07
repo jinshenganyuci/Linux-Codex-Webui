@@ -4,7 +4,6 @@ import {
   agentDisplayName,
   agentModelDetailSegments,
   countAgentProgress,
-  compactProgressModelDetails,
   formatProgressDuration,
   isAgentNodeStale,
   isAgentProgressStale,
@@ -101,16 +100,6 @@ describe('turnProgressUtils', () => {
       model: 'gpt-child',
     })).toEqual(['Model: gpt-child'])
     expect(agentModelDetailSegments(agent('child', 'root', 1))).toEqual([])
-  })
-
-  it('compacts recorded model metadata without inventing missing speed or changing unknown values', () => {
-    expect(compactProgressModelDetails(['Model: gpt-6-astra', 'Thinking: ultra', 'Speed: Fast']).map(d => d.value)).toEqual(['6 Astra', 'Ultra', 'Fast mode'])
-    expect(compactProgressModelDetails(['Model: custom/provider', 'Thinking: future-effort'])).toEqual([
-      { kind: 'model', value: 'custom/provider', title: 'Model: custom/provider' },
-      { kind: 'reasoning', value: 'future-effort', title: 'Thinking: future-effort' },
-    ])
-    expect(compactProgressModelDetails(['Model: gpt-5.6-luna', 'Thinking: low']).map(d => d.value)).toEqual(['5.6 Luna', 'Light reasoning'])
-    expect(compactProgressModelDetails([])).toEqual([])
   })
 
   it('freezes root and agent durations after they reach a terminal state', () => {
