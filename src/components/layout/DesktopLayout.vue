@@ -153,7 +153,8 @@ function onResizeHandleKeydown(event: KeyboardEvent): void {
 
 .desktop-resize-handle::before {
   content: '';
-  @apply absolute -left-2 -right-2 top-0 bottom-0;
+  /* Keep the sidebar scrollbar hit target clear; resize from the content side. */
+  @apply absolute left-0 -right-3 top-0 bottom-0;
 }
 
 .desktop-resize-handle:hover,

@@ -45,9 +45,9 @@ async function drag(page, distance, cancel = false) {
   return transform
 }
 (async () => {
-  const browser = await chromium.launch({ headless: true })
+  const browser = await chromium.launch({ headless: process.env.UI_PREVIEW_HEADLESS !== 'false', ignoreDefaultArgs: ['--hide-scrollbars'] })
   const reports = []
-  for (const theme of ['light', 'dark']) {
+  for (const theme of (process.env.UI_PREVIEW_SCROLL_ONLY === '1' ? [] : ['light', 'dark'])) {
     console.log('CHECK', theme)
     const { context, page, errors } = await setup(browser, { width: 375, height: 812 }, theme)
     await open(page)
@@ -114,6 +114,14 @@ async function drag(page, distance, cancel = false) {
     await page.waitForTimeout(500)
     const before = await page.locator('.thread-composer-shell').boundingBox()
     const sidebar = page.locator('.sidebar-scrollable')
+    const sidebarBox = await sidebar.boundingBox()
+    assert(!(await page.evaluate(({x,y})=>document.elementFromPoint(x,y)?.closest('.desktop-resize-handle') !== null,{x:sidebarBox.x+sidebarBox.width-4,y:sidebarBox.y+35})), 'resize target overlaps scrollbar')
+    await sidebar.evaluate(el => { el.scrollTop = 0 })
+    await page.mouse.move(sidebarBox.x + sidebarBox.width - 4, sidebarBox.y + 35)
+    await page.mouse.down()
+    await page.mouse.move(sidebarBox.x + sidebarBox.width - 4, sidebarBox.y + 220, { steps: 12 })
+    await page.mouse.up()
+    assert(await sidebar.evaluate(el => el.scrollTop > 0), 'native scrollbar thumb cannot be dragged')
     await sidebar.hover()
     await page.mouse.wheel(0, 700)
     await page.waitForTimeout(300)
@@ -135,8 +143,16 @@ async function drag(page, distance, cancel = false) {
     await page.waitForTimeout(2300)
     assert.deepEqual(await page.locator('.thread-composer-shell').boundingBox(), before, 'scrollbar shifts composer')
     await page.screenshot({ path: path.join(output, `scrollbars-${theme}.png`) })
+    await sidebar.screenshot({ path: path.join(output, `scrollbar-detail-${theme}.png`) })
+    const resize = await page.locator('.desktop-resize-handle').boundingBox()
+    const oldWidth = await page.locator('.desktop-sidebar').evaluate(el => el.getBoundingClientRect().width)
+    await page.mouse.move(resize.x + 5, resize.y + 80)
+    await page.mouse.down()
+    await page.mouse.move(resize.x + 45, resize.y + 80, {steps:8})
+    await page.mouse.up()
+    assert((await page.locator('.desktop-sidebar').evaluate(el => el.getBoundingClientRect().width)) > oldWidth + 20, 'sidebar resize regressed')
     assert.deepEqual(errors, [])
-    reports.push({ theme, scrollbar: styles, errors })
+    reports.push({ theme, scrollbar: styles, thumbDragged: true, sidebarResizeWorks: true, errors })
     await context.close()
   }
   const reduced = await setup(browser, { width: 375, height: 812 }, 'dark', 'reduce')
@@ -152,6 +168,6 @@ async function drag(page, distance, cancel = false) {
   assert.equal(await reduced.page.locator('.native-controls-overlay').count(), 0)
   await reduced.context.close()
   await browser.close()
-  fs.writeFileSync(path.join(output, 'interactions.json'), JSON.stringify({ cases: reports, reducedMotion: true, realHardwareKeyboard: 'not tested', firefoxInstalled: fs.existsSync(firefox.executablePath()) }, null, 2))
-  console.log('PASS iOS touch, spring cancellation, scrollbars, reduced motion')
+  fs.writeFileSync(path.join(output, process.env.UI_PREVIEW_SCROLL_ONLY === '1' ? 'scroll-only.json' : 'interactions.json'), JSON.stringify({ cases: reports, reducedMotion: true, realHardwareKeyboard: 'not tested', firefoxInstalled: fs.existsSync(firefox.executablePath()) }, null, 2))
+  console.log(process.env.UI_PREVIEW_SCROLL_ONLY === '1' ? 'PASS scrollbar dragging, sidebar resizing and reduced motion' : 'PASS iOS touch, spring cancellation, scrollbars, reduced motion')
 })().catch(error => { console.error(error); process.exit(1) })
