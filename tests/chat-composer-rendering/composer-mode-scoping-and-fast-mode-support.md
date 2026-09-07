@@ -107,3 +107,19 @@ PHASE1_DOCKER_IMAGE=linux-codex-webui-global-fast:20260907 CODEX_ACCEPTANCE_REPO
 - `LIVE_PREVIEW=1 node scripts/verify-global-fast-mode.cjs` 通过：六组真实页面检查、开关各一次全局写入、刷新与新浏览器同值、模型配置无速度入口、Esc 返回/关闭、注入一次失败回退；页面错误和真实消息发送均为 0。常规用例保留 Service Worker，只有注入失败上下文禁用它以可靠拦截请求。
 - 完整 URL 为 `http://127.0.0.1:13511/#/thread/01a0797c-faa5-70a0-b29e-b4c92c0bb03c`，视口为 1440×900、375×812、768×1024，分别明暗两次；首页全局检查使用 `http://127.0.0.1:13511/#/`。截图在 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/global-fast/plus-{1440,375,768}-{light,dark}.png` 与 `models-{1440,375,768}-{light,dark}.png`，上方内联图片即发布后截图。
 - 发布回执 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/global-fast/deployment.json`，浏览器明细同目录 `live-result.json`。主进程 491027 和 app-server 子进程 491058 不变，4 个验收会话保留，配置字段测试后恢复；正式 13510 静态文件校验不变。未创建备份、未重启后端，4191–4194 测试监听均已清理。
+
+
+#### 正式 13510 升级与只读复验（用户明确授权）
+- 前端 `a351a1a` 已从独立 13511 直接发布到 13510，33 个正式 HTTP 资源与已验收构建匹配；后台仍为 `2e17039` / Codex 0.153.4，不能用后台构建标识判断前端是否更新。
+- 精确命令：`python3 output/playwright/global-fast-production-13510/deploy.py`，随后 `node output/playwright/global-fast-production-13510/verify.cjs`。未执行重新打包或重复预览端配置写入测试。
+- 实际地址 `http://127.0.0.1:13510/#/`，1440×900、375×812、768×1024 明暗六组通过。保留 Service Worker，刷新后仍加载新版 JS/CSS；「＋」唯一 Fast 开关与当前服务端已保存的关闭状态一致，模型列表没有速度菜单，Esc 返回强度并关闭。检查过程中没有改动正式 Fast、模型或权限，也没有发送消息；真正开关写入和失败回退已在同一前端的隔离 13511 验证。
+- 主进程 414785、app-server 子进程 414813、598 个会话保留；配置/认证/模型文件哈希在浏览器检查后不变，13511 资源和进程不变。无备份、无后端重启、无配置写入或页面错误。
+- 完整回执 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/global-fast-production-13510/deployment.json`，浏览器断言同目录 `browser.json`。截图为该目录下 `plus-{1440,375,768}-{light,dark}.png` 与 `models-{1440,375,768}-{light,dark}.png`。如需恢复旧版，从指定提交重建前端并原子替换入口，不依赖此次不存在的备份。
+
+正式 13510 首页，375×812 浅色，保留原快速模式开关状态：
+
+![正式手机快速模式入口](/root/codex工作目录/Linux-Codex-Webui/output/playwright/global-fast-production-13510/plus-375-light.png)
+
+正式 13510 首页，1440×900 深色，模型配置已无速度菜单：
+
+![正式桌面模型配置](/root/codex工作目录/Linux-Codex-Webui/output/playwright/global-fast-production-13510/models-1440-dark.png)
