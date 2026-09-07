@@ -205,6 +205,12 @@
           </button>
 
           <div v-if="isAttachMenuOpen" class="thread-composer-attach-menu">
+            <div class="thread-composer-menu-label">添加</div>
+            <template v-if="$slots['session-controls']">
+              <button v-if="isMobile" type="button" class="thread-composer-attach-item" @click="isAttachMenuOpen = false; emit('open-native-permissions')">会话控制 <span class="thread-composer-menu-description">运行、权限与队列</span></button>
+              <button type="button" class="thread-composer-attach-item" @click="isAttachMenuOpen = false; emit('open-native-goal')">目标 <span class="thread-composer-menu-description">设置持续完成的任务</span></button>
+              <button type="button" class="thread-composer-attach-item" @click="isAttachMenuOpen = false; emit('open-native-extensions')">扩展 <span class="thread-composer-menu-description">插件、语音与远控</span></button>
+            </template>
             <button
               class="thread-composer-attach-item"
               type="button"
@@ -317,6 +323,7 @@
           </div>
 
           <template v-if="!isDictationRecording">
+            <slot name="session-controls" />
             <button
               v-if="!isMobile && nativePermissionsAvailable"
               type="button"
@@ -859,6 +866,8 @@ const emit = defineEmits<{
   'update:selected-speed-mode': [mode: SpeedMode]
   'update:selected-codex-permission-mode': [mode: CodexPermissionMode]
   'open-native-permissions': []
+  'open-native-goal': []
+  'open-native-extensions': []
 }>()
 const { t } = useUiLanguage()
 

@@ -7,11 +7,13 @@
           class="sidebar-scrollable"
           @scroll="onSidebarScroll"
         >
+          <div class="sidebar-desktop-heading">
+            <span class="sidebar-brand">Codex</span>
           <SidebarThreadControls
             v-if="!isSidebarCollapsed"
             class="sidebar-thread-controls-host"
             :is-sidebar-collapsed="isSidebarCollapsed"
-            :show-new-thread-button="true"
+            :show-new-thread-button="false"
             @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
             @start-new-thread="onStartNewThreadFromToolbar"
           >
@@ -26,6 +28,11 @@
               <IconTablerSearch class="sidebar-search-toggle-icon" />
             </button>
           </SidebarThreadControls>
+          </div>
+          <button class="sidebar-new-chat" type="button" @click="onStartNewThreadFromToolbar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-7M15 3l6 6M9 15l1-5 8-8 5 5-8 8z" /></svg>
+            {{ t('New chat') }}
+          </button>
 
           <div v-if="!isSidebarCollapsed && isSidebarSearchVisible" class="sidebar-search-bar">
             <IconTablerSearch class="sidebar-search-bar-icon" />
@@ -516,6 +523,12 @@
               </div>
               <div v-else class="new-thread-empty">
                 <p class="new-thread-hero">{{ t("Let's build") }}</p>
+                <div class="new-thread-suggestions" aria-label="开始一个任务">
+                  <button v-for="suggestion in desktopSuggestions" :key="suggestion.title" type="button" @click="homeThreadComposerRef?.appendTextToDraft(suggestion.prompt)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" :style="{ color: suggestion.color }" aria-hidden="true"><path :d="suggestion.icon" /></svg>
+                    <span>{{ suggestion.title }}</span>
+                  </button>
+                </div>
                 <ComposerDropdown class="new-thread-folder-dropdown" :model-value="newThreadCwd"
                   :options="newThreadFolderOptions" :placeholder="t('Choose folder')"
                   :enable-search="true"
@@ -914,14 +927,7 @@
                     @delete="removeQueuedMessage"
                     @reorder="onReorderQueuedMessage"
                   />
-                  <NativeThreadControls
-                    @extensions="nativeExtensionsOpen = true"
-                    :controller="nativeThreadControls"
-                    :settings-patch="selectedNativeSettingsPatch"
-                    :active-turn-id="selectedNativeActiveTurnId"
-                    :is-running="isSelectedThreadInProgress"
-                    :legacy-queue-count="selectedThreadQueuedMessages.length"
-                  />
+                  <NativeThreadQueue :controller="nativeThreadControls" :is-running="isSelectedThreadInProgress" />
                   <ThreadTerminalPanel
                     v-if="selectedThreadTerminalOpen && selectedThreadId && composerCwd"
                     ref="threadTerminalPanelRef"
@@ -944,6 +950,8 @@
                     :native-permissions-available="nativeThreadControls.state.capabilities.permissions"
                     :native-permission-profile="nativeThreadControls.state.settings?.permissionProfile"
                     @open-native-permissions="onOpenNativePermissions"
+                    @open-native-goal="nativeControlsRef?.open('goal')"
+                    @open-native-extensions="nativeExtensionsOpen = true"
                     :active-thread-id="composerThreadContextId"
                     :cwd="composerCwd"
                     :collaboration-modes="availableCollaborationModes"
@@ -972,7 +980,18 @@
                     @update:selected-reasoning-effort="onSelectReasoningEffort"
                     @update:selected-speed-mode="onSelectSpeedMode"
                     @update:selected-codex-permission-mode="onSelectCodexPermissionMode"
-                    @interrupt="onInterruptTurn" />
+                    @interrupt="onInterruptTurn">
+                    <template #session-controls>
+                      <NativeThreadControls ref="nativeControlsRef"
+                        @extensions="nativeExtensionsOpen = true"
+                        :controller="nativeThreadControls"
+                        :settings-patch="selectedNativeSettingsPatch"
+                        :active-turn-id="selectedNativeActiveTurnId"
+                        :is-running="isSelectedThreadInProgress"
+                        :legacy-queue-count="selectedThreadQueuedMessages.length"
+                      />
+                    </template>
+                  </ThreadComposer>
                 </div>
               </template>
             </div>
@@ -1016,6 +1035,7 @@ import ThreadComposer from './components/content/ThreadComposer.vue'
 import ThreadPendingRequestPanel from './components/content/ThreadPendingRequestPanel.vue'
 import QueuedMessages from './components/content/QueuedMessages.vue'
 import NativeThreadControls from './components/content/NativeThreadControls.vue'
+import NativeThreadQueue from './components/content/NativeThreadQueue.vue'
 import RateLimitStatus from './components/content/RateLimitStatus.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import HeaderGitBranchDropdown from './components/content/HeaderGitBranchDropdown.vue'
@@ -1252,6 +1272,13 @@ function prepareFeedbackLink(event: MouseEvent, message?: string): void {
 }
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
+const desktopSuggestions = [
+  { title: '探索并理解代码', prompt: '请先阅读这个项目，介绍它的目录结构、核心功能和主要运行流程。', color: '#318bff', icon: 'M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16m6-2 6 6' },
+  { title: '构建新功能、应用或工具', prompt: '我想为这个项目开发一个新功能，先帮我梳理需求和实现方案。', color: '#a064e8', icon: 'm8 4-6 8 6 8m8-16 6 8-6 8M14 2l-4 20' },
+  { title: '审查代码并提出改进建议', prompt: '请审查当前项目的代码，优先找出有具体证据的问题并说明改进建议。', color: '#26a269', icon: 'M20 7V3l-3 3a8 8 0 1 0 3 10M20 3h-5m-7 9 3 3 5-6' },
+  { title: '修复问题和失败', prompt: '帮我排查这个项目中的问题，先定位原因，再给出修复方案。', color: '#e07838', icon: 'M8 8h8v8a4 4 0 0 1-8 0zm1 0V6a3 3 0 0 1 6 0v2M4 10h4m8 0h4M4 15h4m8 0h4M6 21l3-3m6 0 3 3' },
+]
+const nativeControlsRef = ref<InstanceType<typeof NativeThreadControls> | null>(null)
 const threadConversationRef = ref<{ jumpToLatest: () => void } | null>(null)
 const homeTerminalPanelRef = ref<ThreadTerminalPanelExposed | null>(null)
 const threadTerminalPanelRef = ref<ThreadTerminalPanelExposed | null>(null)
@@ -3830,7 +3857,7 @@ function onSelectCodexPermissionMode(mode: CodexPermissionMode): void {
 }
 
 async function onOpenNativePermissions(): Promise<void> {
-  if (!nativeThreadControls.state.expanded) await nativeThreadControls.expand()
+  await nativeControlsRef.value?.open('settings')
   await nextTick()
   document.querySelector<HTMLElement>('[data-testid="native-permission-picker"] .composer-dropdown-trigger')?.focus()
 }

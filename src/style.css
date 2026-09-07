@@ -2563,63 +2563,63 @@ body:has(.native-extension-backdrop) > .composer-dropdown-menu-wrap { z-index: 1
   }
 }
 
-/* macOS material system. Layout stays component-owned; visual semantics live here. */
+/* Desktop visual tokens. Existing component aliases share one theme palette. */
 :root:not(.dark) {
-  --mac-canvas: radial-gradient(circle at 12% -8%, rgb(106 174 255 / 34%), transparent 34rem), radial-gradient(circle at 96% 14%, rgb(191 153 255 / 23%), transparent 30rem), linear-gradient(145deg, #f8faff 0%, #edf3fa 46%, #e7edf6 100%);
-  --mac-sidebar: rgb(239 245 252 / 74%);
-  --mac-main: rgb(253 254 255 / 90%);
-  --mac-surface: rgb(255 255 255 / 74%);
-  --mac-surface-strong: rgb(252 253 255 / 91%);
-  --mac-solid: rgb(253 254 255 / 98%);
-  --mac-input: rgb(255 255 255 / 92%);
-  --mac-hover: rgb(26 73 126 / 8%);
-  --mac-selected: rgb(0 122 255 / 11%);
-  --mac-border: rgb(60 82 108 / 17%);
-  --mac-border-strong: rgb(55 78 107 / 28%);
-  --mac-highlight: rgb(255 255 255 / 76%);
-  --mac-text: #182233;
-  --mac-muted: #657488;
-  --mac-faint: #8793a3;
-  --mac-accent: #007aff;
-  --mac-accent-hover: #006ee6;
-  --mac-accent-soft: rgb(0 122 255 / 12%);
-  --mac-focus: rgb(0 122 255 / 48%);
-  --mac-shadow-soft: 0 1px 2px rgb(20 35 55 / 5%), 0 10px 30px rgb(31 49 72 / 8%), inset 0 1px 0 rgb(255 255 255 / 78%);
-  --mac-shadow-card: 0 18px 48px rgb(35 54 79 / 13%), inset 0 1px 0 rgb(255 255 255 / 86%);
-  --mac-shadow-menu: 0 24px 70px rgb(24 39 59 / 22%), inset 0 1px 0 rgb(255 255 255 / 92%);
-  --mac-overlay: rgb(31 41 55 / 36%);
-  --mac-code: #111821;
-  --mac-code-border: rgb(56 70 88 / 72%);
-  --mac-diff: #fbfcff;
+  --mac-canvas: #f7f7f7;
+  --mac-sidebar: #f7f7f7;
+  --mac-main: #ffffff;
+  --mac-surface: #ffffff;
+  --mac-surface-strong: #fafafa;
+  --mac-solid: #ffffff;
+  --mac-input: #ffffff;
+  --mac-hover: #eeeeee;
+  --mac-selected: #eaeaea;
+  --mac-border: #e8e8e8;
+  --mac-border-strong: #d9d9d9;
+  --mac-highlight: transparent;
+  --mac-text: #242424;
+  --mac-muted: #737373;
+  --mac-faint: #969696;
+  --mac-accent: #242424;
+  --mac-accent-hover: #000000;
+  --mac-accent-soft: #ebebeb;
+  --mac-focus: #8c8c8c;
+  --mac-shadow-soft: 0 2px 6px rgb(0 0 0 / 3%);
+  --mac-shadow-card: 0 4px 20px rgb(0 0 0 / 5%);
+  --mac-shadow-menu: 0 8px 28px rgb(0 0 0 / 10%), 0 2px 6px rgb(0 0 0 / 4%);
+  --mac-overlay: rgb(0 0 0 / 24%);
+  --mac-code: #171717;
+  --mac-code-border: #303030;
+  --mac-diff: #fafafa;
 }
 
 :root.dark {
-  --mac-canvas: radial-gradient(circle at 10% -10%, rgb(27 104 185 / 28%), transparent 32rem), radial-gradient(circle at 98% 14%, rgb(104 74 170 / 20%), transparent 28rem), linear-gradient(145deg, #0d1219 0%, #151d28 50%, #0d1219 100%);
-  --mac-sidebar: rgb(24 32 43 / 78%);
-  --mac-main: rgb(15 21 29 / 92%);
-  --mac-surface: rgb(34 43 56 / 78%);
-  --mac-surface-strong: rgb(31 40 53 / 91%);
-  --mac-solid: rgb(27 35 47 / 98%);
-  --mac-input: rgb(22 29 39 / 94%);
-  --mac-hover: rgb(232 240 250 / 9%);
-  --mac-selected: rgb(10 132 255 / 18%);
-  --mac-border: rgb(202 216 235 / 16%);
-  --mac-border-strong: rgb(207 221 240 / 28%);
-  --mac-highlight: rgb(255 255 255 / 9%);
-  --mac-text: #f0f4fa;
-  --mac-muted: #a7b3c2;
-  --mac-faint: #8290a2;
-  --mac-accent: #0a84ff;
-  --mac-accent-hover: #409cff;
-  --mac-accent-soft: rgb(10 132 255 / 18%);
-  --mac-focus: rgb(64 156 255 / 58%);
-  --mac-shadow-soft: 0 1px 2px rgb(0 0 0 / 20%), 0 12px 34px rgb(0 0 0 / 25%), inset 0 1px 0 rgb(255 255 255 / 6%);
-  --mac-shadow-card: 0 22px 58px rgb(0 0 0 / 36%), inset 0 1px 0 rgb(255 255 255 / 8%);
-  --mac-shadow-menu: 0 26px 72px rgb(0 0 0 / 52%), inset 0 1px 0 rgb(255 255 255 / 9%);
-  --mac-overlay: rgb(0 0 0 / 58%);
-  --mac-code: #080d13;
-  --mac-code-border: rgb(108 124 145 / 34%);
-  --mac-diff: #131a24;
+  --mac-canvas: #191919;
+  --mac-sidebar: #191919;
+  --mac-main: #212121;
+  --mac-surface: #292929;
+  --mac-surface-strong: #303030;
+  --mac-solid: #292929;
+  --mac-input: #252525;
+  --mac-hover: #353535;
+  --mac-selected: #333333;
+  --mac-border: #393939;
+  --mac-border-strong: #494949;
+  --mac-highlight: transparent;
+  --mac-text: #ececec;
+  --mac-muted: #b0b0b0;
+  --mac-faint: #929292;
+  --mac-accent: #ececec;
+  --mac-accent-hover: #ffffff;
+  --mac-accent-soft: #393939;
+  --mac-focus: #a0a0a0;
+  --mac-shadow-soft: 0 2px 6px rgb(0 0 0 / 12%);
+  --mac-shadow-card: 0 4px 20px rgb(0 0 0 / 18%);
+  --mac-shadow-menu: 0 8px 28px rgb(0 0 0 / 30%);
+  --mac-overlay: rgb(0 0 0 / 48%);
+  --mac-code: #171717;
+  --mac-code-border: #393939;
+  --mac-diff: #252525;
 }
 
 :root:not(.dark) body,
@@ -3450,3 +3450,228 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
   background: #3f3f46;
   color: #fafafa;
 }
+
+/* ChatGPT desktop preview: shared geometry, neutral surfaces and anchored controls. */
+:root {
+  --ui-radius-panel: 24px;
+  --chat-gutter: clamp(16px, 4vw, 56px);
+}
+:root:is(.dark, :not(.dark)) .desktop-sidebar,
+:root:is(.dark, :not(.dark)) .mobile-drawer,
+:root:is(.dark, :not(.dark)) .content-header,
+:root:is(.dark, :not(.dark)) .sidebar-settings-area,
+:root:is(.dark, :not(.dark)) .thread-composer-shell,
+:root:is(.dark, :not(.dark)) .new-thread-folder-dropdown .composer-dropdown-trigger {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:root:is(.dark, :not(.dark)) .desktop-sidebar,
+:root:is(.dark, :not(.dark)) .desktop-main,
+:root:is(.dark, :not(.dark)) .content-root {
+  box-shadow: none;
+}
+:root .desktop-main { border-top-left-radius: 18px; overflow: hidden; }
+:root:is(.dark, :not(.dark)) .content-header {
+  background: var(--mac-main);
+  box-shadow: none;
+  border-bottom: 1px solid var(--mac-border);
+  min-height: 58px;
+}
+:root:is(.dark, :not(.dark)) .content-grid-home { background: none; }
+:root:is(.dark, :not(.dark)) .new-thread-hero {
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  font-size: clamp(28px, 3vw, 36px);
+  font-weight: 550;
+  letter-spacing: -.025em;
+  line-height: 1.3;
+}
+:root .new-thread-folder-dropdown .composer-dropdown-trigger { font-size: 15px; min-height: 40px; padding: 8px 14px; box-shadow: none; }
+:root:is(.dark, :not(.dark)) .thread-row[data-active='true'] {
+  background: var(--mac-selected);
+  box-shadow: none;
+}
+:root .thread-row { border-radius: 12px; }
+:root .thread-row-title { font-weight: 400; }
+:root .sidebar-settings-area { box-shadow: none; background: var(--mac-sidebar); }
+:root .conversation-list { padding: 24px var(--chat-gutter) 8px; gap: 12px; }
+:root .composer-with-queue { padding-inline: var(--chat-gutter); padding-bottom: 14px; gap: 8px; }
+:root .composer-with-queue > :is(.native-queue, .composer-runtime-error) {
+  width: 100%; max-width: min(var(--chat-column-max, 72rem), 100%); margin-inline: auto;
+}
+:root .content-grid { gap: 8px; }
+:root .message-card[data-role='assistant'],
+:root .message-body[data-role='assistant'] { color: var(--mac-text); }
+:root:is(.dark, :not(.dark)) .message-card[data-role='user'] {
+  background: var(--mac-hover);
+  border: 0;
+  box-shadow: none;
+  border-radius: 22px;
+  padding: 12px 18px;
+  color: var(--mac-text);
+}
+:root .message-meta { color: var(--mac-faint); font-size: 12px; }
+:root .runtime-item {
+  width: 100%;
+  background: transparent;
+  border-color: transparent;
+  padding: 6px 0;
+  color: var(--mac-muted);
+  border-radius: 10px;
+  font-size: 13px;
+}
+:root .runtime-item summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 450; list-style: none; }
+:root .runtime-item summary::-webkit-details-marker { display: none; }
+:root .runtime-item summary::before { content: '›'; width: 12px; font-size: 18px; line-height: 1; }
+:root .runtime-item[open] summary::before { transform: rotate(90deg); }
+:root .runtime-item summary span { margin-left: auto; float: none; font-size: 12px; }
+:root .runtime-item[open] { background: var(--mac-surface-strong); padding: 10px 12px; }
+:root .runtime-item[data-status='failed'] summary span { color: #df4545; }
+:root .cmd-row { border-color: var(--mac-border); background: var(--mac-surface-strong); color: var(--mac-text); box-shadow: none; }
+:root .cmd-row.cmd-row-group { border-style: solid; }
+:root:is(.dark, :not(.dark)) .thread-composer-shell {
+  background: var(--mac-surface);
+  border: 1px solid var(--mac-border);
+  border-radius: 24px;
+  box-shadow: var(--mac-shadow-card);
+  padding: 10px;
+}
+:root .thread-composer-input { min-height: 58px; padding: 8px 6px; padding-right: 38px; font-size: 16px; line-height: 1.5; color: var(--mac-text); }
+:root .thread-composer-input::placeholder { color: var(--mac-faint); }
+:root .thread-composer-input-wrap--expanded .thread-composer-input { min-height: 0; }
+:root .thread-composer-controls { margin-top: 6px; gap: 6px; }
+:root .thread-composer-leading-controls { gap: 4px; }
+:root .thread-composer-permission-control { font-size: 13px; color: var(--mac-muted); padding: 6px 8px; border-radius: 20px; }
+:root .thread-composer-permission-control:hover { background: var(--mac-hover); }
+:root:is(.dark, :not(.dark)) .thread-composer-submit {
+  background: var(--mac-text);
+  color: var(--mac-main);
+  box-shadow: none;
+  border: 0;
+  width: 36px;
+  height: 36px;
+}
+:root:is(.dark, :not(.dark)) .thread-composer-submit:disabled { opacity: .4; background: var(--mac-text); color: var(--mac-main); }
+:root:is(.dark, :not(.dark)) .thread-composer-attach-trigger,
+:root:is(.dark, :not(.dark)) .thread-composer-mobile-settings-trigger { background: transparent; border: 0; box-shadow: none; color: var(--mac-muted); }
+:root .model-reasoning-trigger { color: var(--mac-muted); font-size: 13px; }
+:root .thread-composer-attach-menu { min-width: min(360px, calc(100vw - 32px)); }
+:root .thread-composer-menu-label { color: var(--mac-muted); padding: 6px 10px; font-size: 12px; }
+:root .thread-composer-menu-description { color: var(--mac-muted); margin-left: 8px; font-size: 12px; font-weight: 400; }
+:root .thread-composer-attach-item { min-height: 38px; border-radius: 10px; }
+:root .thread-composer-attach-item:hover { background: var(--mac-hover); }
+:root:is(.dark, :not(.dark)) :is(.composer-dropdown-menu, .model-reasoning-menu, .model-reasoning-model-menu, .thread-composer-attach-menu, .thread-composer-context-popover, .search-dropdown-menu-wrap-up, .search-dropdown-menu-wrap-down) {
+  background: var(--mac-solid);
+  color: var(--mac-text);
+  border-color: var(--mac-border);
+  border-radius: 18px;
+  box-shadow: var(--mac-shadow-menu);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:root .native-controls-entry { display: flex; align-items: center; flex-shrink: 0; }
+:root .native-controls-trigger { position: relative; display: grid; place-items: center; width: 34px; height: 34px; padding: 8px; border: 0; border-radius: 50%; color: var(--mac-muted); background: transparent; cursor: pointer; }
+:root .native-controls-trigger svg { width: 18px; height: 18px; }
+:root .native-controls-trigger:hover, :root .native-controls-trigger.is-active { background: var(--mac-hover); color: var(--mac-text); }
+:root .native-controls-trigger.has-notice::after { content: ''; position: absolute; top: 6px; right: 5px; width: 5px; height: 5px; border-radius: 50%; background: #e79a32; }
+:root .native-controls-overlay { position: fixed; inset: 0; z-index: 45; background: transparent; }
+:root:is(.dark, :not(.dark)) .native-controls-dialog {
+  position: absolute; display: flex; flex-direction: column; overflow: hidden;
+  margin: 0; padding: 0; min-width: 0;
+  border-radius: 22px; border: 1px solid var(--mac-border);
+  background: var(--mac-solid); color: var(--mac-text); font-size: 14px;
+  box-shadow: var(--mac-shadow-menu); outline: none;
+  animation: native-controls-arrive 160ms ease-out;
+}
+:root .native-controls-heading { padding: 18px 20px 12px; justify-content: space-between; flex-shrink: 0; }
+:root .native-controls-heading h2 { margin: 0 0 3px; font-size: 17px; font-weight: 600; }
+:root .native-controls-heading .native-controls-muted { font-size: 12px; }
+:root .native-thread-controls .native-controls-close { display: grid; place-items: center; border: 0; width: 36px; height: 36px; padding: 0; border-radius: 50%; background: var(--mac-hover); color: var(--mac-muted); font-size: 24px; }
+:root .native-controls-tabs { display: flex; align-items: center; gap: 4px; padding: 0 16px 12px; border-bottom: 1px solid var(--mac-border); flex-shrink: 0; }
+:root .native-controls-tabs button { border: 0; padding: 8px 12px; color: var(--mac-muted); background: transparent; border-radius: 10px; }
+:root .native-controls-tabs button[aria-pressed='true'] { background: var(--mac-hover); color: var(--mac-text); }
+:root .native-controls-tabs button:last-child { margin-left: auto; }
+:root .native-controls-scroll { overflow-y: auto; overscroll-behavior: contain; min-height: 0; padding: 8px 20px 20px; }
+:root .native-controls-body > section { padding: 16px 0; border-color: var(--mac-border); }
+:root .native-controls-body > section:first-child { border: 0; }
+:root .native-thread-controls h3 { font-size: 14px; margin-bottom: 10px; }
+:root .native-thread-controls p { line-height: 1.65; }
+:root .native-thread-controls .native-controls-muted { color: var(--mac-muted); }
+:root .native-controls-body .native-controls-muted { font-size: 12px; }
+:root .native-thread-controls button, :root .native-queue button { min-height: 34px; padding: 7px 12px; border: 1px solid var(--mac-border); border-radius: 10px; background: var(--mac-surface); color: var(--mac-text); cursor: pointer; }
+:root .native-thread-controls button:hover:not(:disabled), :root .native-queue button:hover:not(:disabled) { background: var(--mac-hover); }
+:root .native-thread-controls button:disabled, :root .native-queue button:disabled { opacity: .45; cursor: not-allowed; }
+:root .native-thread-controls textarea, :root .native-thread-controls input, :root .native-queue textarea { width: 100%; min-width: 0; padding: 10px 12px; background: var(--mac-input); border: 1px solid var(--mac-border-strong); border-radius: 12px; color: var(--mac-text); font-size: 14px; }
+:root .native-thread-controls textarea { min-height: 100px; }
+:root .native-controls-field { gap: 8px; margin: 12px 0; }
+:root .native-queue { border: 1px solid var(--mac-border); background: var(--mac-surface-strong); border-radius: 16px; padding: 10px 14px; font-size: 13px; max-height: 180px; overflow-y: auto; overscroll-behavior: contain; }
+:root .native-queue h3 { font-weight: 600; }
+:root .native-queue li { border-color: var(--mac-border); }
+:root:is(.dark, :not(.dark)) .native-extension-dialog { border-color: var(--mac-border); background: var(--mac-solid); color: var(--mac-text); border-radius: 24px; box-shadow: var(--mac-shadow-menu); }
+:root:is(.dark, :not(.dark)) .native-extension-dialog :is(button, input, textarea) { background: var(--mac-input); border-color: var(--mac-border); color: var(--mac-text); border-radius: 10px; min-height: 36px; }
+:root .native-extension-tabs button[aria-selected='true'] { background: var(--mac-selected); color: var(--mac-text); border-color: transparent; }
+:root .native-extension-tabs, :root .native-extension-list li { border-color: var(--mac-border); }
+:root .native-extension-meta { color: var(--mac-muted); }
+@keyframes native-controls-arrive { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 767px) {
+  :root { --chat-gutter: 16px; }
+  :root .desktop-main { border-radius: 0; }
+  :root .conversation-list { padding-top: 16px; gap: 10px; }
+  :root .composer-with-queue { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  :root .thread-composer-shell { padding: 8px; border-radius: 22px; }
+  :root .thread-composer-input { min-height: 52px; }
+  :root .thread-composer-controls, :root .thread-composer-leading-controls { gap: 2px; }
+  :root .native-controls-trigger, :root .thread-composer-submit { width: 44px; height: 44px; flex-shrink: 0; }
+  :root .native-controls-overlay { background: var(--mac-overlay); }
+  :root .native-controls-dialog { border-radius: 24px; }
+  :root .native-thread-controls button, :root .native-queue button { min-height: 44px; }
+  :root .native-thread-controls input, :root .native-thread-controls textarea { font-size: 16px; }
+  :root .native-controls-heading { padding: 16px 16px 10px; }
+  :root .native-controls-tabs { padding-inline: 12px; gap: 0; }
+  :root .native-controls-tabs button { padding-inline: 10px; font-size: 13px; }
+  :root .native-controls-scroll { padding-inline: 16px; }
+  :root .thread-composer-mobile-settings-sheet { background: var(--mac-solid); border-color: var(--mac-border); }
+  :root .thread-composer-mobile-settings-row, :root .thread-composer-mobile-settings-option { background: var(--mac-surface); color: var(--mac-text); }
+}
+@media (prefers-reduced-motion: reduce) { :root .native-controls-dialog { animation: none; } }
+
+/* Component-loaded chat styles must share the composer's gutter. */
+:root .content-root .conversation-list { padding-inline: var(--chat-gutter); }
+:root .conversation-root .message-timestamp { color: var(--mac-faint); font-size: 12px; }
+:root .native-thread-controls .native-controls-tabs button { border: 0; background: transparent; }
+:root .native-thread-controls .native-controls-tabs button[aria-pressed='true'] { background: var(--mac-hover); }
+:root .sidebar-desktop-heading { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px 4px; min-height: 54px; }
+:root .sidebar-brand { font-size: 21px; font-weight: 650; letter-spacing: -.04em; color: var(--mac-text); }
+:root .sidebar-desktop-heading .sidebar-thread-controls-host { padding: 0; }
+:root .sidebar-new-chat { display: flex; align-items: center; width: calc(100% - 16px); gap: 12px; padding: 10px 12px; margin: 4px 8px; border: 0; border-radius: 10px; font-size: 14px; color: var(--mac-text); background: transparent; cursor: pointer; }
+:root .sidebar-new-chat svg { width: 19px; height: 19px; }
+:root .sidebar-new-chat:hover { background: var(--mac-hover); }
+:root .sidebar-root .sidebar-skills-link { min-height: 40px; padding: 8px 12px; gap: 12px; margin-block: 2px; }
+:root .sidebar-root .sidebar-skills-link-icon { width: 20px; height: 20px; padding: 0; color: var(--mac-text); background: none; border: 0; border-radius: 0; box-shadow: none; }
+:root .sidebar-root .sidebar-skills-link-title { font-size: 14px; font-weight: 400; color: var(--mac-text); }
+:root .sidebar-root .sidebar-skills-link-subtitle { display: none; }
+:root .new-thread-suggestions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; width: 100%; max-width: 900px; margin: 28px 0 20px; }
+:root .new-thread-suggestions button { display: flex; flex-direction: column; justify-content: space-between; gap: 24px; min-width: 0; min-height: 128px; padding: 18px; border: 1px solid var(--mac-border); border-radius: 20px; background: var(--mac-surface); box-shadow: var(--mac-shadow-soft); text-align: left; color: var(--mac-text); cursor: pointer; }
+:root .new-thread-suggestions button:hover { background: var(--mac-surface-strong); border-color: var(--mac-border-strong); }
+:root .new-thread-suggestions svg { width: 20px; height: 20px; }
+:root .new-thread-suggestions span { font-size: 14px; font-weight: 500; line-height: 1.5; }
+@media (max-width: 767px) {
+  :root .new-thread-suggestions { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
+  :root .new-thread-suggestions button { min-height: 100px; padding: 12px; gap: 16px; border-radius: 16px; }
+  :root .new-thread-suggestions span { font-size: 13px; }
+}
+
+:root .new-thread-folder-action-primary { box-shadow: var(--mac-shadow-soft); }
+:root .content-root .conversation-list { padding-top: 24px; padding-bottom: 8px; }
+:root .conversation-root :is(.message-card, .message-body) { color: var(--mac-text); }
+@media (max-width: 767px) {
+  :root .thread-composer .native-controls-entry { display: none; }
+  :root .thread-composer-mobile-settings-icon { display: none; }
+  :root .thread-composer-mobile-settings-summary { text-align: right; }
+  :root .thread-composer .thread-composer-skill-control { width: 44px; }
+  :root .thread-composer-skill-control .search-dropdown-trigger { background: transparent; border-color: transparent; box-shadow: none; padding: 0; color: var(--mac-muted); }
+  :root .content-root .conversation-list { padding-top: 16px; }
+}
+:root .conversation-root .runtime-item { background: transparent; color: var(--mac-muted); border-color: transparent; }
+:root .conversation-root .runtime-item[open] { background: var(--mac-surface-strong); border-color: var(--mac-border); }
+:root:is(.dark, :not(.dark)) .new-thread-folder-action-primary { box-shadow: var(--mac-shadow-soft); }

@@ -3595,7 +3595,8 @@ onBeforeUnmount(() => {
 }
 
 .conversation-item {
-  @apply m-0 w-full min-w-0 flex;
+  @apply my-0 mx-auto w-full min-w-0 flex;
+  max-width: min(var(--chat-column-max, 72rem), 100%);
 }
 
 .conversation-item-request {
