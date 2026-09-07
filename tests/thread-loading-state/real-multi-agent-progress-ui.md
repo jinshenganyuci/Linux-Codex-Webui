@@ -184,3 +184,5 @@ URL 为 `http://127.0.0.1:13511/#/thread/01a0797c-faa5-70a0-b29e-b4c92c0bb03c`�
 ![白底灰边状态卡](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-surface/after-compact-375-light.png)
 
 ![深色统一底面状态卡](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-surface/after-compact-375-dark.png)
+
+13511 已静态发布前端 `f8e1bab`；33 个 HTTP 文件验证一致，线上手机深色复验通过，底色与灰色装饰匹配断言，原内容和交互不变。原进程、后端和配置、7 个验收会话保留，13510 不变，无重启和备份。回执和线上检查为 `output/playwright/agent-progress-surface/deployment.json`、`live-browser.json`，截图绝对路径为 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-surface/live-compact-375-dark.png`。
