@@ -3002,6 +3002,111 @@ describe('provider model selection', () => {
     expect(restartedState.selectedReasoningEffort.value).toBe('max')
   })
 
+  it('preserves a model and effort selected while the initial server preference read is pending', async () => {
+    installTestWindow()
+    const persisted = {
+      'thread-a': { model: 'gpt-5.6-sol', reasoningEffort: 'xhigh' as ReasoningEffort },
+    }
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project')] }],
+      nextCursor: null,
+    })
+    let finishRead!: (value: typeof persisted) => void
+    gatewayMocks.getThreadModelPreferences.mockImplementation(() => new Promise(resolve => { finishRead = resolve }))
+    gatewayMocks.persistThreadModelPreference.mockImplementation(async (threadId: string, preference: typeof persisted['thread-a']) => {
+      persisted[threadId as 'thread-a'] = { ...preference }
+      return preference
+    })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities(
+      {
+        id: 'gpt-5.6-sol',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        defaultReasoningEffort: 'xhigh',
+      },
+      'gpt-5.5',
+    ))
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: '',
+      reasoningEffort: 'low',
+      speedMode: 'standard',
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    const startup = state.refreshAll({ includeSelectedThreadMessages: true, awaitAncillaryRefreshes: true })
+    await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'))
+    const stale = structuredClone(persisted)
+    await state.updateSelectedModelIdForThread('thread-a', 'gpt-5.6-luna')
+    await state.updateSelectedReasoningEffort('ultra')
+    finishRead(stale)
+    await startup
+    expect(state.selectedModelId.value).toBe('gpt-5.6-luna')
+    expect(state.selectedReasoningEffort.value).toBe('ultra')
+    expect(persisted['thread-a']).toEqual({ model: 'gpt-5.6-luna', reasoningEffort: 'ultra' })
+  })
+
+  it('preserves a model and effort selected while the model capability catalog is loading', async () => {
+    installTestWindow()
+    const persisted = {
+      'thread-a': { model: 'gpt-5.6-sol', reasoningEffort: 'xhigh' as ReasoningEffort },
+    }
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'Project', threads: [thread('thread-a', '/tmp/project')] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadModelPreferences.mockImplementation(async () => structuredClone(persisted))
+    gatewayMocks.persistThreadModelPreference.mockImplementation(async (threadId: string, preference: typeof persisted['thread-a']) => {
+      persisted[threadId as 'thread-a'] = { ...preference }
+      return preference
+    })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    const catalog = modelCapabilities({ id: 'gpt-5.6-sol', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultReasoningEffort: 'xhigh' }, 'gpt-5.5')
+    let finishRead!: (value: typeof catalog) => void
+    gatewayMocks.getAvailableModels.mockImplementation(() => new Promise(resolve => { finishRead = resolve }))
+    gatewayMocks.getThreadDetail.mockResolvedValue({
+      model: 'gpt-5.5',
+      modelProvider: 'openai',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      hasMoreOlder: false,
+      turnIndexByTurnId: {},
+    })
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: '',
+      reasoningEffort: 'low',
+      speedMode: 'standard',
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-a')
+    const startup = state.refreshAll({ includeSelectedThreadMessages: true, awaitAncillaryRefreshes: true })
+    await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'))
+    await state.updateSelectedModelIdForThread('thread-a', 'gpt-5.6-luna')
+    await state.updateSelectedReasoningEffort('ultra')
+    finishRead(catalog)
+    await startup
+    expect(state.selectedModelId.value).toBe('gpt-5.6-luna')
+    expect(state.selectedReasoningEffort.value).toBe('ultra')
+    expect(persisted['thread-a']).toEqual({ model: 'gpt-5.6-luna', reasoningEffort: 'ultra' })
+  })
+
   it('does not promote a desktop local default to a server preference when none exists', async () => {
     installTestWindow({
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({

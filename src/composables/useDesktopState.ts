@@ -2674,6 +2674,7 @@ export function useDesktopState() {
 
   async function loadThreadModelPreferencesIfNeeded(): Promise<void> {
     if (hasLoadedThreadModelPreferences) return
+    const preferencesAtRequest = threadModelPreferencesById.value
     let persisted: ThreadModelPreferenceState
     try {
       persisted = await getThreadModelPreferences()
@@ -2682,6 +2683,12 @@ export function useDesktopState() {
         ? unknownError.message
         : 'Failed to load thread model preferences'
       return
+    }
+    // A user can change the composer before the startup preference read returns.
+    // Cache entries are replaced immutably, so preserve any entry touched since this read began.
+    persisted = { ...persisted }
+    for (const [threadId, preference] of Object.entries(threadModelPreferencesById.value)) {
+      if (preference !== preferencesAtRequest[threadId]) persisted[threadId] = preference
     }
     threadModelPreferencesById.value = persisted
 
@@ -2799,6 +2806,7 @@ export function useDesktopState() {
   }
 
   async function refreshModelPreferences(options?: { providerChanged?: boolean; includeProviderModels?: boolean }): Promise<void> {
+    const selectedThreadAtRequest = selectedThreadId.value
     codexCliMissingError.value = ''
     try {
       const currentConfig = await getCurrentModelConfig()
@@ -2809,7 +2817,6 @@ export function useDesktopState() {
       activeProviderId.value = normalizedProviderId
       const targetProviderId = readProviderIdForThread(selectedThreadId.value)
       const isProviderBacked = targetProviderId !== 'codex'
-      const selectedThreadPreference = readThreadModelPreference(selectedThreadId.value)
       const isNewThreadContext = selectedThreadId.value.trim().length === 0
       if (isNewThreadContext && options?.providerChanged) {
         newThreadSelectionInitialized = false
@@ -2817,14 +2824,17 @@ export function useDesktopState() {
         newThreadModelManuallySelected = false
         newThreadReasoningManuallySelected = false
       }
-      const normalizedSelectedModelId = isNewThreadContext && !newThreadSelectionInitialized && !newThreadModelManuallySelected
-        ? newChatDefaultModelId.value || normalizedConfiguredModelId
-        : selectedThreadPreference?.model ?? readModelIdForThread(selectedThreadId.value)
       const models = await loadAvailableModelCatalog({
         includeProviderModels: isProviderBacked || options?.includeProviderModels !== false,
         requireProviderModels: isProviderBacked,
         providerId: isProviderBacked ? targetProviderId : undefined,
       })
+      if (selectedThreadId.value !== selectedThreadAtRequest) return
+      // Catalog loading can finish after a manual selection; read the current preference now.
+      const selectedThreadPreference = readThreadModelPreference(selectedThreadId.value)
+      const normalizedSelectedModelId = isNewThreadContext && !newThreadSelectionInitialized && !newThreadModelManuallySelected
+        ? newChatDefaultModelId.value || normalizedConfiguredModelId
+        : selectedThreadPreference?.model ?? readModelIdForThread(selectedThreadId.value)
       const modelIds = models.map((model) => model.id)
       availableModelCapabilities.value = Object.fromEntries(models.map((model) => [model.id, model]))
       const providerModelContextId = toProviderModelContextId(targetProviderId)
