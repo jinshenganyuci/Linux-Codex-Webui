@@ -74,3 +74,20 @@ LIVE_PREVIEW=1 node scripts/verify-composer-reference.cjs
 实际验收地址 `http://127.0.0.1:13511/#/`，375×812 浅色手机添加菜单：
 
 ![居中的手机添加菜单](/root/codex工作目录/Linux-Codex-Webui/output/playwright/composer-polish/add-375-light.png)
+
+
+## 用户授权的正式发布（2026-09-07，13510）
+
+- 用户明确要求更新 13510，沿用无备份约定。将已验收 `475caf8` 前端先发布哈希资源、后原子替换 index，33 个 HTTP 资源逐一与独立 13511 产物比对；没有重启服务或更改后端。
+- 实际验证地址 `http://127.0.0.1:13510/#/`，375×812、768×1024、1440×900 明暗 6 组。进入新聊天，检查聚焦边框、打开「＋」检查整行与居中、打开模型滑杆选择 Ultra 并观察运动，刷新检查仍为新 JS/CSS。浏览器中新聊天草稿选择随上下文关闭丢弃，不写已有聊天偏好或发消息。
+- 结果：6 组全部通过，页面异常/HTTP 错误/保存的线程偏好写入/turn/start 均为 0。正式主进程 414785、Codex 子进程 414813 不变，598 个原有会话文件保留，正式配置与模型哈希不变；预览进程及静态资源不变。
+- 前端 `475caf8`，后端 `2e17039` / CLI 0.153.4；这次复用既有产物与性能审计，没有重测正式长会话。无新备份，回退从目标提交重建前端。
+- 回执与详细断言：`/root/codex工作目录/Linux-Codex-Webui/output/playwright/composer-production-13510/deployment.json`、同目录 `browser.json`。截图按 `menu-<宽>-<主题>.png`、`slider-<宽>-<主题>.png` 命名。
+
+13510 手机浅色，375×812：
+
+![正式手机添加菜单](/root/codex工作目录/Linux-Codex-Webui/output/playwright/composer-production-13510/menu-375-light.png)
+
+13510 手机深色，375×812：
+
+![正式手机 Ultra 滑杆](/root/codex工作目录/Linux-Codex-Webui/output/playwright/composer-production-13510/slider-375-dark.png)
