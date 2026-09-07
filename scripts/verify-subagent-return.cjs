@@ -124,10 +124,10 @@ function progress(threadId) {
       assert.deepEqual(errors, []); assert.deepEqual(writes, [])
       results.push({ url: base + '/' + childHref, viewport, theme, geometry, refreshedReturn: true, nestedReturn: true, bothEntryPoints: true, newTabReturn: true, normalThreadNoBack: true, errors, writes, requests, screenshot })
       fs.writeFileSync(path.join(out, live ? 'live-browser.json' : 'browser.json'), JSON.stringify(results, null, 2))
-      await context.close(); console.log('PASS', viewport.width, theme)
+      await context.unrouteAll({ behavior: 'wait' }); await context.close(); console.log('PASS', viewport.width, theme)
     }
   } catch (error) {
     if (lastPage && !lastPage.isClosed()) await lastPage.screenshot({ path: path.join(out, 'failed.png') }).catch(() => {})
     throw error
-  } finally { await browser.close() }
+  } finally { for (const context of browser.contexts()) await context.unrouteAll({ behavior: 'ignoreErrors' }); await browser.close() }
 })().catch(error => { console.error(error.stack); process.exitCode = 1 })

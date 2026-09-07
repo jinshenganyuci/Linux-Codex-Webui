@@ -86,11 +86,11 @@ const prefix = baseline ? 'before' : live ? 'live' : 'after'
       }
       assert.deepEqual(errors, []); assert.deepEqual(writes, [])
       results.push({ url, viewport, theme, geometry, menuVerified: !baseline, errors, writes, screenshot })
-      await context.close(); console.log('PASS', viewport.width, theme, geometry.titleWidth)
+      await context.unrouteAll({ behavior: 'wait' }); await context.close(); console.log('PASS', viewport.width, theme, geometry.titleWidth)
     }
   } catch (error) {
     if (lastPage && !lastPage.isClosed()) await lastPage.screenshot({ path: path.join(out, 'failed.png') }).catch(() => {})
     throw error
-  } finally { await browser.close() }
+  } finally { for (const context of browser.contexts()) await context.unrouteAll({ behavior: 'ignoreErrors' }); await browser.close() }
   fs.writeFileSync(path.join(out, baseline ? 'baseline.json' : live ? 'live-browser.json' : 'browser.json'), JSON.stringify(results, null, 2))
 })().catch(error => { console.error(error.stack); process.exitCode = 1 })
