@@ -3973,7 +3973,8 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
   :root .model-reasoning-trigger { font-size: 14px; max-width: 190px; }
   :root .thread-composer-context-button { width: 32px; height: 44px; }
   :root:is(.dark, :not(.dark)) .thread-composer-submit { width: 40px; height: 40px; }
-  :root .thread-composer-mic, :root .thread-composer-stop { width: 40px; height: 44px; }
+  :root .thread-composer-mic { width: 40px; height: 44px; }
+  :root .thread-composer-stop { width: 44px; height: 44px; aspect-ratio: 1; }
   :root .thread-composer-mobile-permission { display: flex; width: 100%; }
   :root .thread-composer-mobile-permission .composer-dropdown-trigger { padding: 8px 10px; width: 100%; min-height: 44px; gap: 8px; }
   :root .thread-composer-skill-menu-control .search-dropdown-trigger { min-height: 44px; }
