@@ -42,3 +42,9 @@ UI_PREVIEW_THREAD_ID=<独立预览会话ID> node scripts/verify-chatgpt-preview-
 - 同一会话的浏览器采样：API 124.0 → 119.6 KB，thread/resume 均 1 次、historyPageDuplicateKeys 均 0；thread/list 首页面重复仍存在（3 → 2），不是本次视觉变更引入，不声明已修复。首条消息 454.4 → 390.3 ms 为单次采样，不构成统计性能提升结论。
 - 新面板仅打开时注册键盘、窗口和 visualViewport 监听，关闭卸载；没有新增轮询、全历史扫描或依赖。真实手机软键盘与低端 GPU 未测。
 - 完整数据与截图位于 `output/playwright/chatgpt-preview/`，浏览器 profile 的原始 JSON/trace 位于上级目录。
+
+## 2026-09-07 10:39 部署隔离更正与回退
+
+此前“只影响 13511”的判断错误：两个服务虽然进程和 CODEX_HOME 不同，但启动脚本实际导入同一发布目录的 dist-cli，因而共用 dist 静态资源。已恢复旧 index，13510/13511 两端页面及旧 JS/CSS 哈希均核对一致；服务 PID 不变，正式 HOME 的 598 个会话文件清单一致。新 UI 当前未在线发布。
+
+后续部署前必须读取两个服务的 ExecStart 和入口脚本实际 import 路径，解析符号链接并核对 dist 是否共享；必须隔离完整预览发布目录后才能替换前端。不能将端口、PID 或 CODEX_HOME 不同当作前端资源隔离证据。
