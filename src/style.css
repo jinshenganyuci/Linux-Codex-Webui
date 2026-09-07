@@ -515,6 +515,35 @@ body:has(.native-extension-backdrop) > .composer-dropdown-menu-wrap { z-index: 1
 .thread-parent-back:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 :root.dark .thread-parent-back { color: var(--mac-text, #e4e4e7); }
 
+@media (max-width: 767px) {
+  .content-header-branch-dropdown .header-git-trigger {
+    position: relative;
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    height: 44px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .content-header-branch-dropdown .header-git-trigger-label,
+  .content-header-branch-dropdown .header-git-trigger-chevron { display: none; }
+
+  .content-header-branch-dropdown .header-git-dirty-dot {
+    position: absolute;
+    top: 7px;
+    right: 7px;
+  }
+
+  .content-header-branch-dropdown .header-git-state-value {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    overflow: visible;
+    text-overflow: clip;
+  }
+}
+
 @media (max-width: 767px), (pointer: coarse) {
   .thread-parent-back { min-width: 44px; height: 44px; padding: 0; }
   .thread-parent-back span { display: none; }

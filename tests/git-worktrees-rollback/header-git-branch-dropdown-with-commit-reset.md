@@ -121,3 +121,20 @@ Thread header Git dropdown replaces the simple review action with a commits/bran
 - The review-summary path now uses one tracked `git diff --numstat` plus NUL-delimited `git ls-files --others --exclude-standard -z`; untracked line counts are streamed from disk instead of reading full files into memory.
 
 ---
+
+
+### 2026-09-07：手机分支入口缩为图标，为对话标题让出空间
+
+前置条件：13511 验收服务与已有测试会话；使用 375×812、768×1024、1440×900 明暗主题。回放隐藏子任务的侧栏条目，以显示与用户截图相同的“子任务对话”顶栏。
+
+操作：
+
+1. 手机打开带返回来源的子任务，检查分支入口只显示 Git 图标，宽高为 44×44；对话标题和返回按钮完整可见。
+2. 点开分支图标，检查当前分支/分离 HEAD 文案、分支搜索、原有操作仍在；长分支名在当前状态区域换行，不挤出菜单。
+3. 检查未提交改动圆点仍位于图标按钮内，完整名称仍保留在按钮 title 和无障碍名称中。
+4. 切到平板和桌面，分支名称与下拉箭头应仍显示；切换明暗主题检查菜单底色，确认没有横向溢出。
+5. 执行 `BASELINE=1 node scripts/verify-compact-header-branch.cjs` 记录原线上尺寸；构建后执行 `node scripts/verify-compact-header-branch.cjs` 验证六组。发布后以 `LIVE_PREVIEW=1 SMOKE=1 node scripts/verify-compact-header-branch.cjs` 复验手机明暗两组。
+
+预期：375px 顶栏中分支入口缩至 44px，原约 46px 的标题区域获得至少 120px；短标题不再截断。长分支名和圆点场景仅修改测试页面 DOM，不操作真实仓库。结果及截图在 `output/playwright/compact-header-branch/`。
+
+清理/回滚：关闭测试浏览器即可；不创建会话、不修改分支或配置。此次仅静态 CSS，回退可重新发布目标前端，不需要重启服务。
