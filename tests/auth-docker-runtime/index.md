@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [GitHub dev 汇总发布与 13510 升级](dev-release-13510-20260907.md) |
 | [首批升级的打包隔离与错误持久化](codex-01534-packaged-isolation.md) |
 | [Feature: CLI no longer requires codex login on startup](cli-no-longer-requires-codex-login-on-startup.md) |
 | [Raw auth/provider error messages](raw-auth-provider-error-messages.md) |
