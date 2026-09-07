@@ -47,3 +47,5 @@ URL：`http://127.0.0.1:13511/#/thread/01a0797c-faa5-70a0-b29e-b4c92c0bb03c`。�
 ![手机深色正圆停止按钮](/root/codex工作目录/Linux-Codex-Webui/output/playwright/composer-round-stop/after-375-dark.png)
 
 清理：关闭回放浏览器即可，原线程和配置不变。仅静态发布 13511，保留服务进程，不备份。回退从目标提交重建并发布前端，13510 不参与本次修改。
+
+发布后：前端 `05b36a3` 已静态更新至 13511，33 个实际 HTTP 资源匹配；`LIVE_PREVIEW=1 SMOKE=1 node scripts/verify-round-stop-button.cjs` 的手机深色检查通过，正常及禁用均为 44×44。原服务、后端进程、配置和 7 个验收会话保留，13510 未变，没有重启或备份。线上报告和回执在 `output/playwright/composer-round-stop/live-browser.json`、`deployment.json`，截图为 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/composer-round-stop/live-375-dark.png`。
