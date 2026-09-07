@@ -114,3 +114,20 @@ LIVE_PREVIEW=1 node scripts/verify-agent-progress-polish.cjs
 375×812 深色，子任务详情与按需结果：
 
 ![手机深色子任务详情](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-polish/after-expanded-375-dark.png)
+
+### 13511 发布后复验
+
+- `python3 output/playwright/agent-progress-polish/deploy.py` 发布完整前后端 `21f23ef`；原预览服务重启一次，主进程 577720、真实 app-server 子进程 577748 / Codex 0.153.4。保留原验收 CODEX_HOME、5 个会话和配置，33 个 HTTP 文件与构建一致；13510 发布文件、进程及子进程不变。无备份或临时 WebUI 监听。
+- 前端 `pnpm run build:frontend` 和后端 `pnpm run build:cli` 均通过。公共 CJS 调用命令与结果：
+
+```bash
+node -e "const {execFileSync}=require('node:child_process');const assert=require('node:assert/strict');assert.match(execFileSync(process.execPath,['dist-cli/index.js','--help'],{encoding:'utf8'}),/Usage: linux-codex-webui/);console.log('PASS CLI help from CJS')"
+# PASS CLI help from CJS
+LIVE_PREVIEW=1 node scripts/verify-agent-progress-polish.cjs
+# 六组全部通过；手机高度112px，桌面/平板104px
+```
+
+- 发布后回放使用相同 URL 和六组视口，直接加载服务端静态产物；只有状态/进度/结果为测试协议响应，不更改后端线程状态。刷新恢复三节点、六节点层级、零节点、结果按需读取与手机焦点操作均通过。每组四次加载/四次进度读取、结果点击一次/读取一次，无页面错误或配置、消息写入。
+- 完整记录为 `output/playwright/agent-progress-polish/live-browser.json` 与 `deployment.json`；线上复验截图绝对路径为 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-polish/live-{compact,expanded}-{1440,375,768}-{light,dark}.png`。服务端恢复由 60 项跟踪/分页单测及用户实际元数据回放验证，没有将浏览器拦截结果冒充新创建子任务的运行证据。
+
+![13511 手机紧凑状态卡发布复验](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-polish/live-compact-375-light.png)
