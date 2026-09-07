@@ -181,3 +181,17 @@ B 会话，375×812 深色，独立保持关闭：
 - 当前完成态 B 聊天 profiler 正常渲染，API 总量 128.4 KB；偏好 GET 1 次、447 字节、17.3ms，thread/resume 1 次，无重复历史页请求。唯一 warning 是既有 thread/list 首页 2 次；最慢 API 是模型目录 302.8ms。首条消息 463ms 为单次样本，不声明速度提升；未测供应商真实加速、实机软键盘或低端设备。完整报告和 trace 路径见 `output/playwright/thread-fast/profile.json`，体积见 `bundle.json`。
 - 13511 后端完整发布 `f2019e5`，保留原发布目录和验收 CODEX_HOME，服务重启一次，当前主进程 538954、实际 app-server 子进程 539008 / Codex 0.153.4。因 CLI 懒启动，使用只读 config/read 初始化后验证真实子进程；33 个 HTTP 资源通过，5 个验收会话及原配置/认证/模型文件保留。首页说明修正仅追加前端发布，无第二次重启。
 - 回执 `output/playwright/thread-fast/deployment.json` 标记 `completed:true`、`backendRestarted:true`、`backupCreated:false`；测试记录已恢复、全局配置未改。正式 13510 未升级，仍为此前全局 Fast 版本。未创建备份、未推送 GitHub 或发布 npm。回退必须成套构建并部署目标前后端，保留原数据目录；不能以旧前端配新后端代表回退完成。
+
+#### 正式 13510 升级安排（用户明确授权）
+
+- 使用 `output/playwright/thread-fast-production-13510/deploy.py --prepare` 核对已验收的前端 `ea320f8`、后端 `f2019e5`、35 个构建文件、配置哈希和服务入口；未创建旧数据或代码备份。此次提交只记录安排，正式完成状态必须读取同目录 `status.json`，不能把 `prepared` 或 `waiting-for-current-turn` 当作完成。
+- 部署由独立 systemd 服务执行 `python3 output/playwright/thread-fast-production-13510/deploy.py`，等待当前对话结束、全服务无活动回合/待审批/队列后才重启 13510。使用原发布目录、原 runner、原 `/root/.codex` 和 Codex 0.153.4；不改 13511。发生超时或并发配置/服务变化时，状态写为 failed 并保留错误原因。
+- 发布后核对实际后端版本、CLI 子进程归属和 CODEX_HOME、13510 监听 PID、33 个 HTTP 资源、升级前会话集合、配置和模型目录哈希；随后执行 `node output/playwright/thread-fast-production-13510/verify.cjs`。正式验证不修改 Fast、模型、配置或发送消息；实际开关写入和失败隔离沿用同产物 13511 已通过的验证。
+- 正式脚本在 `VERIFY_PREVIEW=1 node output/playwright/thread-fast-production-13510/verify.cjs` 的 13511 手机深色预演通过。正式 URL 为 `http://127.0.0.1:13510/#/thread/01a07a8a-cff4-76d1-aea2-0c8e6c8142e9` 和 `http://127.0.0.1:13510/#/`；1440×900、375×812、768×1024 明暗共六组自动检查刷新后会话开关匹配服务端偏好、新会话默认关闭、唯一加号入口、模型面板无速度菜单、手机菜单居中且无溢出。保留 Service Worker，使用 Playwright 设置主题 localStorage。
+- 完成的必要条件是 `status.json` 为 `phase: complete` 且同目录 `browser.json` 有六组成功记录；截图绝对路径为 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/thread-fast-production-13510/thread-{1440,375,768}-{light,dark}.png` 和 `new-{1440,375,768}-{light,dark}.png`。以下内联图片在后台正式验收成功后生成：
+
+![正式手机会话独立 Fast 刷新验收](/root/codex工作目录/Linux-Codex-Webui/output/playwright/thread-fast-production-13510/thread-375-dark.png)
+
+![正式桌面新会话默认标准](/root/codex工作目录/Linux-Codex-Webui/output/playwright/thread-fast-production-13510/new-1440-light.png)
+
+- 查看 `browser.log` 定位页面失败。成功后仅留下回执、日志和截图，没有临时 WebUI 监听或配置变更；回退仍需成套构建目标代码，不依赖本次不存在的备份。性能复用上一节同产物测量，不将此次只读正式验收描述为新一轮性能基准。
