@@ -163,3 +163,7 @@ LIVE_PREVIEW=1 SMOKE=1 node scripts/verify-agent-progress-polish.cjs
 URL 为 `http://127.0.0.1:13511/#/thread/01a0797c-faa5-70a0-b29e-b4c92c0bb03c`，报告在 `output/playwright/agent-progress-classic/browser.json`，截图绝对路径为 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-classic/after-{compact,expanded}-{1440,375,768}-{light,dark}.png`（compact 文件名表示折叠态，内容已恢复原版）。关闭浏览器即可清理测试上下文，不改原线程、偏好或配置。回退只需从目标提交重建前端并静态发布；无需回退子任务追踪器。
 
 ![原内容与灰色手机状态卡](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-classic/after-compact-375-light.png)
+
+发布后：`python3 output/playwright/agent-progress-classic/deploy.py` 已发布前端 `664cba0`，后端继续 `21f23ef`；33 个实际 HTTP 文件匹配，原服务/CLI 进程、6 个验收会话和配置保留，正式 13510 未变，无重启和备份。`LIVE_PREVIEW=1 SMOKE=1 node scripts/verify-agent-progress-polish.cjs` 的 375×812 深色复验通过，直接使用线上静态产物；完整六组明暗已在同构建通过，不重复执行无变化的测试。明细为 `output/playwright/agent-progress-classic/live-browser.json`，线上截图为 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-classic/live-compact-375-dark.png`。
+
+![13511 原内容灰色状态卡深色复验](/root/codex工作目录/Linux-Codex-Webui/output/playwright/agent-progress-classic/live-compact-375-dark.png)
