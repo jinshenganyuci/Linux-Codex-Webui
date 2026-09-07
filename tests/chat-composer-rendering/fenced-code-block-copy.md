@@ -24,3 +24,47 @@
 - 删除仅为验收创建的测试线程；不需要改动项目文件或持久化设置。
 
 ---
+
+
+### 蓝色链接与 ChatGPT 风格代码块（2026-09-07）
+
+#### 前置条件
+- 独立 13511 服务，已完成的真实 TestChat 回复，唯一标记 `CHAT_PRESENTATION_1788765869513`；聊天 ID `01a07ac1-1655-7340-bead-0637d5eeab63`。源消息包含普通段落链接、列表链接、本地文件、行内代码及 YAML/Bash/JSON/未知语言/无语言五个代码块。
+- 本地链接夹具 `/tmp/codex-webui-phase1-TestChat/message-presentation.txt` 存在，内容为无敏感信息的验收文字。
+- 1440×1000、375×812、768×1024，浅色和深色各一次。普通浏览器无需悬停即可看到蓝色链接。
+
+#### 操作和预期
+1. 查看真实助手回复中的“查看项目文档”“打开资源页面”“验收说明”，检查三个链接的 `hrefOk`、`titleOk`、`textOk`、`targetOk`、`relOk` 均为 true；浅色 `#0969da`、深色 `#6cb6ff`，普通段落和 HTML 渲染的列表一致。已访问链接仍为蓝色，键盘聚焦时有轮廓和下划线。
+2. 点击文件链接，打开真实本地文件；点击外链会打开新页。自动测试只拦截示例域名的导航，不联系外部网站、不运行代码块里的命令。链接 URL、标题、标签、右键行为和原有文件识别规则保持不变。
+3. 代码块为浅灰/深灰圆角容器，移除终端三色圆点和黑色标题条；左侧显示代码图标与可读语言名（YAML、Bash、TypeScript 等），右侧有换行和复制图标。无语言显示“代码”，未知语言保留名称并显示纯文本。
+4. 每个代码块点击复制，将剪贴板与源代码逐字比较，保留前导空格、换行、引号和 HTML 字符；不带标题、按钮文字、围栏或高亮标签。成功时显示勾号及“已复制”，随后恢复图标。复制另一块时前一块恢复；键盘 Enter 同样有效。
+5. 默认长行只在代码区域横向滚动；点击“自动换行”或按 Enter，按钮 `aria-pressed=true`，长行折行、代码原文不变、页面不横向溢出。再次点击恢复，其他代码块不受影响。代码预览可用键盘聚焦；触屏两个按钮均至少 44×44。
+6. 行内代码使用紧凑灰色底纹和等宽字；普通和深色页面的语法色都清晰，正文/终端/差异视图不套用此代码块配色。减少动态效果时不使用按钮缩放反馈。
+7. 刷新后，链接仍默认蓝色，五个代码块仍正常显示。换行是当前代码块的临时阅读状态，不写入全局配置或消息原文。
+8. 普通消息与计划卡/列表中的 HTML 代码块共用标题生成器和事件委托；计划卡也应有相同配色、复制和换行按钮。单元回归验证 HTML 分支嵌套代码及标签转义；浏览器使用真实聊天回复检查五个代码块和列表链接。
+
+#### 自动验证与结果
+```bash
+pnpm exec vitest run src/components/content/ThreadConversation.test.ts src/components/content/thread-conversation/markdownPipeline.test.ts src/components/content/thread-conversation/CommandExecutionBlock.test.ts
+pnpm run build:frontend
+node scripts/verify-message-presentation.cjs
+LIVE_PREVIEW=1 node scripts/verify-message-presentation.cjs
+```
+- 相关 3 个测试文件共 36 项通过，前端类型检查与构建通过。新增回归覆盖语言别名、空语言、未知语言、围栏信息转义、中文按钮及原文缩进。
+- 构建模式真实 TestChat 六组通过：每组三个链接属性/默认蓝色检查、真实文件和受控外链跳转、五个代码块逐字复制、长行换行和独立块状态、手机 44px 触控区域、无横向溢出、刷新后颜色保留。无页面错误，复制/换行不产生模型或配置写入。
+- Playwright 直接用于主题 localStorage、剪贴板读取和外链导航拦截；测试操作真实聊天 DOM，不以 HTML 截图夹具替代真实消息。初次 Luna 测试请求等待过久，已只中断该测试回合；同一 TestChat 用 Astra low/priority 完成真实回复，未改全局模型或速度配置。
+- 实际地址：`http://127.0.0.1:13511/#/thread/01a07ac1-1655-7340-bead-0637d5eeab63`。每组截图、链接属性和复制结果在 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/message-presentation/build-result.json`；必需 TestChat 截图 `/root/codex工作目录/Linux-Codex-Webui/output/playwright/testchat-message-presentation-cjs.png`。
+- 本次只调整展示和本地阅读按钮，不改 provider/auth、消息传输或后端配置；保留原高亮按需加载、已有 LRU 缓存和复制回退。代码块操作仅查询所在块，不扫描全部历史，不引入依赖、额外 API、观察器、轮询或持续动画。主 JS 715235→715307 字节（gzip 222719→222762），主 CSS 534692→538294（gzip 60230→60998）。原大 chunk 提示仍存在。
+- 真实手机软键盘、Safari/Firefox 和低端 GPU 未实测。代码块高度跟随正文，未添加折叠、运行代码或自动下载功能。
+
+1440×1000 浅色，代码块与蓝色列表链接：
+
+![浅色聊天代码块](/root/codex工作目录/Linux-Codex-Webui/output/playwright/message-presentation/code-1440-light.png)
+
+375×812 深色，长代码换行及触控按钮：
+
+![深色手机代码块](/root/codex工作目录/Linux-Codex-Webui/output/playwright/message-presentation/code-375-dark.png)
+
+#### 清理与回退
+- 验收聊天及文本夹具保留用于 13511 查看效果；验收结束可仅删除该 TestChat 和对应夹具，不删除其他线程，不修改用户源码。
+- 回退从目标提交重新构建前端并原子替换独立 13511 入口；不创建备份、不重启后端，正式 13510 须另行明确授权升级。

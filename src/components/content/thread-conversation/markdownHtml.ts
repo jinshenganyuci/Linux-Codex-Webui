@@ -26,6 +26,9 @@ export interface MessageBlockHtmlContext {
   renderHighlightedCodeAsHtml: (language: string, value: string) => string
   copyCodeLabel?: () => string
   copiedCodeLabel?: () => string
+  wrapCodeLabel?: () => string
+  unwrapCodeLabel?: () => string
+  plainCodeLabel?: () => string
 }
 
 export function escapeHtml(value: string): string {
@@ -74,6 +77,44 @@ export function renderInlineSegmentsToHtml(
       return `<code class="message-inline-code">${escapeHtml(segment.value)}</code>`
     })
     .join('')
+}
+
+const CODE_LANGUAGE_LABELS: Record<string, string> = {
+  javascript: 'JavaScript', typescript: 'TypeScript', jsx: 'JSX', tsx: 'TSX',
+  python: 'Python', ruby: 'Ruby', bash: 'Bash', yaml: 'YAML', json: 'JSON',
+  jsonc: 'JSONC', html: 'HTML', xml: 'XML', css: 'CSS', scss: 'SCSS',
+  markdown: 'Markdown', sql: 'SQL', cpp: 'C++', csharp: 'C#', c: 'C',
+  go: 'Go', rust: 'Rust', java: 'Java', kotlin: 'Kotlin', swift: 'Swift',
+  powershell: 'PowerShell', dockerfile: 'Dockerfile', toml: 'TOML',
+  ini: 'INI', diff: 'Diff', text: 'Text', plaintext: 'Text',
+}
+
+export function codeLanguageLabel(language: string, fallback = 'Code'): string {
+  const normalized = normalizeCodeLanguage(language)
+  return CODE_LANGUAGE_LABELS[normalized] ?? (language.trim().split(/\s+/u)[0] || fallback)
+}
+
+// Both Vue message blocks and HTML-rendered lists/plan cards use the same controls.
+export function renderCodeBlockHeaderToHtml(language: string, context: MessageBlockHtmlContext): string {
+  const copy = escapeHtml(context.copyCodeLabel?.() ?? 'Copy')
+  const copied = escapeHtml(context.copiedCodeLabel?.() ?? 'Copied')
+  const wrap = escapeHtml(context.wrapCodeLabel?.() ?? 'Wrap lines')
+  const unwrap = escapeHtml(context.unwrapCodeLabel?.() ?? 'Unwrap lines')
+  const label = escapeHtml(codeLanguageLabel(language, context.plainCodeLabel?.() ?? 'Code'))
+  const svg = (className: string, paths: string) => `<svg class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`
+  return [
+    '<span class="message-code-caption">',
+    svg('message-code-type-icon', '<path d="m7 7-5 5 5 5m10-10 5 5-5 5m-6 2 2-14"/>'),
+    `<span class="message-code-language" title="${escapeHtml(language)}">${label}</span></span>`,
+    '<div class="message-code-actions">',
+    `<button type="button" class="message-code-action message-code-wrap-button" data-message-code-wrap="true" data-wrap-label="${wrap}" data-unwrap-label="${unwrap}" aria-label="${wrap}" title="${wrap}" aria-pressed="false">`,
+    svg('message-code-wrap-icon', '<path d="M4 6h16M4 11h12a4 4 0 0 1 0 8h-4m3-3-3 3 3 3M4 16h3"/>'),
+    '</button>',
+    `<button type="button" class="message-code-action message-code-copy-button" data-message-code-copy="true" data-copy-label="${copy}" data-copied-label="${copied}" aria-label="${copy}" title="${copy}">`,
+    svg('message-code-copy-icon', '<rect x="8" y="3" width="12" height="14" rx="3"/><path d="M16 17v1a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-8a3 3 0 0 1 3-3h1"/>'),
+    svg('message-code-copied-icon', '<path d="m5 12 4 4L19 6"/>'),
+    `<span class="message-code-copy-label" aria-hidden="true">${copy}</span></button></div>`,
+  ].join('')
 }
 
 function headingTag(level: number): string {
@@ -169,28 +210,7 @@ export function renderMessageBlockToHtml(
     return `<div class="message-table-wrap"><table class="message-table"><thead><tr>${headerCells}</tr></thead>${body}</table></div>`
   }
   if (block.kind === 'codeBlock') {
-    const copyLabel = escapeHtml(context.copyCodeLabel?.() ?? 'Copy')
-    const copiedLabel = escapeHtml(context.copiedCodeLabel?.() ?? 'Copied')
-    const language = block.language
-      ? `<span class="message-code-language" title="${escapeHtml(block.language)}">${escapeHtml(block.language)}</span>`
-      : '<span class="message-code-language" aria-hidden="true"></span>'
-    const copyButton = [
-      '<button',
-      ' type="button"',
-      ' class="message-code-copy-button"',
-      ' data-message-code-copy="true"',
-      ` data-copy-label="${copyLabel}"`,
-      ` data-copied-label="${copiedLabel}"`,
-      ` aria-label="${copyLabel}"`,
-      ` title="${copyLabel}"`,
-      '>',
-      '<svg class="message-code-copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">',
-      '<path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2zm-4 4a2 2 0 0 1-2 2V8m4 8h10" />',
-      '</svg>',
-      `<span class="message-code-copy-label">${copyLabel}</span>`,
-      '</button>',
-    ].join('')
-    return `<div class="message-code-block"><div class="message-code-header">${language}${copyButton}</div><pre class="message-code-pre"><code class="hljs">${context.renderHighlightedCodeAsHtml(block.language, block.value)}</code></pre></div>`
+    return `<div class="message-code-block"><div class="message-code-header">${renderCodeBlockHeaderToHtml(block.language, context)}</div><pre class="message-code-pre" tabindex="0"><code class="hljs">${context.renderHighlightedCodeAsHtml(block.language, block.value)}</code></pre></div>`
   }
   if (block.kind === 'thematicBreak') {
     return '<hr class="message-divider">'

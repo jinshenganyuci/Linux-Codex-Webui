@@ -7,6 +7,8 @@ import {
 } from './markdownInline'
 import {
   escapeHtml,
+  codeLanguageLabel,
+  renderCodeBlockHeaderToHtml,
   normalizeCodeLanguage,
   renderInlineSegmentsToHtml,
   renderMessageBlockToHtml,
@@ -164,16 +166,13 @@ describe('markdown block parsing and HTML rendering', () => {
       { kind: 'paragraph', value: 'after' },
     ])
     expect(normalizeCodeLanguage('ts title')).toBe('typescript')
-    expect(renderMarkdown(source)).toBe(
-      '<div class="message-code-block"><div class="message-code-header">' +
-      '<span class="message-code-language" title="ts title">ts title</span>' +
-      '<button type="button" class="message-code-copy-button" data-message-code-copy="true" data-copy-label="Copy" data-copied-label="Copied" aria-label="Copy" title="Copy">' +
-      '<svg class="message-code-copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">' +
-      '<path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2zm-4 4a2 2 0 0 1-2 2V8m4 8h10" />' +
-      '</svg><span class="message-code-copy-label">Copy</span></button></div>' +
-      '<pre class="message-code-pre"><code class="hljs">const value = `&lt;tag&gt;`</code></pre></div>' +
-      '<p class="message-text">after</p>',
-    )
+    const html = renderMarkdown(source)
+    expect(html).toContain('<span class="message-code-language" title="ts title">TypeScript</span>')
+    expect(html).toContain('data-message-code-copy="true"')
+    expect(html).toContain('data-message-code-wrap="true"')
+    expect(html).toContain('aria-pressed="false"')
+    expect(html).toContain('<pre class="message-code-pre" tabindex="0"><code class="hljs">const value = `&lt;tag&gt;`</code></pre>')
+    expect(html).toContain('<p class="message-text">after</p>')
   })
 
   it('adds independent copy actions for YAML and shell fences without changing their source', () => {
@@ -202,6 +201,29 @@ describe('markdown block parsing and HTML rendering', () => {
     expect(html.match(/data-message-code-copy="true"/gu)).toHaveLength(2)
     expect(html).toContain('<code class="hljs">services:\n  app:\n    image: example/app:latest</code>')
     expect(html).toContain('<code class="hljs">docker compose up -d</code>')
+  })
+
+  it('labels aliases and plain code without interpreting fence metadata as markup', () => {
+    expect(codeLanguageLabel('yml')).toBe('YAML')
+    expect(codeLanguageLabel('sh')).toBe('Bash')
+    expect(codeLanguageLabel('ts title="demo"')).toBe('TypeScript')
+    expect(codeLanguageLabel('', '代码')).toBe('代码')
+    expect(codeLanguageLabel('unknown info')).toBe('unknown')
+    const html = renderCodeBlockHeaderToHtml('unknown"<img/src=x>', htmlContext)
+    expect(html).not.toContain('<img')
+    expect(html).toContain('&quot;&lt;img/src=x&gt;')
+  })
+
+  it('localizes both code controls and keeps nested code values untouched', () => {
+    const html = renderMessageBlockToHtml({ kind: 'unorderedList', items: [{ paragraphs: ['Nested'], children: [
+      { kind: 'codeBlock', language: '', value: '<script>literal()</script>\n  keep indent' },
+    ] }] }, { ...htmlContext, copyCodeLabel: () => '复制', copiedCodeLabel: () => '已复制', wrapCodeLabel: () => '自动换行', unwrapCodeLabel: () => '取消换行', plainCodeLabel: () => '代码' })
+    expect(html).toContain('aria-label="复制"')
+    expect(html).toContain('data-copied-label="已复制"')
+    expect(html).toContain('aria-label="自动换行"')
+    expect(html).toContain('data-unwrap-label="取消换行"')
+    expect(html).toContain('>代码</span>')
+    expect(html).toContain('<code class="hljs">&lt;script&gt;literal()&lt;/script&gt;\n  keep indent</code>')
   })
 
   it('calls inline and highlight renderers in source order', () => {

@@ -607,28 +607,8 @@
                       </table>
                     </div>
                     <div v-else-if="block.kind === 'codeBlock'" class="message-code-block">
-                      <div class="message-code-header">
-                        <span
-                          v-if="block.language"
-                          class="message-code-language"
-                          :title="block.language"
-                        >{{ block.language }}</span>
-                        <span v-else class="message-code-language" aria-hidden="true" />
-                        <button
-                          type="button"
-                          class="message-code-copy-button"
-                          data-message-code-copy="true"
-                          :data-copy-label="t('Copy')"
-                          :data-copied-label="t('Copied')"
-                          :aria-label="t('Copy')"
-                          :title="t('Copy')"
-                          @click.stop="onCodeBlockCopyClick(block.value, $event)"
-                        >
-                          <IconTablerCopy class="icon-svg message-code-copy-icon" />
-                          <span class="message-code-copy-label">{{ t('Copy') }}</span>
-                        </button>
-                      </div>
-                      <pre class="message-code-pre"><code class="hljs" v-html="renderCachedHighlightedCodeAsHtml(block.language, block.value)"></code></pre>
+                      <div class="message-code-header" v-html="renderCodeBlockHeaderToHtml(block.language, messageBlockHtmlContext)" />
+                      <pre class="message-code-pre" tabindex="0"><code class="hljs" v-html="renderCachedHighlightedCodeAsHtml(block.language, block.value)"></code></pre>
                     </div>
                     <hr v-else-if="block.kind === 'thematicBreak'" class="message-divider" />
                     <p v-else-if="isMarkdownImageFailed(message, blockIndex)" class="message-text">{{ block.markdown }}</p>
@@ -1098,6 +1078,7 @@ import { parseMessageBlocks } from './thread-conversation/markdownBlocks'
 import {
   escapeHtml,
   normalizeCodeLanguage,
+  renderCodeBlockHeaderToHtml,
   renderInlineSegmentsToHtml,
   renderListItemContentToHtml,
   renderMessageBlockToHtml,
@@ -2573,11 +2554,6 @@ async function copyCodeBlock(value: string, button: HTMLButtonElement): Promise<
   if (copied) showCodeBlockCopied(button)
 }
 
-function onCodeBlockCopyClick(value: string, event: MouseEvent): void {
-  const button = event.currentTarget
-  if (!(button instanceof HTMLButtonElement)) return
-  void copyCodeBlock(value, button)
-}
 
 function forkResponse(anchorMessageIdentity: string): void {
   const turnIndex = forkableTurnIndexByAnchorIdentity.value[anchorMessageIdentity]
@@ -2798,6 +2774,9 @@ const messageBlockHtmlContext = {
   renderHighlightedCodeAsHtml: renderCachedHighlightedCodeAsHtml,
   copyCodeLabel: () => t('Copy'),
   copiedCodeLabel: () => t('Copied'),
+  wrapCodeLabel: () => t('Wrap lines'),
+  unwrapCodeLabel: () => t('Unwrap lines'),
+  plainCodeLabel: () => t('Code'),
 }
 
 function renderListItemContentAsHtml(item: ListItem): string {
@@ -3539,6 +3518,19 @@ function onConversationClick(event: MouseEvent): void {
   const container = conversationListRef.value
   if (!container) return
 
+  const wrapButton = target.closest('button[data-message-code-wrap]') as HTMLButtonElement | null
+  if (wrapButton && container.contains(wrapButton)) {
+    const block = wrapButton.closest('.message-code-block')
+    if (!block) return
+    event.preventDefault()
+    const wrapped = block.classList.toggle('is-wrapped')
+    wrapButton.setAttribute('aria-pressed', String(wrapped))
+    const label = (wrapped ? wrapButton.dataset.unwrapLabel : wrapButton.dataset.wrapLabel) ?? t('Wrap lines')
+    wrapButton.setAttribute('aria-label', label)
+    wrapButton.setAttribute('title', label)
+    return
+  }
+
   const copyButton = target.closest('button[data-message-code-copy]') as HTMLButtonElement | null
   if (copyButton && container.contains(copyButton)) {
     const code = copyButton.closest('.message-code-block')?.querySelector('code')
@@ -4107,57 +4099,6 @@ onBeforeUnmount(() => {
   @apply mt-0.5 text-sm leading-none text-slate-500 select-none;
 }
 
-.plan-card-markdown :deep(.message-code-block) {
-  @apply overflow-hidden rounded-xl border border-slate-200 bg-slate-950/95 text-slate-100;
-}
-
-.plan-card-markdown :deep(.message-code-header) {
-  @apply flex min-h-10 items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/90 px-3 py-1.5;
-}
-
-.plan-card-markdown :deep(.message-code-header)::before {
-  content: '';
-  width: 42px;
-  height: 12px;
-  flex: 0 0 42px;
-  background:
-    radial-gradient(circle at 6px 6px, #ff5f57 0 5px, transparent 5.5px),
-    radial-gradient(circle at 21px 6px, #febc2e 0 5px, transparent 5.5px),
-    radial-gradient(circle at 36px 6px, #28c840 0 5px, transparent 5.5px);
-}
-
-.plan-card-markdown :deep(.message-code-language) {
-  @apply min-w-0 flex-1 truncate text-[11px] font-mono uppercase tracking-[0.08em] text-slate-400;
-}
-
-.plan-card-markdown :deep(.message-code-copy-button) {
-  @apply inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-md border border-slate-700/80 bg-slate-800/80 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:border-slate-500 hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300;
-}
-
-.plan-card-markdown :deep(.message-code-copy-button[data-copied='true']) {
-  @apply border-emerald-500/70 bg-emerald-500/15 text-emerald-200;
-}
-
-.plan-card-markdown :deep(.message-code-copy-icon) {
-  @apply h-3.5 w-3.5 shrink-0;
-}
-
-.plan-card-markdown :deep(.message-code-copy-label) {
-  @apply leading-4;
-}
-
-.plan-card-markdown :deep(.message-code-pre) {
-  @apply m-0 overflow-x-auto px-3 py-3 text-[13px] leading-6;
-}
-
-.plan-card-markdown :deep(.message-inline-code) {
-  @apply bg-transparent p-0 font-sans text-[1em] font-semibold text-inherit;
-}
-
-.plan-card-markdown :deep(.message-file-link) {
-  @apply text-sky-700 underline decoration-sky-300 underline-offset-2;
-}
-
 .plan-card-markdown :deep(.message-image-button-html) {
   @apply block rounded-xl overflow-hidden border border-slate-300 bg-white p-0 transition hover:border-slate-400;
   cursor: zoom-in;
@@ -4332,65 +4273,6 @@ onBeforeUnmount(() => {
 
 .message-markdown-image {
   @apply w-auto h-auto max-w-[min(560px,85vw)] max-h-[min(460px,62vh)] object-contain bg-white;
-}
-
-.message-inline-code {
-  @apply bg-transparent p-0 font-sans text-[1em] font-semibold text-inherit;
-  line-height: inherit;
-}
-
-.message-code-block {
-  @apply overflow-hidden border border-slate-200 bg-slate-950 text-slate-100;
-  border-radius: var(--ui-radius-card);
-  box-shadow: 0 16px 36px rgb(0 0 0 / 18%), inset 0 1px 0 rgb(255 255 255 / 5%);
-}
-
-.message-code-header {
-  @apply flex min-h-10 items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/90 px-3 py-1.5;
-}
-
-.message-code-header::before {
-  content: '';
-  width: 42px;
-  height: 12px;
-  flex: 0 0 42px;
-  background:
-    radial-gradient(circle at 6px 6px, #ff5f57 0 5px, transparent 5.5px),
-    radial-gradient(circle at 21px 6px, #febc2e 0 5px, transparent 5.5px),
-    radial-gradient(circle at 36px 6px, #28c840 0 5px, transparent 5.5px);
-  filter: saturate(0.9);
-}
-
-.message-code-language {
-  @apply min-w-0 flex-1 truncate text-[11px] font-mono uppercase tracking-[0.08em] text-slate-400;
-}
-
-.message-code-copy-button {
-  @apply inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-md border border-slate-700/80 bg-slate-800/80 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:border-slate-500 hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300;
-}
-
-.message-code-copy-button[data-copied='true'] {
-  @apply border-emerald-500/70 bg-emerald-500/15 text-emerald-200;
-}
-
-.message-code-copy-icon {
-  @apply h-3.5 w-3.5 shrink-0;
-}
-
-.message-code-copy-label {
-  @apply leading-4;
-}
-
-.message-code-pre {
-  @apply m-0 overflow-x-auto px-3 py-3 text-[13px] leading-relaxed font-mono whitespace-pre;
-}
-
-.message-code-pre :deep(.hljs) {
-  @apply block bg-transparent p-0 text-inherit;
-}
-
-.message-file-link {
-  @apply text-sm leading-relaxed text-[#0969da] no-underline hover:text-[#1f6feb] hover:underline underline-offset-2;
 }
 
 .file-link-context-menu {
