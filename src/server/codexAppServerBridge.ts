@@ -7683,10 +7683,16 @@ export class AppServerProcess {
   async rpc(method: string, params: unknown): Promise<unknown> {
     this.disposeIfConfigChanged()
     await this.ensureInitialized()
+    // Listing is a metadata read. The native default also scans JSONL rollouts
+    // to repair metadata on every request (hundreds of MB for a full history).
+    // Keep that maintenance path explicit; normal reads use Codex's live index.
+    const rpcParams = method === 'thread/list'
+      ? { ...asRecord(params), useStateDbOnly: asRecord(params)?.useStateDbOnly !== false }
+      : params
     const threadId = method === 'turn/start' || method === 'thread/queue/start' ? this.extractThreadIdFromParams(params) : ''
     const pendingRuntimeTurnId = threadId ? this.threadRuntimeState?.beginTurn(threadId) ?? '' : ''
     try {
-      const result = await this.call(method, params)
+      const result = await this.call(method, rpcParams)
       this.threadRuntimeState?.observeRpcResult(method, params, result, pendingRuntimeTurnId)
       if (method === 'thread/start' || method === 'thread/resume') {
         const row = asRecord(result)

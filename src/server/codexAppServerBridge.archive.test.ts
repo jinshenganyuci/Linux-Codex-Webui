@@ -107,6 +107,46 @@ function createAppServerHarness(initialGeneration = 1): {
   }
 }
 
+describe('indexed thread listing', () => {
+  it('uses the native live index on each read and retains filters and pagination', async () => {
+    const { appServer, writes, emitLine } = createAppServerHarness()
+    ;(appServer as unknown as { initialized: boolean }).initialized = true
+    vi.spyOn(appServer as unknown as { disposeIfConfigChanged(): void }, 'disposeIfConfigChanged').mockImplementation(() => {})
+    for (const params of [
+      { archived: false, limit: 50, sortKey: 'updated_at', modelProviders: [], cursor: null },
+      { archived: true, limit: 25, cursor: 'native-next-page', cwd: '/tmp/project' },
+      { ancestorThreadId: 'parent', sourceKinds: ['subAgentThreadSpawn'], limit: 10 },
+    ]) {
+      const pending = appServer.rpc('thread/list', params)
+      await Promise.resolve()
+      const request = JSON.parse(writes.at(-1)!)
+      expect(request.params).toEqual({ ...params, useStateDbOnly: true })
+      const response = { data: [{ id: 'recent-thread', historyMode: 'paginated' }], nextCursor: 'native-cursor' }
+      emitLine({ id: request.id, result: response })
+      await expect(pending).resolves.toEqual(response)
+    }
+    appServer.dispose()
+  })
+
+  it('allows an explicit metadata repair read without changing history requests', async () => {
+    const { appServer, writes, emitLine } = createAppServerHarness()
+    ;(appServer as unknown as { initialized: boolean }).initialized = true
+    vi.spyOn(appServer as unknown as { disposeIfConfigChanged(): void }, 'disposeIfConfigChanged').mockImplementation(() => {})
+    for (const [method, params] of [
+      ['thread/list', { limit: 1, cwd: '/tmp/imported', useStateDbOnly: false }],
+      ['thread/read', { threadId: 'old-thread', includeTurns: true }],
+    ] as const) {
+      const pending = appServer.rpc(method, params)
+      await Promise.resolve()
+      const request = JSON.parse(writes.at(-1)!)
+      expect(request.params).toEqual(params)
+      emitLine({ id: request.id, result: { data: [] } })
+      await pending
+    }
+    appServer.dispose()
+  })
+})
+
 describe('agent model detail recovery', () => {
   it('reapplies cached child details when a later root turn reuses the same child thread', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'codex-agent-model-cache-'))
