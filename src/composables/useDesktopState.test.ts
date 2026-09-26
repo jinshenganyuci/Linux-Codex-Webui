@@ -2591,6 +2591,76 @@ describe('startup request deduplication', () => {
     state.stopPolling()
   })
 
+  it('skips duplicate idle and active snapshots but refreshes real status transitions', async () => {
+    installTestWindow()
+    const makePage = (inProgress: boolean) => ({
+      groups: [{ projectName: 'project', threads: [thread('thread-status', '/tmp/project', { inProgress })] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadGroupsPage
+      .mockResolvedValueOnce(makePage(false))
+      .mockResolvedValueOnce(makePage(true))
+      .mockResolvedValueOnce(makePage(false))
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    let notify!: (notification: { method: string; params?: unknown }) => void
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => { notify = handler; return vi.fn() })
+    const state = useDesktopState()
+    state.primeSelectedThread('', { persist: false })
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    state.startNotificationStream()
+    vi.mocked(window.setTimeout).mockClear()
+    const status = (type: string) => notify({ method: 'thread/status/changed', params: { threadId: 'thread-status', status: { type } } })
+    const flushSync = async () => {
+      const callback = vi.mocked(window.setTimeout).mock.calls.find(([, delay]) => delay === 220)?.[0]
+      expect(callback).toEqual(expect.any(Function))
+      ;(callback as () => void)()
+      for (let index = 0; index < 30; index += 1) await Promise.resolve()
+      vi.mocked(window.setTimeout).mockClear()
+    }
+    status('idle')
+    status('notLoaded')
+    expect(vi.mocked(window.setTimeout).mock.calls.filter(([, delay]) => delay === 220)).toHaveLength(0)
+    expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(1)
+
+    status('active')
+    await flushSync()
+    expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(2)
+    expect(state.projectGroups.value[0]?.threads[0]?.inProgress).toBe(true)
+    status('active')
+    expect(vi.mocked(window.setTimeout).mock.calls.filter(([, delay]) => delay === 220)).toHaveLength(0)
+
+    status('idle')
+    await flushSync()
+    expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(3)
+    expect(state.projectGroups.value[0]?.threads[0]?.inProgress).toBe(false)
+    state.stopPolling()
+  })
+
+  it.each([
+    { method: 'thread/status/changed', params: { threadId: 'unknown-thread', status: { type: 'idle' } } },
+    { method: 'thread/started', params: { thread: { id: 'new-thread' } } },
+    { method: 'thread/name/updated', params: { threadId: 'thread-existing', threadName: 'New title' } },
+    { method: 'turn/completed', params: { threadId: 'thread-existing', turn: { id: 'finished-turn', status: 'completed' } } },
+  ])('keeps a real list refresh for $method', async (notification) => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'project', threads: [thread('thread-existing', '/tmp/project')] }], nextCursor: null,
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    let notify!: (notification: { method: string; params?: unknown }) => void
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => { notify = handler; return vi.fn() })
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    state.startNotificationStream()
+    vi.mocked(window.setTimeout).mockClear()
+    notify(notification)
+    const callback = vi.mocked(window.setTimeout).mock.calls.find(([, delay]) => delay === 220)?.[0]
+    expect(callback).toEqual(expect.any(Function))
+    ;(callback as () => void)()
+    await vi.waitFor(() => expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(2))
+    state.stopPolling()
+  })
+
   it('bypasses recent thread-list reuse for event-driven thread refreshes', async () => {
     installTestWindow()
     vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {

@@ -5941,6 +5941,21 @@ export function useDesktopState() {
     if (notification.method === 'thread/tokenUsage/updated' || notification.method.startsWith('thread/goal/')) return
 
     const method = notification.method
+    if (method === 'thread/status/changed') {
+      const params = asRecord(notification.params)
+      const threadId = extractThreadIdFromNotification(notification)
+      const statusType = readString(asRecord(params?.status)?.type)
+      const nextInProgress = statusType === 'active' || statusType === 'inProgress'
+        ? true
+        : statusType === 'idle' || statusType === 'notLoaded'
+          ? false
+          : null
+      // Resuming a listed idle conversation emits notLoaded -> idle. Both are
+      // the same sidebar state; title/order/history metadata is not changed by
+      // this notification. Preserve refreshes for real transitions and unknown IDs.
+      const alreadyListed = threadId && sourceGroups.value.some(group => group.threads.some(thread => thread.id === threadId))
+      if (alreadyListed && nextInProgress !== null && (inProgressById.value[threadId] === true) === nextInProgress) return
+    }
     const shouldRefreshMessages =
       method === 'turn/started' ||
       method === 'turn/completed' ||
