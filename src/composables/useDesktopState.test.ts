@@ -2695,6 +2695,42 @@ describe('startup request deduplication', () => {
   })
 
   it.each([
+    { running: false, duplicateStatus: 'idle', changedStatus: 'active' },
+    { running: true, duplicateStatus: 'active', changedStatus: 'idle' },
+  ])('reuses a filtered direct-link summary for unchanged $duplicateStatus without adding it to the sidebar', async ({ running, duplicateStatus, changedStatus }) => {
+    installTestWindow()
+    const hidden = thread('filtered-direct-thread', '/tmp/hidden-project', { inProgress: running })
+    gatewayMocks.getWorkspaceRootsState.mockResolvedValue({ order: ['/tmp/allowed-project'], active: [], labels: {}, projectOrder: ['/tmp/allowed-project'] })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [{ projectName: hidden.projectName, threads: [hidden] }], nextCursor: null })
+    gatewayMocks.getThreadSummary.mockResolvedValue(hidden)
+    gatewayMocks.getThreadDetail.mockResolvedValue({ model: '', modelProvider: '', messages: [], inProgress: running, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: {} })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    let notify!: (notification: { method: string; params?: unknown }) => void
+    gatewayMocks.subscribeCodexNotifications.mockImplementation(handler => { notify = handler; return vi.fn() })
+    const state = useDesktopState()
+    state.primeSelectedThread(hidden.id)
+    await state.refreshAll({ includeSelectedThreadMessages: true })
+    expect(state.selectedThread.value?.id).toBe(hidden.id)
+    expect(state.selectedThread.value?.inProgress).toBe(running)
+    expect(state.projectGroups.value.flatMap(group => group.threads)).toEqual([])
+    state.startNotificationStream()
+    vi.mocked(window.setTimeout).mockClear()
+    const firstPageCount = gatewayMocks.getThreadGroupsPage.mock.calls.length
+    notify({ method: 'thread/status/changed', params: { threadId: hidden.id, status: { type: duplicateStatus } } })
+    expect(vi.mocked(window.setTimeout).mock.calls.filter(([, delay]) => delay === 220)).toHaveLength(0)
+    expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(firstPageCount)
+    expect(state.projectGroups.value.flatMap(group => group.threads)).toEqual([])
+
+    notify({ method: 'thread/status/changed', params: { threadId: hidden.id, status: { type: changedStatus } } })
+    const callback = vi.mocked(window.setTimeout).mock.calls.find(([, delay]) => delay === 220)?.[0]
+    expect(callback).toEqual(expect.any(Function))
+    ;(callback as () => void)()
+    await vi.waitFor(() => expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(firstPageCount + 1))
+    expect(state.projectGroups.value.flatMap(group => group.threads)).toEqual([])
+    state.stopPolling()
+  })
+
+  it.each([
     { method: 'thread/status/changed', params: { threadId: 'unknown-thread', status: { type: 'idle' } } },
     { method: 'thread/started', params: { thread: { id: 'new-thread' } } },
     { method: 'thread/name/updated', params: { threadId: 'thread-existing', threadName: 'New title' } },

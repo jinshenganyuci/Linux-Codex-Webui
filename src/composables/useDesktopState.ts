@@ -6052,8 +6052,11 @@ export function useDesktopState() {
       // Resuming a listed idle conversation emits notLoaded -> idle. Both are
       // the same sidebar state; title/order/history metadata is not changed by
       // this notification. Preserve refreshes for real transitions and unknown IDs.
-      const alreadyListed = threadId && sourceGroups.value.some(group => group.threads.some(thread => thread.id === threadId))
-      if (alreadyListed && nextInProgress !== null && (inProgressById.value[threadId] === true) === nextInProgress) return
+      // A directly opened conversation can have a known summary while its project
+      // is filtered out of the sidebar. Recognize it without adding a sidebar row.
+      const alreadyKnown = threadId && (Boolean(threadSummaryById.value[threadId])
+        || sourceGroups.value.some(group => group.threads.some(thread => thread.id === threadId)))
+      if (alreadyKnown && nextInProgress !== null && (inProgressById.value[threadId] === true) === nextInProgress) return
     }
     const shouldRefreshMessages =
       method === 'turn/started' ||
