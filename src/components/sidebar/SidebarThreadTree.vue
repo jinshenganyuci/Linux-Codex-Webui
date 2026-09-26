@@ -5,17 +5,19 @@
         as="button"
         class="section-toggle-row"
         type="button"
-        :aria-expanded="isPinnedSectionExpanded"
+        :aria-expanded="isPinnedSectionShownExpanded"
+        :aria-disabled="isSearchActive"
+        data-testid="toggle-pinned-section"
         @click="togglePinnedSection"
       >
         <template #left>
-          <IconTablerChevronRight v-if="!isPinnedSectionExpanded" class="thread-icon" />
+          <IconTablerChevronRight v-if="!isPinnedSectionShownExpanded" class="thread-icon" />
           <IconTablerChevronDown v-else class="thread-icon" />
         </template>
         <span class="thread-tree-header">{{ t('Pinned chats') }}</span>
       </SidebarMenuRow>
 
-      <ul v-if="isPinnedSectionExpanded" class="thread-list">
+      <ul v-if="isPinnedSectionShownExpanded" class="thread-list">
         <li
           v-for="thread in pinnedThreads"
           :key="thread.id"
@@ -96,11 +98,13 @@
         as="button"
         class="section-toggle-row"
         type="button"
-        :aria-expanded="isChatsSectionExpanded"
+        :aria-expanded="isChatsSectionShownExpanded"
+        :aria-disabled="isSearchActive"
+        data-testid="toggle-chats-section"
         @click="toggleChatsSection"
       >
         <template #left>
-          <IconTablerChevronRight v-if="!isChatsSectionExpanded" class="thread-icon" />
+          <IconTablerChevronRight v-if="!isChatsSectionShownExpanded" class="thread-icon" />
           <IconTablerChevronDown v-else class="thread-icon" />
         </template>
         <span class="thread-tree-header">{{ t('Chats') }}</span>
@@ -119,8 +123,8 @@
         </template>
       </SidebarMenuRow>
 
-      <p v-if="isChatsSectionExpanded && chatThreads.length === 0" class="thread-tree-no-results">{{ t('No chats') }}</p>
-      <ul v-else-if="isChatsSectionExpanded" class="thread-list thread-list-global">
+      <p v-if="isChatsSectionShownExpanded && chatThreads.length === 0" class="thread-tree-no-results">{{ t('No chats') }}</p>
+      <ul v-else-if="isChatsSectionShownExpanded" class="thread-list thread-list-global">
         <li
           v-for="thread in visibleChatThreads"
           :key="thread.id"
@@ -191,7 +195,7 @@
         </li>
       </ul>
 
-      <SidebarMenuRow v-if="isChatsSectionExpanded && hasHiddenChatThreads" class="thread-show-more-row">
+      <SidebarMenuRow v-if="isChatsSectionShownExpanded && hasHiddenChatThreads" class="thread-show-more-row">
         <template #left>
           <span class="thread-show-more-spacer" />
         </template>
@@ -206,11 +210,13 @@
         as="button"
         class="thread-tree-header-row section-toggle-row"
         type="button"
-        :aria-expanded="isProjectsSectionExpanded"
+        :aria-expanded="isProjectsSectionShownExpanded"
+        :aria-disabled="isSearchActive"
+        data-testid="toggle-projects-section"
         @click="toggleProjectsSection"
       >
         <template #left>
-          <IconTablerChevronRight v-if="!isProjectsSectionExpanded" class="thread-icon" />
+          <IconTablerChevronRight v-if="!isProjectsSectionShownExpanded" class="thread-icon" />
           <IconTablerChevronDown v-else class="thread-icon" />
         </template>
         <span class="thread-tree-header">{{ t('Projects') }}</span>
@@ -277,7 +283,7 @@
         </template>
       </SidebarMenuRow>
 
-      <template v-if="isProjectsSectionExpanded">
+      <template v-if="isProjectsSectionShownExpanded">
       <p v-if="projectAutomationActionError" class="thread-tree-action-error">{{ projectAutomationActionError }}</p>
 
       <p v-if="isSearchActive && filteredGroups.length === 0" class="thread-tree-no-results">{{ t('No matching threads') }}</p>
@@ -369,6 +375,8 @@
           <SidebarMenuRow
             as="div"
             class="project-header-row"
+            :aria-expanded="!isCollapsed(group.projectName)"
+            :aria-disabled="isSearchActive"
             role="button"
             tabindex="0"
             @click="toggleProjectCollapse(group.projectName)"
@@ -1325,6 +1333,11 @@ function onSidebarLayoutWindowFocus(): void {
 const normalizedSearchQuery = computed(() => props.searchQuery.trim().toLowerCase())
 
 const isSearchActive = computed(() => normalizedSearchQuery.value.length > 0)
+// Search reveals matching rows without changing the user's saved layout. These
+// derived states disappear with the query; section preferences stay untouched.
+const isPinnedSectionShownExpanded = computed(() => isPinnedSectionExpanded.value || (isSearchActive.value && pinnedThreads.value.length > 0))
+const isChatsSectionShownExpanded = computed(() => isChatsSectionExpanded.value || (isSearchActive.value && chatThreads.value.length > 0))
+const isProjectsSectionShownExpanded = computed(() => isProjectsSectionExpanded.value || (isSearchActive.value && filteredGroups.value.length > 0))
 const matchedThreadIdSet = computed(() => {
   if (!props.searchMatchedThreadIds) return null
   return new Set(props.searchMatchedThreadIds)
@@ -1512,18 +1525,21 @@ const pinnedThreads = computed(() =>
 )
 
 function togglePinnedSection(): void {
+  if (isSearchActive.value) return
   const expanded = !isPinnedSectionExpanded.value
   isPinnedSectionExpanded.value = expanded
   queueSidebarLayoutPatch({ sections: { pinned: expanded } })
 }
 
 function toggleProjectsSection(): void {
+  if (isSearchActive.value) return
   const expanded = !isProjectsSectionExpanded.value
   isProjectsSectionExpanded.value = expanded
   queueSidebarLayoutPatch({ sections: { projects: expanded } })
 }
 
 function toggleChatsSection(): void {
+  if (isSearchActive.value) return
   const expanded = !isChatsSectionExpanded.value
   isChatsSectionExpanded.value = expanded
   queueSidebarLayoutPatch({ sections: { chats: expanded } })
@@ -2467,7 +2483,7 @@ function isExpanded(projectName: string): boolean {
 }
 
 function isCollapsed(projectName: string): boolean {
-  return collapsedProjects.value[projectName] === true
+  return !isSearchActive.value && collapsedProjects.value[projectName] === true
 }
 
 function toggleProjectExpansion(projectName: string): void {
@@ -2482,6 +2498,7 @@ function toggleChatsListExpansion(): void {
 }
 
 function toggleProjectCollapse(projectName: string): void {
+  if (isSearchActive.value) return
   if (suppressNextProjectToggleId.value === projectName) {
     suppressNextProjectToggleId.value = ''
     return
@@ -3004,7 +3021,8 @@ function projectGroupStyle(projectName: string): Record<string, string> | undefi
 }
 
 function projectThreads(group: UiProjectGroup): UiThread[] {
-  return unpinnedThreadsByProjectName.value.get(group.projectName) ?? []
+  const rows = unpinnedThreadsByProjectName.value.get(group.projectName) ?? []
+  return isSearchActive.value ? rows.filter(threadMatchesSearch) : rows
 }
 
 function visibleThreads(group: UiProjectGroup): UiThread[] {
