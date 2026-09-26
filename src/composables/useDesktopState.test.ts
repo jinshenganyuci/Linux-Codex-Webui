@@ -10,7 +10,7 @@ import {
   isThreadUnreadByLastRead,
   useDesktopState,
 } from './useDesktopState'
-import type { ReasoningEffort, UiModelCapability, UiProjectGroup, UiRequestUserInputSummary, UiTurnProgress } from '../types/codex'
+import type { ActivePlanSnapshot, ReasoningEffort, UiModelCapability, UiProjectGroup, UiRequestUserInputSummary, UiTurnProgress } from '../types/codex'
 import type { WorkspaceRootsState } from '../api/codexGateway'
 import { EMPTY_NATIVE_CAPABILITIES } from '../nativeThreadControls'
 
@@ -4346,6 +4346,146 @@ describe('live output bounds', () => {
   })
 })
 
+describe('authoritative plan snapshot lifecycle', () => {
+  function snapshot(overrides: Partial<ActivePlanSnapshot> = {}): ActivePlanSnapshot {
+    return { threadId: 'plan-root', turnId: 'plan-turn', kind: 'checklist', messageId: 'plan-turn:plan',
+      text: '- [~] Execute', steps: [{ step: 'Execute', status: 'inProgress' }], revision: 1,
+      lifecycle: 'live', generation: 1, createdAtIso: '2026-09-27T00:00:01.000Z', updatedAtIso: '2026-09-27T00:00:02.000Z', ...overrides }
+  }
+  function setup() {
+    installTestWindow()
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    let notify!: (notification: { method: string; params?: unknown; atIso?: string }) => void
+    gatewayMocks.subscribeCodexNotifications.mockImplementation(handler => { notify = handler; return vi.fn() })
+    const state = useDesktopState()
+    state.primeSelectedThread('plan-root')
+    state.startNotificationStream()
+    notify({ method: 'ready', params: { planSnapshotsVersion: 1, activePlans: [] } })
+    return { state, notify, apply: (row: ActivePlanSnapshot) => notify({ method: 'codex-ui/plan-updated', params: { snapshot: row } }) }
+  }
+
+  it('keeps checklist and multiple proposal items independent and ignores duplicate raw delivery', () => {
+    const { state, notify, apply } = setup()
+    apply(snapshot())
+    apply(snapshot({ kind: 'proposal', itemId: 'draft-a', messageId: 'draft-a', text: 'Draft A', steps: [] }))
+    apply(snapshot({ kind: 'proposal', itemId: 'draft-b', messageId: 'draft-b', text: 'Draft B', steps: [] }))
+    notify({ method: 'turn/plan/updated', params: { threadId: 'plan-root', turnId: 'plan-turn', plan: [{ step: 'raw stale', status: 'pending' }] } })
+    notify({ method: 'item/plan/delta', params: { threadId: 'plan-root', turnId: 'plan-turn', itemId: 'draft-a', delta: ' duplicate' } })
+    expect(state.messages.value.filter(row => row.plan)).toHaveLength(3)
+    expect(state.messages.value.find(row => row.plan?.kind === 'checklist')?.plan?.steps[0]?.step).toBe('Execute')
+    expect(state.messages.value.find(row => row.plan?.itemId === 'draft-a')?.text).toBe('Draft A')
+    state.stopPolling()
+  })
+
+  it('keeps newer realtime steps over delayed ready snapshots and history without hiding a proposal', async () => {
+    const { state, notify, apply } = setup()
+    const detail = deferred<Record<string, unknown>>()
+    const summaryHistory = deferred<Array<Record<string, unknown>>>()
+    gatewayMocks.getPlanSummaryHistory.mockReturnValue(summaryHistory.promise)
+    gatewayMocks.getThreadDetail.mockReturnValue(detail.promise)
+    const loading = state.loadMessages('plan-root')
+    apply(snapshot({ revision: 5, steps: [{ step: 'Current order', status: 'completed' }] }))
+    notify({ method: 'ready', params: { planSnapshotsVersion: 1, activePlans: [snapshot({ revision: 2 })] } })
+    detail.resolve({ model: '', modelProvider: '', inProgress: false, activeTurnId: '', hasMoreOlder: false, turnIndexByTurnId: { 'plan-turn': 0 },
+      messages: [{ id: 'native-draft', role: 'assistant', text: 'Do these things', turnId: 'plan-turn', messageType: 'plan', plan: { kind: 'proposal', itemId: 'native-draft', steps: [] } }] })
+    await loading
+    summaryHistory.resolve([{ ...snapshot({ revision: 2, lifecycle: 'completed' }), id: 'plan-summary:plan-turn' }])
+    for (let index = 0; index < 5; index += 1) await Promise.resolve()
+    apply(snapshot({ revision: 6, steps: [{ step: 'Current order', status: 'completed' }] }))
+    expect(state.messages.value.filter(row => row.plan)).toHaveLength(2)
+    expect(state.messages.value.find(row => row.plan?.kind === 'checklist')?.plan).toMatchObject({ revision: 6, lifecycle: 'live', steps: [{ step: 'Current order', status: 'completed' }] })
+    state.stopPolling()
+  })
+
+  it('shows incomplete terminal plans before history, rejects resurrection, and preserves separate proposal state', () => {
+    const { state, notify, apply } = setup()
+    notify({ method: 'turn/started', params: { threadId: 'plan-root', turn: { id: 'plan-turn', status: 'inProgress' } } })
+    apply(snapshot())
+    apply(snapshot({ kind: 'proposal', itemId: 'draft', messageId: 'draft', text: 'Live proposal', steps: [] }))
+    apply(snapshot({ lifecycle: 'completed', revision: 4 }))
+    expect(state.messages.value.find(row => row.plan?.kind === 'checklist')?.plan).toMatchObject({ lifecycle: 'incomplete', isStreaming: false })
+    expect(state.messages.value.find(row => row.plan?.kind === 'proposal')?.plan?.lifecycle).toBe('live')
+    apply(snapshot({ revision: 3 }))
+    apply(snapshot({ revision: 8 }))
+    notify({ method: 'ready', params: { planSnapshotsVersion: 1, activePlans: [snapshot({ revision: 2 })] } })
+    expect(state.messages.value.find(row => row.plan?.kind === 'checklist')?.plan?.lifecycle).toBe('incomplete')
+    expect(state.messages.value.filter(row => row.plan?.kind === 'checklist')).toHaveLength(1)
+    state.stopPolling()
+  })
+
+  it('keeps unloaded terminal ready snapshots out of the tail until their history turn is loaded', async () => {
+    const { state, notify } = setup()
+    gatewayMocks.getThreadDetail.mockResolvedValue({ model: '', modelProvider: '', inProgress: false, activeTurnId: '', hasMoreOlder: true,
+      turnIndexByTurnId: { 'newer-turn': 1 }, messages: [{ id: 'newer-message', role: 'user', text: 'Newer question', turnId: 'newer-turn' }] })
+    await state.loadMessages('plan-root')
+    notify({ method: 'ready', params: { planSnapshotsVersion: 1, activePlans: [snapshot({ lifecycle: 'completed', revision: 8 })] } })
+    expect(state.messages.value.filter(row => row.plan)).toHaveLength(0)
+    gatewayMocks.getThreadDetail.mockResolvedValue({ model: '', modelProvider: '', inProgress: false, activeTurnId: '', hasMoreOlder: false,
+      turnIndexByTurnId: { 'plan-turn': 0, 'newer-turn': 1 }, messages: [
+        { id: 'old-user', role: 'user', text: 'Old question', turnId: 'plan-turn', timestampIso: '2026-09-27T00:00:00.000Z' },
+        { id: 'newer-message', role: 'user', text: 'Newer question', turnId: 'newer-turn' },
+      ] })
+    await state.loadMessages('plan-root', { force: true })
+    expect(state.messages.value.map(row => row.id)).toEqual(['old-user', 'plan-summary:plan-turn', 'newer-message'])
+    expect(state.messages.value[1]?.plan?.lifecycle).toBe('incomplete')
+    state.stopPolling()
+  })
+
+  it('shows restored unconfirmed progress without claiming the turn is running or complete', () => {
+    const { state, notify } = setup()
+    notify({ method: 'ready', params: { planSnapshotsVersion: 1, activePlans: [snapshot({ lifecycle: 'unconfirmed', revision: 3 })] } })
+    expect(state.messages.value[0]?.plan).toMatchObject({ lifecycle: 'unconfirmed', isStreaming: false })
+    expect(state.selectedLiveOverlay.value).toBeNull()
+    notify({ method: 'turn/completed', params: { threadId: 'plan-root', turn: { id: 'plan-turn', status: 'completed' } } })
+    expect(state.messages.value.find(row => row.plan)?.plan?.lifecycle).toBe('unconfirmed')
+    state.stopPolling()
+  })
+
+  it('replaces raw fallback plans replayed before protocol negotiation with the authoritative identity', () => {
+    installTestWindow()
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    let notify!: (notification: { method: string; params?: unknown; atIso?: string }) => void
+    gatewayMocks.subscribeCodexNotifications.mockImplementation(handler => { notify = handler; return vi.fn() })
+    const state = useDesktopState()
+    state.primeSelectedThread('plan-root')
+    state.startNotificationStream()
+    notify({ method: 'turn/plan/updated', params: { threadId: 'plan-root', turnId: 'plan-turn', plan: [{ step: 'fallback', status: 'completed' }] } })
+    notify({ method: 'item/plan/delta', params: { threadId: 'plan-root', turnId: 'plan-turn', itemId: 'draft', delta: 'old fragment' } })
+    expect(state.messages.value.filter(row => row.plan)).toHaveLength(2)
+    notify({ method: 'turn/completed', params: { threadId: 'plan-root', turn: { id: 'plan-turn', status: 'completed' } } })
+    notify({ method: 'ready', params: { planSnapshotsVersion: 1, activePlans: [snapshot({ revision: 7 }), snapshot({ kind: 'proposal', itemId: 'draft', messageId: 'draft', text: 'Full confirmed draft', steps: [], revision: 9 })] } })
+    expect(state.messages.value.filter(row => row.plan)).toHaveLength(2)
+    expect(state.messages.value.find(row => row.plan?.kind === 'checklist')?.plan?.revision).toBe(7)
+    expect(state.messages.value.find(row => row.plan?.itemId === 'draft')?.text).toBe('Full confirmed draft')
+    state.stopPolling()
+  })
+
+  it('shows a sanitized persistence warning on failure and clears it after saved acknowledgement', () => {
+    const { state, notify } = setup()
+    notify({ method: 'codex-ui/plan-persistence-warning', params: { active: true, message: '/private/path must not leak' } })
+    expect(state.planPersistenceWarning.value).toBe('计划进度暂时无法保存；请保持页面打开，稍后重试。')
+    notify({ method: 'codex-ui/plan-persistence-warning', params: { active: false } })
+    expect(state.planPersistenceWarning.value).toBe('')
+    notify({ method: 'ready', params: { planSnapshotsVersion: 1, planPersistenceWarning: true, activePlans: [] } })
+    expect(state.planPersistenceWarning.value).not.toBe('')
+    state.stopPolling()
+  })
+
+  it('keeps child plans out of the parent timeline and sidebar and rejects deleted-thread updates', async () => {
+    const { state, apply } = setup()
+    apply(snapshot({ threadId: 'plan-child', text: 'Child only' }))
+    expect(state.messages.value).toEqual([])
+    expect(state.projectGroups.value).toEqual([])
+    state.primeSelectedThread('plan-child')
+    expect(state.messages.value[0]?.text).toBe('Child only')
+    await state.permanentlyDeleteThreadById('plan-child')
+    apply(snapshot({ threadId: 'plan-child', revision: 3 }))
+    expect(state.messages.value).toEqual([])
+    expect(state.projectGroups.value).toEqual([])
+    state.stopPolling()
+  })
+})
+
 describe('notification recovery', () => {
   it('keeps live deltas for a background thread when switching back', async () => {
     vi.useFakeTimers()
@@ -4649,7 +4789,7 @@ describe('notification recovery', () => {
         text: string
         messageType: 'plan'
         turnId: string
-        plan: { explanation: string; steps: Array<{ step: string; status: 'completed' | 'inProgress' }> }
+        plan: { kind?: 'checklist' | 'proposal'; explanation: string; steps: Array<{ step: string; status: 'completed' | 'inProgress' }> }
       }>
       inProgress: boolean
       activeTurnId: string
@@ -4725,6 +4865,7 @@ describe('notification recovery', () => {
         messageType: 'plan',
         turnId: 'turn-plan',
         plan: {
+          kind: 'checklist',
           explanation: 'Recover now',
           steps: [
             { step: 'Inspect', status: 'completed' },
@@ -4835,7 +4976,7 @@ describe('notification recovery', () => {
     state.stopPolling()
   })
 
-  it('keeps the completed plan card when the follow-up history omits update_plan items', async () => {
+  it('keeps an incomplete plan card after a completed turn when the follow-up history omits update_plan items', async () => {
     installTestWindow()
     let notificationHandler: ((notification: { method: string; params?: unknown; atIso?: string }) => void) | undefined
     gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
@@ -4906,7 +5047,7 @@ describe('notification recovery', () => {
         turnId: 'turn-plan',
         turnIndex: 0,
         messageType: 'plan.summary',
-        plan: expect.objectContaining({ lifecycle: 'completed', isStreaming: false }),
+        plan: expect.objectContaining({ lifecycle: 'incomplete', isStreaming: false }),
       }),
     )
     expect(state.messages.value.map((message) => message.id)).toEqual([
@@ -4922,7 +5063,7 @@ describe('notification recovery', () => {
       expect.objectContaining({
         turnId: 'turn-plan',
         messageType: 'plan.summary',
-        plan: expect.objectContaining({ lifecycle: 'completed', isStreaming: false }),
+        plan: expect.objectContaining({ lifecycle: 'incomplete', isStreaming: false }),
       }),
     )
     expect(state.messages.value.filter((message) => message.messageType === 'plan.live')).toHaveLength(0)

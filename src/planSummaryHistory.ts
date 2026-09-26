@@ -2,6 +2,7 @@ import type {
   ActivePlanSnapshot,
   UiMessage,
   UiPlanStep,
+  UiPlanKind,
   UiPlanSummary,
   UiPlanSummaryHistoryState,
   UiTerminalPlanLifecycle,
@@ -61,12 +62,28 @@ function buildPlanText(explanation: string, steps: UiPlanStep[]): string {
   return lines.join('\n').trim().slice(0, MAX_PLAN_SUMMARY_TEXT_LENGTH)
 }
 
+export function inferPlanKind(value: { kind?: unknown; steps?: unknown }): UiPlanKind {
+  if (value.kind === 'proposal' || value.kind === 'checklist') return value.kind
+  return Array.isArray(value.steps) && value.steps.length > 0 ? 'checklist' : 'proposal'
+}
+
+export function planIdentity(value: { threadId?: string; turnId?: string; kind?: unknown; itemId?: string; steps?: unknown }): string {
+  const kind = inferPlanKind(value)
+  return JSON.stringify([value.threadId ?? '', value.turnId ?? '', kind, kind === 'checklist' ? '' : value.itemId || `${value.turnId}:proposal`])
+}
+
+export function planMessageIdentity(threadId: string, message: UiMessage): string {
+  const kind = message.plan?.kind ?? (message.messageType === 'plan' ? 'proposal' : inferPlanKind(message.plan ?? {}))
+  return planIdentity({ threadId, turnId: message.turnId, kind, steps: message.plan?.steps,
+    itemId: kind === 'proposal' ? message.plan?.itemId || (message.messageType === 'plan' ? message.id : undefined) : undefined })
+}
+
 export function normalizePlanSummary(value: unknown): UiPlanSummary | null {
   const record = asRecord(value)
   if (!record) return null
   const threadId = readTrimmedString(record.threadId, 512)
   const turnId = readTrimmedString(record.turnId, 512)
-  const lifecycle = normalizeLifecycle(record.lifecycle)
+  let lifecycle = normalizeLifecycle(record.lifecycle)
   if (!threadId || !turnId || !lifecycle) return null
 
   const nowIso = new Date().toISOString()
@@ -75,24 +92,34 @@ export function normalizePlanSummary(value: unknown): UiPlanSummary | null {
   const explanation = readTrimmedString(record.explanation)
   let remainingStepCharacters = Math.max(0, MAX_PLAN_SUMMARY_TEXT_LENGTH - explanation.length)
   const steps: UiPlanStep[] = []
+  let hasTruncatedStepText = false
   for (const rawStep of (Array.isArray(record.steps) ? record.steps : []).slice(0, MAX_PLAN_STEPS)) {
     const step = normalizeStep(rawStep)
     if (!step || remainingStepCharacters === 0) continue
     const boundedStep = step.step.slice(0, remainingStepCharacters)
     if (!boundedStep) continue
+    const originalStep = asRecord(rawStep)?.step
+    if (typeof originalStep === 'string' && originalStep.trim().length > boundedStep.length) hasTruncatedStepText = true
     steps.push({ ...step, step: boundedStep })
     remainingStepCharacters -= boundedStep.length
   }
+  const kind = inferPlanKind({ kind: record.kind, steps })
+  const itemId = kind === 'proposal' ? readTrimmedString(record.itemId, 512) || readTrimmedString(record.messageId, 512) || `${turnId}:proposal` : undefined
+  const truncated = record.truncated === true || hasTruncatedStepText || (Array.isArray(record.steps) && record.steps.length > steps.length)
+  if (kind === 'checklist' && lifecycle === 'completed' && (truncated || !steps.length || steps.some(step => step.status !== 'completed'))) lifecycle = 'incomplete'
   const suppliedText = readTrimmedString(record.text, MAX_PLAN_SUMMARY_TEXT_LENGTH)
   const structuredText = buildPlanText(explanation, steps)
-  const text = structuredText || suppliedText
+  const text = kind === 'proposal' ? suppliedText || structuredText : structuredText || suppliedText
   if (!text && steps.length === 0) return null
 
   return {
-    id: readTrimmedString(record.id, 512) || `plan-summary:${turnId}`,
+    id: kind === 'checklist' ? `plan-summary:${turnId}` : `plan-summary:${turnId}:proposal:${itemId}`,
+    kind,
+    itemId,
+    ...(truncated ? { truncated: true } : {}),
     threadId,
     turnId,
-    messageId: readTrimmedString(record.messageId, 512) || `${turnId}:plan`,
+    messageId: readTrimmedString(record.messageId, 512) || (kind === 'checklist' ? `${turnId}:plan` : itemId!),
     text,
     explanation: explanation || undefined,
     steps,
@@ -113,7 +140,10 @@ export function planSummaryFromSnapshot(snapshot: ActivePlanSnapshot): UiPlanSum
 export function upsertPlanSummary(current: UiPlanSummary[], input: UiPlanSummary): UiPlanSummary[] {
   const summary = normalizePlanSummary(input)
   if (!summary) return current
-  const next = current.filter((entry) => entry.turnId !== summary.turnId)
+  const identity = planIdentity(summary)
+  const previous = current.find(entry => planIdentity(entry) === identity)
+  if (previous && (previous.revision > summary.revision || (previous.revision === summary.revision && previous.updatedAtIso > summary.updatedAtIso))) return current
+  const next = current.filter((entry) => planIdentity(entry) !== identity)
   next.push(summary)
   return next
     .sort((first, second) => first.createdAtIso.localeCompare(second.createdAtIso))
@@ -134,9 +164,9 @@ export function normalizePlanSummaryHistoryState(value: unknown): UiPlanSummaryH
     for (const rawSummary of rawSummaries) {
       const summary = normalizePlanSummary(rawSummary)
       if (summary?.threadId !== threadId) continue
-      const previous = byTurnId.get(summary.turnId)
-      if (!previous || previous.updatedAtIso <= summary.updatedAtIso) {
-        byTurnId.set(summary.turnId, summary)
+      const previous = byTurnId.get(planIdentity(summary))
+      if (!previous || previous.revision < summary.revision || (previous.revision === summary.revision && previous.updatedAtIso <= summary.updatedAtIso)) {
+        byTurnId.set(planIdentity(summary), summary)
       }
     }
     all.push(...[...byTurnId.values()].slice(-MAX_PLAN_SUMMARIES_PER_THREAD))
@@ -164,6 +194,9 @@ function summaryMessage(summary: UiPlanSummary, turnIndex?: number): UiMessage {
     timestampIso: summary.createdAtIso,
     messageType: 'plan.summary',
     plan: {
+      kind: inferPlanKind(summary),
+      itemId: summary.itemId,
+      ...(summary.truncated ? { truncated: true } : {}),
       explanation: summary.explanation,
       steps: summary.steps,
       isStreaming: false,
@@ -182,27 +215,23 @@ export function mergePlanSummaryMessages(messages: UiMessage[], summaries: UiPla
   const loadedTurnIds = new Set(
     messages.map((message) => message.turnId?.trim() ?? '').filter(Boolean),
   )
-  const existingSummaryTurnIds = new Set(
-    messages
-      .filter((message) => message.messageType === 'plan.summary')
-      .map((message) => message.turnId?.trim() ?? '')
-      .filter(Boolean),
-  )
-
   for (const summary of [...summaries].sort((first, second) => first.createdAtIso.localeCompare(second.createdAtIso))) {
     if (!loadedTurnIds.has(summary.turnId)) continue
     const nativePlanIndex = next.findIndex((message) => (
-      message.messageType === 'plan' && message.turnId?.trim() === summary.turnId
+      (message.messageType === 'plan' || message.messageType === 'plan.summary')
+      && planMessageIdentity(summary.threadId, message) === planIdentity(summary)
     ))
     if (nativePlanIndex >= 0) {
       const nativePlan = next[nativePlanIndex]
       next.splice(nativePlanIndex, 1, {
         ...nativePlan,
+        text: summary.text,
         plan: {
-          ...(nativePlan.plan ?? {
-            explanation: summary.explanation,
-            steps: summary.steps,
-          }),
+          kind: inferPlanKind(summary),
+          itemId: summary.itemId,
+          ...(summary.truncated ? { truncated: true } : {}),
+          explanation: summary.explanation,
+          steps: summary.steps,
           isStreaming: false,
           lifecycle: summary.lifecycle,
           revision: summary.revision,
@@ -211,7 +240,6 @@ export function mergePlanSummaryMessages(messages: UiMessage[], summaries: UiPla
       })
       continue
     }
-    if (existingSummaryTurnIds.has(summary.turnId)) continue
     const sameTurnIndexes = next
       .map((message, index) => message.turnId === summary.turnId ? index : -1)
       .filter((index) => index >= 0)
@@ -228,7 +256,6 @@ export function mergePlanSummaryMessages(messages: UiMessage[], summaries: UiPla
     }
     const turnIndex = next[sameTurnIndexes[0]]?.turnIndex
     next.splice(insertAt, 0, summaryMessage(summary, turnIndex))
-    existingSummaryTurnIds.add(summary.turnId)
   }
   return next
 }

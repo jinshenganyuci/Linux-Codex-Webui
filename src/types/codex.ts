@@ -252,9 +252,14 @@ export type UiPlanStep = {
   status: UiPlanStepStatus
 }
 
-export type UiPlanLifecycle = 'live' | 'completed' | 'failed' | 'interrupted' | 'incomplete'
+export type UiPlanKind = 'checklist' | 'proposal'
+
+export type UiPlanLifecycle = 'live' | 'completed' | 'failed' | 'interrupted' | 'incomplete' | 'unconfirmed'
 
 export type UiPlanData = {
+  truncated?: boolean
+  kind?: UiPlanKind
+  itemId?: string
   explanation?: string
   steps: UiPlanStep[]
   isStreaming?: boolean
@@ -264,6 +269,9 @@ export type UiPlanData = {
 }
 
 export type ActivePlanSnapshot = {
+  truncated?: boolean
+  kind?: UiPlanKind
+  itemId?: string
   threadId: string
   turnId: string
   messageId: string
@@ -277,9 +285,12 @@ export type ActivePlanSnapshot = {
   lifecycle: UiPlanLifecycle
 }
 
-export type UiTerminalPlanLifecycle = Exclude<UiPlanLifecycle, 'live'>
+export type UiTerminalPlanLifecycle = Exclude<UiPlanLifecycle, 'live' | 'unconfirmed'>
 
 export type UiPlanSummary = {
+  truncated?: boolean
+  kind?: UiPlanKind
+  itemId?: string
   id: string
   threadId: string
   turnId: string

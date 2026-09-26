@@ -62,8 +62,15 @@ function withTurnMetadata(
   turnIndex?: number,
 ): UiMessage {
   const timestampIso = messageTimestampIsoForTurn(message, turn)
+  const proposalLifecycle = turn.status === 'completed' ? 'completed'
+    : turn.status === 'failed' ? 'failed'
+      : turn.status === 'interrupted' ? 'interrupted'
+        : turn.status === 'inProgress' ? 'live' : 'unconfirmed'
   return {
     ...message,
+    ...(message.plan?.kind === 'proposal' ? {
+      plan: { ...message.plan, lifecycle: proposalLifecycle, isStreaming: proposalLifecycle === 'live' },
+    } : {}),
     turnId,
     ...(turnIndex === undefined ? {} : { turnIndex }),
     ...(timestampIso ? { timestampIso } : {}),
@@ -541,7 +548,7 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
         role: 'assistant',
         text,
         messageType: 'plan',
-        plan: parsePlanText(text) ?? undefined,
+        plan: { ...(parsePlanText(text) ?? { steps: [] }), kind: 'proposal', itemId: item.id },
       },
     ]
   }
