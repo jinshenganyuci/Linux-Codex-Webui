@@ -2552,6 +2552,45 @@ describe('startup request deduplication', () => {
     }
   })
 
+  it('applies native goal notifications without reloading the sidebar, while real renames still refresh', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'project', threads: [thread('thread-goal', '/tmp/project')] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getPendingServerRequests.mockResolvedValue([])
+    let notificationHandler!: (notification: { method: string; params?: unknown }) => void
+    gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
+      notificationHandler = handler
+      return vi.fn()
+    })
+    const state = useDesktopState()
+    state.primeSelectedThread('thread-goal')
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    state.startNotificationStream()
+    vi.mocked(window.setTimeout).mockClear()
+    const listCalls = gatewayMocks.getThreadGroupsPage.mock.calls.length
+    const titleCalls = gatewayMocks.getThreadTitleCache.mock.calls.length
+
+    notificationHandler({ method: 'thread/goal/updated', params: {
+      threadId: 'thread-goal', goal: { threadId: 'thread-goal', objective: 'Keep the goal UI current', status: 'active', tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 },
+    } })
+    expect(state.nativeThreadControls.state.goal?.objective).toBe('Keep the goal UI current')
+    notificationHandler({ method: 'thread/goal/cleared', params: { threadId: 'thread-goal' } })
+    expect(state.nativeThreadControls.state.goal).toBeNull()
+    expect(vi.mocked(window.setTimeout).mock.calls.filter(([, delay]) => delay === 220)).toHaveLength(0)
+    expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(listCalls)
+    expect(gatewayMocks.getThreadTitleCache).toHaveBeenCalledTimes(titleCalls)
+
+    notificationHandler({ method: 'thread/name/updated', params: { threadId: 'thread-goal', threadName: 'Renamed' } })
+    const pendingSync = vi.mocked(window.setTimeout).mock.calls.find(([, delay]) => delay === 220)?.[0]
+    expect(pendingSync).toEqual(expect.any(Function))
+    ;(pendingSync as () => void)()
+    await vi.waitFor(() => expect(gatewayMocks.getThreadGroupsPage).toHaveBeenCalledTimes(listCalls + 1))
+    expect(state.projectGroups.value[0]?.threads[0]?.title).toBe('Renamed')
+    state.stopPolling()
+  })
+
   it('bypasses recent thread-list reuse for event-driven thread refreshes', async () => {
     installTestWindow()
     vi.mocked(window.setTimeout).mockImplementation(((callback: TimerHandler, delay?: number) => {

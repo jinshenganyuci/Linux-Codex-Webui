@@ -5935,7 +5935,10 @@ export function useDesktopState() {
   }
 
   function queueEventDrivenSync(notification: RpcNotification): void {
-    if (notification.method === 'thread/tokenUsage/updated') return
+    // Goal snapshots (including resume's goal/cleared) update the native goal UI,
+    // but contain no sidebar metadata. Re-reading all threads adds a duplicate
+    // first page whenever an existing conversation is opened.
+    if (notification.method === 'thread/tokenUsage/updated' || notification.method.startsWith('thread/goal/')) return
 
     const method = notification.method
     const shouldRefreshMessages =
