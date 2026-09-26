@@ -139,8 +139,8 @@ async function acquireFileLock(statePath: string): Promise<() => Promise<void>> 
 async function mutatePlanSummaryHistory<T>(
   update: (state: UiPlanSummaryHistoryState) => { state: UiPlanSummaryHistoryState; result: T },
 ): Promise<T> {
+  const statePath = getPlanSummaryHistoryPath()
   const run = mutationChain.then(async () => {
-    const statePath = getPlanSummaryHistoryPath()
     const releaseLock = await acquireFileLock(statePath)
     try {
       await recoverCorruptStateFile(statePath)
