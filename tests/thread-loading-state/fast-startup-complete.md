@@ -127,3 +127,25 @@ node scripts/verify-codex-phase1-docker.cjs
 容器使用固定 Codex 0.153.4、`CODEX_HOME=/codex-home` 和本地模拟供应商，不访问真实收费 API。4191 无认证、4192 损坏认证、4193 失效认证、4194 provider 切换及线程 Fast 模式全部通过。保持本 fork 既有 Codex 行为，没有恢复旧 Zen 回退；失效认证错误在明暗刷新后仍各只显示一次，重复运行覆盖层为 0，普通模式显式覆盖旧全局 priority。
 
 报告 `output/playwright/startup-complete-docker-report.json`；截图绝对目录 `/root/.local/share/linux-codex-webui/worktrees/perf-startup-20260924/output/playwright/`，文件前缀 `startup-complete-docker-`（含 `invalid-auth-light.png`、`invalid-auth-dark.png`）。全部容器及 4191–4194 临时监听已由脚本清理，13511 保留。
+
+### 干净构建、认证与持久部署复验
+
+最终运行版本为 `fbc6bbc5aa048452f226f03e487be0f52dcc2159`，`dirty=false`。构建代码对应 `9967b19`，后续提交仅补验收与部署记录。服务从 `/root/.local/share/linux-codex-webui/releases/startup-complete-20260926` 启动，固定独立验收 `CODEX_HOME` 与 Codex 0.154.0；实际合并的持久覆盖为 `/etc/systemd/system/codex-webui-13511.service.d/zzzzzz-startup-complete-20260926.conf`，`UnitFileState=enabled`。保留原覆盖文件，回退时只移除该新增覆盖后 daemon-reload 并在空闲时重启 13511。没有重启整台主机来验证开机流程。
+
+最后一次空闲重启后，后端约 849 ms 预热就绪，两个全新浏览器完成真实密码登录。密码仅从现有本机配置读取后经子进程环境传递，不写入脚本或报告：
+
+```bash
+PROFILE_BASE_URL=http://127.0.0.2:13511 \
+STARTUP_CASES=fresh \
+STARTUP_FRESH_CASES=home-1440-light,thread-1440-light \
+STARTUP_RUN_LABEL=auth-final \
+STARTUP_CONFIG_PATH=/root/.local/share/linux-codex-webui/acceptance/startup-20260924/config.toml \
+node scripts/verify-startup-complete.cjs
+# WEBUI_TEST_PASSWORD 由调用进程私下提供；不要将密码写在终端命令或日志。
+```
+
+地址 `127.0.0.2` 确实进入密码页面，报告断言两个用例都有 `loginMs > 0`，不能以 localhost 免认证跳过来替代认证验收。1440×900 浅色首页登录流程 363 ms，登录后列表 245 ms；旧会话登录流程 1396 ms，登录后历史 1328 ms。登录后计时和登录耗时分别记录，不宣称完整登录到旧消息只用一秒。两个新上下文的 Cookie/origins 起始为空、缓存和 Service Worker 禁用，配置文件 SHA 完全未变；后端世代始终为 1，浏览器访问没有重启原生进程。
+
+认证报告 `output/playwright/startup-complete/auth-final/report.json`；截图为同目录的 `home-1440-light.png`、`thread-1440-light.png`，实际 URL 分别为 `http://127.0.0.2:13511/#/` 与 `http://127.0.0.2:13511/#/thread/01a09549-9bb5-71c0-955e-dd74cc8e32be`。加上此前 23 个用例共 25 个浏览器用例，另有 Docker 测试。
+
+最终保留记录 `final-deployment.json`、`preservation-final.json`：13510 PID 656、启动时间、重启次数与原工作目录均未变，正式配置和前后端入口哈希未变；没有向 13510 发送 HTTP 验收请求。13511 检查结果为 833 个文件、480 个原生可见索引、353 个正常隐藏、缺失与失败 0、状态 `ready`；临时 4173、4191–4194、5910 均无本轮 WebUI 监听。代码与文档均本地提交，本轮未推送 GitHub 或升级 13510。
