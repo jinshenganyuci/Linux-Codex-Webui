@@ -38,6 +38,26 @@ SUBAGENT_RUN_LABEL=after node scripts/verify-subagent-sidebar.cjs
 - 第一轮修复后桌面/手机明暗 12 组通过：列表保持两条、fork 保留、子会话可读、搜索正常。首屏列表延迟 5 秒时旧会话标题/目录/历史 276–325 ms 显示；这些是同一 fixture 的前后对照，不当作真实长历史或模型响应测速。
 - 证据目录 `output/playwright/subagent-sidebar/`，`before` 保留旧版复现，`after` 保留修复矩阵；最终状态保留和正式静态发布结果随后补充。
 
+## 正式静态发布结果
+
+前端 `5cd12ad` 已静态发布到 13511 和 13510，33 个实际 HTTP 文件哈希匹配。两端后端仍为 `fbc6bbc`，没有为了更新前端重启服务：正式 PID 271118、CLI 启动时间 `2026-09-26T09:22:41.270Z`，测试 PID 266058 及其 CLI 启动时间均保持不变；正式 config.toml 与两端后端入口哈希未变。`deployment.json` 状态为 `complete`。
+
+最终 13511 复验运行中子会话，主列表刷新后停止按钮仍可见；正式 `http://127.0.0.1:13510` 使用 375×812 暗主题执行实时通知和独立子直链两组，均通过。主列表只保留父聊天与普通 fork，子会话仍可读且可返回父聊天；写入拦截记录和 JavaScript 错误均为 0，每个测试 ID 的摘要读取最多一次。正式测试的 fixture 首屏为 299–329 ms，不代表真实对话生成延迟。
+
+```bash
+PROFILE_BASE_URL=http://127.0.0.1:13510 SUBAGENT_ALLOW_PRODUCTION=1 \
+SUBAGENT_CASES=realtime,direct-child SUBAGENT_VIEWPORTS=375 SUBAGENT_THEMES=dark \
+SUBAGENT_RUN_LABEL=production node scripts/verify-subagent-sidebar.cjs
+```
+
+正式报告绝对路径：`/root/.local/share/linux-codex-webui/worktrees/perf-startup-20260924/output/playwright/subagent-sidebar/production/report.json`。
+
+以下截图展示真实前端处理 fixture 通知后的主列表，断言父聊天和普通 fork 可见、两个子代理均未加入；截图等待 2.3 秒后保存，视口 375×812，测试页面为 `http://127.0.0.1:13510/#/thread/01a09999-0000-7000-8000-000000000001`。
+
+![正式手机暗主题侧栏隔离](/root/.local/share/linux-codex-webui/worktrees/perf-startup-20260924/output/playwright/subagent-sidebar/production/realtime-375-dark-sidebar.png)
+
+运行状态截图：`/root/.local/share/linux-codex-webui/worktrees/perf-startup-20260924/output/playwright/subagent-sidebar/production/direct-child-375-dark-child-direct.png`，页面为同服务子直链 `#/thread/01a09999-0000-7000-8000-000000000003`，断言主列表刷新后运行状态保留。
+
 ## 部署与回滚
 
 只更新已验收前端静态文件，先发布带哈希资源、最后原子替换 `index.html`；保留旧哈希资源供已打开页面使用，不停止 13510/13511，也不改后端入口、模型配置或会话正文。用户刷新一次即可加载修复。回滚可按同样方式发布选定旧前端，但旧版本会重新出现本次列表污染；不能通过删除真实子代理记录代替修复。
