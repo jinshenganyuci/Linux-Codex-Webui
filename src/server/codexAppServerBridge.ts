@@ -8343,7 +8343,7 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
         return
       }
       if (req.method === 'POST' && url.pathname === '/codex-api/thread-index/repair') {
-        void threadIndexRecovery.check()
+        void threadIndexRecovery.check(false, true)
         setJson(res, 202, { data: threadIndexRecovery.getStatus() })
         return
       }

@@ -1,4 +1,4 @@
-import { open, opendir, link, unlink } from 'node:fs/promises'
+import { open, opendir, link, unlink, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
 export type ThreadIndexStatus = {
@@ -8,6 +8,7 @@ export type ThreadIndexStatus = {
   indexedThreads: number
   missingThreads: number
   repairedThreads: number
+  hiddenThreads: number
   failedThreads: number
   truncated: boolean
   error: string | null
@@ -68,7 +69,7 @@ type Dependencies = {
 export class ThreadIndexRecovery {
   private status: ThreadIndexStatus = {
     state: 'idle', lastCheckedAt: null, scannedFiles: 0, indexedThreads: 0,
-    missingThreads: 0, repairedThreads: 0, failedThreads: 0, truncated: false, error: null,
+    missingThreads: 0, repairedThreads: 0, hiddenThreads: 0, failedThreads: 0, truncated: false, error: null,
   }
   private pending: Promise<void> | null = null
   private timer: ReturnType<typeof setTimeout> | null = null
@@ -76,6 +77,8 @@ export class ThreadIndexRecovery {
   private resolvePause: (() => void) | null = null
   private disposed = false
   private rerunRequested = false
+  private recheckHidden = false
+  private readonly hiddenRollouts = new Map<string, { id: string; fingerprint: string }>()
 
   constructor(private readonly deps: Dependencies) {}
 
@@ -94,10 +97,11 @@ export class ThreadIndexRecovery {
   }
 
   /** Existing runs are joined; mutations can request one additional pass. */
-  check(afterMutation = false): Promise<void> {
+  check(afterMutation = false, recheckHidden = false): Promise<void> {
+    if (recheckHidden) this.recheckHidden = true
     if (this.disposed) return Promise.resolve()
     if (this.pending) {
-      if (afterMutation) this.rerunRequested = true
+      if (afterMutation || recheckHidden) this.rerunRequested = true
       return this.pending
     }
     if (this.timer) { clearTimeout(this.timer); this.timer = null }
@@ -192,7 +196,8 @@ export class ThreadIndexRecovery {
   }
 
   private async run(): Promise<void> {
-    this.status = { ...this.status, state: 'checking', scannedFiles: 0, indexedThreads: 0, missingThreads: 0, repairedThreads: 0, failedThreads: 0, truncated: false, error: null }
+    if (this.recheckHidden) { this.hiddenRollouts.clear(); this.recheckHidden = false }
+    this.status = { ...this.status, state: 'checking', scannedFiles: 0, indexedThreads: 0, missingThreads: 0, repairedThreads: 0, hiddenThreads: 0, failedThreads: 0, truncated: false, error: null }
     if (!(await this.deps.supportsFastList())) {
       this.status.state = 'unsupported'
       this.status.error = '当前 Codex 不支持索引快速读取；保留原生兼容查询，请升级 Codex。'
@@ -203,15 +208,28 @@ export class ThreadIndexRecovery {
     if (!indexed) { this.status.state = 'partial'; return }
     this.status.indexedThreads = indexed.size
     const attempted = new Set<string>()
+    const inspected = new Set<string>()
+    const seenPaths = new Set<string>()
     for await (let path of this.files()) {
       if (!(await this.yieldToChat())) return
+      seenPaths.add(path)
       const filenameId = UUID_END.exec(basename(path))?.[1]
       // Known index rows remain authoritative: no timestamp/title/SQL rewrite.
-      if (filenameId && indexed.has(filenameId)) continue
+      if (filenameId && indexed.has(filenameId)) { this.hiddenRollouts.delete(path); continue }
       try {
+        const info = await stat(path)
+        const fingerprint = `${info.size}:${info.mtimeMs}:${info.ctimeMs}`
+        const hidden = this.hiddenRollouts.get(path)
+        if (hidden?.fingerprint === fingerprint) {
+          if (!inspected.has(hidden.id)) this.status.hiddenThreads++
+          inspected.add(hidden.id)
+          continue
+        }
+        this.hiddenRollouts.delete(path)
         const header = await readRolloutHeader(path)
         if (!header) { this.status.failedThreads++; continue }
-        if (indexed.has(header.id) || attempted.has(header.id)) continue
+        if (indexed.has(header.id) || inspected.has(header.id)) continue
+        inspected.add(header.id)
         attempted.add(header.id)
         this.status.missingThreads++
         // Older WebUI ZIP imports used filenames native Codex cannot discover.
@@ -226,7 +244,18 @@ export class ThreadIndexRecovery {
         }
         if (!(await this.yieldToChat(true))) return
         this.status.state = 'repairing'
-        await this.deps.rpc('thread/read', { threadId: header.id, includeTurns: false })
+        const summary = record(record(await this.deps.rpc('thread/read', { threadId: header.id, includeTurns: false })).thread)
+        // thread/list intentionally omits sessions with neither preview nor
+        // name, even when they are valid indexed threads. A successful read
+        // with an explicit empty preview proves this is a hidden empty record,
+        // not a failed recovery. Remember unchanged files to avoid rereading
+        // hundreds of dormant agent sessions on every maintenance pass.
+        if (summary.id === header.id && summary.preview === '' && !summary.name && summary.path === path) {
+          this.hiddenRollouts.set(path, { id: header.id, fingerprint })
+          attempted.delete(header.id)
+          this.status.missingThreads--
+          this.status.hiddenThreads++
+        }
         // Verification below proves indexing, rather than treating a successful
         // read as proof that a compatible CLI actually persisted the row.
       } catch (error) {
@@ -235,6 +264,7 @@ export class ThreadIndexRecovery {
       }
     }
     if (this.disposed) return
+    for (const path of this.hiddenRollouts.keys()) if (!seenPaths.has(path)) this.hiddenRollouts.delete(path)
     if (attempted.size) {
       const verified = await this.indexedIds()
       if (this.disposed) return

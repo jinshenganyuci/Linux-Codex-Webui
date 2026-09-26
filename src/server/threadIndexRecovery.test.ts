@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -172,5 +172,77 @@ describe('native thread index recovery', () => {
     await service.check()
     expect(service.getStatus()).toMatchObject({ state: 'partial', truncated: true })
     expect(rpc).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('native list visibility is not complete index membership', () => {
+  it('classifies verified empty hidden records and does not reread unchanged rollouts every pass', async () => {
+    const home = await setup()
+    const file = join(home, 'sessions', rollout())
+    await writeFile(file, body())
+    const { service, rpc } = recovery(home, { rpc: async (method) => method === 'thread/list'
+      ? { data: [], nextCursor: null }
+      : { thread: { id, preview: '', name: null, path: file } } })
+    await service.check()
+    expect(service.getStatus()).toMatchObject({ state: 'ready', hiddenThreads: 1, missingThreads: 0, failedThreads: 0, repairedThreads: 0 })
+    await service.check()
+    expect(service.getStatus()).toMatchObject({ state: 'ready', hiddenThreads: 1, missingThreads: 0, failedThreads: 0 })
+    expect(rpc.mock.calls.filter(([method]) => method === 'thread/read')).toHaveLength(1)
+  })
+
+  it('rechecks changed hidden files and explicit manual retries', async () => {
+    const home = await setup()
+    const file = join(home, 'sessions', rollout())
+    await writeFile(file, body())
+    let populated = false, indexed = false
+    const { service, rpc, onRecovered } = recovery(home, { rpc: async method => {
+      if (method === 'thread/list') return { data: indexed ? [{ id }] : [], nextCursor: null }
+      if (populated) indexed = true
+      return { thread: { id, preview: populated ? 'new user message' : '', name: null, path: file } }
+    } })
+    await service.check()
+    await service.check(false, true)
+    expect(rpc.mock.calls.filter(([method]) => method === 'thread/read')).toHaveLength(2)
+    populated = true
+    await writeFile(file, body() + '\nnew event\n')
+    await service.check()
+    expect(rpc.mock.calls.filter(([method]) => method === 'thread/read')).toHaveLength(3)
+    expect(service.getStatus()).toMatchObject({ state: 'ready', hiddenThreads: 0, repairedThreads: 1, failedThreads: 0 })
+    expect(onRecovered).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not reuse an empty-record fingerprint for the same ID at another path', async () => {
+    const home = await setup()
+    let file = join(home, 'sessions', rollout())
+    await writeFile(file, body())
+    const { service, rpc } = recovery(home, { rpc: async method => method === 'thread/list'
+      ? { data: [], nextCursor: null }
+      : { thread: { id, preview: '', name: null, path: file } } })
+    await service.check()
+    const previousPath = file
+    await mkdir(join(home, 'archived_sessions'))
+    file = join(home, 'archived_sessions', rollout())
+    await rename(previousPath, file)
+    await service.check()
+    expect(rpc.mock.calls.filter(([method]) => method === 'thread/read')).toHaveLength(2)
+    expect(service.getStatus()).toMatchObject({ state: 'ready', hiddenThreads: 1 })
+  })
+
+  it('does not hide unverified, non-empty, named or wrong-path failed recoveries', async () => {
+    for (const summary of [
+      { id, path: '', preview: '' },
+      { id, preview: 'has conversation', name: null },
+      { id, preview: '', name: 'named conversation' },
+      { id },
+    ]) {
+      const home = await setup()
+      const file = join(home, 'sessions', rollout())
+      await writeFile(file, body())
+      const { service } = recovery(home, { rpc: async method => method === 'thread/list'
+        ? { data: [], nextCursor: null }
+        : { thread: { path: file, ...summary } } })
+      await service.check()
+      expect(service.getStatus()).toMatchObject({ state: 'partial', hiddenThreads: 0, failedThreads: 1 })
+    }
   })
 })
