@@ -180,9 +180,22 @@ async function createSession(name, width, theme, data, reducedMotion = false) {
     }
     row.visuals = result
   }
-  async function screenshot(label) {
+  async function screenshot(label, focusLocator) {
     await page.waitForTimeout(2300)
     await checkVisuals()
+    if (focusLocator) {
+      // A real scroll gesture opts out of the conversation's bottom lock.
+      const list = await page.locator('.conversation-list').boundingBox()
+      if (list) {
+        await page.mouse.move(list.x + list.width / 2, Math.max(70, Math.min(viewport.height - 260, list.y + list.height / 2)))
+        await page.mouse.wheel(0, -600)
+        await page.waitForTimeout(100)
+      }
+      await focusLocator.evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }))
+      await page.waitForTimeout(100)
+      const bounds = await focusLocator.boundingBox()
+      assert(bounds && bounds.y >= 0 && bounds.y + bounds.height <= viewport.height, `Screenshot target ${label} must be visible`)
+    }
     const filename = path.join(out, `${name}-${label}.png`)
     await page.screenshot({ path: filename })
     row.screenshots.push(filename)
@@ -322,8 +335,7 @@ async function restorationCase(s) {
   assert(compact.height <= 52, `Completed plan should be a compact row, measured ${compact.height}px`)
   assert(Math.max(...compact.centers) - Math.min(...compact.centers) <= 4, 'Completed title, count and badge must share one row')
   s.row.metrics.completedCardHeightPx = compact.height
-  await completed.scrollIntoViewIfNeeded()
-  await s.screenshot('completed-compact')
+  await s.screenshot('completed-compact', completed)
   const unconfirmed = s.page.locator('.plan-card[data-lifecycle="unconfirmed"]')
   assert(/确认|恢复/.test(await unconfirmed.innerText()), 'Recovered active progress must disclose uncertain status')
   const current = unconfirmed.locator('.plan-card-current-step')
@@ -337,8 +349,7 @@ async function restorationCase(s) {
   await warning.waitFor()
   assert.equal(await warning.getAttribute('role'), 'status')
   assert(!/PRIVATE_TEST_DETAIL|\/fixture\/private-plan-data|ACCESS_TOKEN_PLACEHOLDER/.test(await warning.innerText()), 'Warning displays fixed safe copy instead of backend details')
-  await warning.scrollIntoViewIfNeeded()
-  await s.screenshot('restored-states')
+  await s.screenshot('restored-states', warning)
   await s.open(ROOT, true)
   await warning.waitFor()
   s.data.persistenceWarning = false
