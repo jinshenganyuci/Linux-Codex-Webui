@@ -47,7 +47,46 @@ PROFILE_BASE_URL=http://127.0.0.1:13511 PROFILE_WAIT_MS=7000 pnpm run profile:br
 
 ## 验收记录
 
-具体通过数量、构建版本、真实调用、截图及性能测量在完成后补齐；本节未补齐前不代表已部署或通过验收。
+2026-09-27，最终 76 个测试文件、820 项全量单测通过；类型检查、完整构建、隔离 `CODEX_HOME` 的 CJS 动态导入 CLI 帮助检查通过。后续完成态单行调整的 21 项组件回归和前端构建通过。
+
+- 13511 配套后端 `47e2280` 来自干净构建，实际 CLI `0.154.0`；最终前端 `5e67870` 包含单行卡与最后的状态去重修复，33 个实际 HTTP 文件与构建一致。新 release 为 `/root/.local/share/linux-codex-webui/releases/plan-progress-20260927`，沿用隔离验收 home 及原密码来源。持久 override 为 `/etc/systemd/system/codex-webui-13511.service.d/zzzzzzz-plan-progress-20260927.conf`。
+- 真实模型沿用验收配置 `gpt-5.6-luna`，两轮任务分别收到真实 `turn/plan/updated` 与权威快照。第一轮明确只完成 1/3，终态为 `incomplete`，约 6.28 秒；第二轮有三次步骤更新并最终 3/3，终态为 `completed`，约 10.04 秒。时间含模型处理，不能当作页面加载耗时或 SLA。刷新与空浏览器均保留两份清单，无重复卡；配置 SHA 未变。报告 `output/playwright/plan-progress/native/report.json`。
+- 自动触发实测：另在临时目录要求模型实现温度转换 CLI、编写并运行 unittest、检查命令行用法，提示中没有提及计划或 `update_plan`。模型自行产生四步清单，依次记录检查目录、实现、测试、总结，最终 4/4 完成；约 41.27 秒，五个权威版本，结束后已删除自建会话和临时目录。报告 `automatic-report.json`，脚本 `output/verify-plan-auto.cjs`。这证明本机多步骤任务能自动触发；简单问答仍可不生成计划，不能保证所有模型每次都遵从步骤更新。
+- 真实重启验收：仅将上述自建测试会话的两份落盘快照改成 `live`，模拟停止前未收到终态，再启动 13511。握手先返回两份 `unconfirmed`，有界原生核验分别恢复 `incomplete` 和 `completed`，并继续递增版本。没有修改其他会话或伪装为突然断电实测。报告 `restart-report.json`，操作脚本 `output/verify-plan-restart.cjs`。
+- 重启后在需要密码的 `127.0.0.2:13511` 使用两个全新浏览器实际登录，375×812 暗色及 1440×900 浅色均恢复两份卡，完成卡高 46px。登录约 315/322 ms，登录后到卡片检查通过约 248/434 ms；Cookie/origins 初始为空、HTTP 缓存及 Service Worker 禁用。报告 `authenticated-restart-report.json`。
+- 合成 UI 验收 18/18，通过后另完成 6 组截图可见性复验。包括明暗三视口、真实 DOM 聚焦、手动折叠刷新、文稿与清单隔离、父子隔离、重复与迟到、截断、保存失败与恢复。每个 document 的会话摘要与计划历史各一次，真实写入/页面错误/HTTP 错误均为 0；报告 `final/report.json` 与 `final-visual/report.json`。数据均为合成回放，不能替代上面的真实模型验证。
+- 两个独立 Node 进程同时保存各 20 份计划，40 份全部保留；删除后旧进程重放保持 39 份，不复活。64 个约 400,783 字节快照下 500 次更新和快照复制，中位 0.072 ms、p95 0.298 ms；活动写入突发合并、失败保留旧文件、后续恢复、删除与启动竞态均有回归。
+- 最终性能复验：首次 profiler 报告重复首屏 2 次，追踪确认是目录外直链的已知摘要未参与 no-op 状态判断，与计划事件无关。`5e67870` 仅补齐该判断，保持目录过滤和真实状态变化刷新；183 项相关回归通过。最终 profiler `warnings=[]`，首屏列表 1 次、后续游标 1 次、resume 1 次、摘要 read 1 次、完整 thread/read 0 次、历史重复 0，API 总量 292.4 KiB。报告 `output/playwright/browser-runtime-profile-thread-01a0dec2-dde1-72c3-be41-a506b3ab7c90-2026-09-26T17-40-26-985Z.json`；此前失败样本保留。最终 23 个可达 JS/CSS 原始增加 12,575 字节、gzip 增加 4,226 字节；既有大 chunk 构建提示仍存在。
+- 最终部署回执 `output/playwright/plan-progress/deployment.json` 为 `complete`。两项真实模型验收会话均已删除且活动/终态摘要清理；自动开发任务由原生 CLI 添加的唯一临时目录信任条目已移除，验收配置精确恢复到开始时 SHA。正式 PID 271118、启动时间、重启次数、配置及前后端入口哈希全部未变；没有向正式 13510 运行服务发布本次功能。4173、4191–4194、5900、5910 无本轮遗留监听。
+
+截图 URL：`http://127.0.0.1:13511/#/thread/01a0aaaa-0000-7000-8000-000000000001`（合成，脚本运行期间有效），视口 375×812 暗色。当前步骤及完成小条均已目视确认，无横向溢出、无深色页面亮底错误。
+
+![当前步骤与本轮定位](/root/.local/share/linux-codex-webui/worktrees/plan-progress-20260927/output/playwright/plan-progress/final/live-375-dark-current-step.png)
+
+![完成后保持单行小卡](/root/.local/share/linux-codex-webui/worktrees/plan-progress-20260927/output/playwright/plan-progress/final-visual/restoration-375-dark-completed-compact.png)
+
+真实重启、重新登录 URL：`http://127.0.0.2:13511/#/thread/01a0dec2-dde1-72c3-be41-a506b3ab7c90`，视口 375×812 暗色。测试会话在全部验收结束后删除，截图仍保留：
+
+![真实任务完成后重新登录恢复](/root/.local/share/linux-codex-webui/worktrees/plan-progress-20260927/output/playwright/plan-progress/authenticated-restored-375-dark.png)
+
+### 打包 Docker 回归
+
+```bash
+pnpm pack --pack-destination <temporary-context>
+# 将本机已验证的 @openai/codex 与 codex-linux-x64 发行包复制进临时 context/codex-runtime，勿复制 CODEX_HOME。
+docker build -f scripts/docker-plan-progress-acceptance.Dockerfile \
+  --build-arg BASE_IMAGE=linux-codex-webui-startup-complete:20260926 \
+  --build-arg CODEX_VERSION=0.154.0 \
+  -t linux-codex-webui-plan-progress:20260927-47e2280-cli01540 <temporary-context>
+PHASE1_DOCKER_IMAGE=linux-codex-webui-plan-progress:20260927-47e2280-cli01540 \
+  CODEX_EXPECTED_VERSION=0.154.0 VERIFY_THREAD_FAST=1 \
+  CODEX_ACCEPTANCE_REPORT_PREFIX=plan-progress-20260927 \
+  node scripts/verify-codex-phase1-docker.cjs
+```
+
+五类通过：4191 无认证、4192 损坏认证均可打开界面且不启用已移除的 Zen 回退；4193 的假 401 错误明暗刷新后保留一条、实时浮层 0；4194 本地假供应商 alpha→beta 的模型目录切换，以及独立 Fast=`priority`/Standard=`null` 请求和偏好均正确。没有真实凭据或真实模型请求。实际 CLI 为 0.154.0，镜像入口和 CLI 二进制 SHA 与来源一致。报告及哈希在 `output/playwright/plan-progress-20260927-docker-report.json` 和 `plan-progress-docker-provenance.json`；容器、网络、4191–4194 监听及临时 context 已清理。
+
+测试环境修正：基础镜像原来继承 CLI 0.153.4，版本断言已抓到并改为明确复制固定 0.154.0 发行包；注册表当前无法安装该版本，没有静默替换版本。此主机 Docker internal bridge 无法发布测试端口，改成临时普通 bridge 且只绑定 localhost。准备失败记录保留，最终成功只指上述镜像。另一次 CLI 帮助探测参数错误曾短暂启动自己的 5900，已停止并修正为隔离 home；误写的密码提示已按正式 runner 恢复，确认的测试快照移出正式 home，正式运行凭据未变。后续全量测试在临时 home 执行，桥接单测的持久化改为显式选择，防止继承真实 home。
 
 ## 部署、回滚和清理
 
