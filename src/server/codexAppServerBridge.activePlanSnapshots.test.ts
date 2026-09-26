@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCodexBridgeMiddleware } from './codexAppServerBridge'
 import { getActivePlanPersistencePath } from './activePlanPersistence'
 import { readPlanSummaryHistory } from './planSummaryHistory'
+import * as summaryHistory from './planSummaryHistory'
 
 const sharedBridgeKey = '__codexRemoteSharedBridge__'
 const scope = globalThis as typeof globalThis & Record<string, unknown>
@@ -22,6 +23,7 @@ afterEach(async () => {
   if (previousBridge === undefined) delete scope[sharedBridgeKey]; else scope[sharedBridgeKey] = previousBridge
   if (previousHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previousHome
   await rm(codexHome, { recursive: true, force: true })
+  vi.restoreAllMocks()
 })
 function harness() {
   let listener: (value: { method: string; params: unknown; generation?: number }) => void = () => {}
@@ -121,6 +123,26 @@ describe('authoritative plan bridge recovery', () => {
     expect((await readPlanSummaryHistory('thread-a'))['thread-a'][0]).toMatchObject({ lifecycle: 'completed', revision: 3 })
     const persisted = await readFile(getActivePlanPersistencePath(), 'utf8')
     expect(persisted).toContain('"lifecycle":"completed"')
+  })
+
+  it('keeps the warning after summary failure even when the active file saves, then clears only after summary recovery', async () => {
+    const originalWrite = summaryHistory.writePlanSummary
+    let fail = true
+    const writes = vi.spyOn(summaryHistory, 'writePlanSummary').mockImplementation(input => fail ? Promise.reject(new Error('fixture summary failure')) : originalWrite(input))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { middleware, emit, frames } = harness()
+    emit('turn/plan/updated', checklist('completed'))
+    emit('turn/completed', { threadId: 'thread-a', turn: { id: 'turn-a', status: 'completed' } })
+    await vi.waitFor(() => expect(middleware.getPlanPersistenceWarning()).toBe(true))
+    await vi.waitFor(async () => expect(JSON.parse(await readFile(getActivePlanPersistencePath(), 'utf8')).snapshots[0]).toMatchObject({ lifecycle: 'completed' }))
+    expect(middleware.getPlanPersistenceWarning()).toBe(true)
+    expect(frames.filter(frame => frame.method === 'codex-ui/plan-persistence-warning').at(-1)?.params).toMatchObject({ active: true })
+    fail = false
+    emit('turn/plan/updated', { ...checklist(), turnId: 'later-turn' })
+    await vi.waitFor(() => expect(middleware.getPlanPersistenceWarning()).toBe(false))
+    expect(writes.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect((await readPlanSummaryHistory('thread-a'))['thread-a'][0]).toMatchObject({ lifecycle: 'completed', turnId: 'turn-a' })
+    expect(frames.filter(frame => frame.method === 'codex-ui/plan-persistence-warning').at(-1)?.params).toEqual({ active: false, message: '' })
   })
 
   it('marks a live plan unconfirmed after native runtime loss without inventing completion', () => {

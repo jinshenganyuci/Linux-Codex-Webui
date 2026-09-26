@@ -8207,16 +8207,24 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
   const threadTitleGenerator = new ThreadTitleGenerator()
   const activePlanSnapshots = new ActivePlanSnapshotStore()
   let planPersistenceWarning = false
+  let activePlanPersistenceFailed = false
+  const failedPlanSummaryIdentities = new Set<string>()
+  const planSummaryRetryCounts = new Map<string, number>()
+  const refreshPlanPersistenceWarning = () => {
+    const active = activePlanPersistenceFailed || failedPlanSummaryIdentities.size > 0
+    if (planPersistenceWarning === active) return
+    planPersistenceWarning = active
+    publishNotification({ method: 'codex-ui/plan-persistence-warning', params: { active, message: active ? '计划进度暂时无法保存；请保持页面打开，稍后重试。' : '' } })
+  }
   const planPersistence = createActivePlanPersistence({
     onError: error => {
       console.warn('[active-plans]', getErrorMessage(error, 'Persistence failed'))
-      planPersistenceWarning = true
-      publishNotification({ method: 'codex-ui/plan-persistence-warning', params: { active: true, message: '计划进度暂时无法保存；请保持页面打开，稍后重试。' } })
+      activePlanPersistenceFailed = true
+      refreshPlanPersistenceWarning()
     },
     onSaved: () => {
-      if (!planPersistenceWarning) return
-      planPersistenceWarning = false
-      publishNotification({ method: 'codex-ui/plan-persistence-warning', params: { active: false, message: '' } })
+      activePlanPersistenceFailed = false
+      refreshPlanPersistenceWarning()
     },
   })
   const plansPersistenceEnabled = options.planPersistence ?? process.env.NODE_ENV !== 'test'
@@ -8244,7 +8252,19 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
     }
     const summary = planSummaryFromSnapshot(snapshot)
     if (!summary) return
-    const write = writePlanSummary(summary).catch((error) => {
+    const write = writePlanSummary(summary).then(() => {
+      failedPlanSummaryIdentities.delete(identity)
+      planSummaryRetryCounts.delete(identity)
+      refreshPlanPersistenceWarning()
+    }).catch((error) => {
+      if (deletedPlanThreadIds.has(snapshot.threadId)) return
+      failedPlanSummaryIdentities.add(identity)
+      while (failedPlanSummaryIdentities.size > 2048) {
+        const oldest = failedPlanSummaryIdentities.values().next().value!
+        failedPlanSummaryIdentities.delete(oldest)
+        planSummaryRetryCounts.delete(oldest)
+      }
+      refreshPlanPersistenceWarning()
       if (scheduledPlanSummaryRevisionByTurnId.get(identity) === snapshot.revision) {
         scheduledPlanSummaryRevisionByTurnId.delete(identity)
       }
@@ -8285,6 +8305,20 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
       scheduleTerminalPlanPersistence(snapshot)
       publishNotification({ method: 'codex-ui/plan-updated', params: { snapshot }, generation: snapshot.generation })
     }
+    // Retry only on a later plan update, at most two retries per failed identity
+    // and four jobs per update. No timer or unbounded failure loop is created.
+    let retryCount = 0
+    for (const snapshot of failedPlanSummaryIdentities.size ? activePlanSnapshots.getPersistedSnapshots() : []) {
+      const identity = activePlanIdentity(snapshot)
+      if (retryCount >= 4) break
+      if (!failedPlanSummaryIdentities.has(identity) || deletedPlanThreadIds.has(snapshot.threadId)) continue
+      if ((scheduledPlanSummaryRevisionByTurnId.get(identity) ?? -1) >= snapshot.revision) continue
+      const attempts = planSummaryRetryCounts.get(identity) ?? 0
+      if (attempts >= 2) continue
+      planSummaryRetryCounts.set(identity, attempts + 1)
+      scheduleTerminalPlanPersistence(snapshot)
+      retryCount++
+    }
     if (plansLoaded && plansPersistenceEnabled) planPersistence.schedule(activePlanSnapshots.getPersistedSnapshots(), snapshots.some(snapshot => snapshot.lifecycle !== 'live' && snapshot.lifecycle !== 'unconfirmed'))
   }
   const planRestorePromise = (plansPersistenceEnabled ? planPersistence.load() : Promise.resolve([])).then(saved => {
@@ -8314,13 +8348,19 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
     schedulePlanVerification(3)
   }).catch(error => {
     plansLoaded = true
-    planPersistenceWarning = true
+    activePlanPersistenceFailed = true
     console.warn('[active-plans] Recovery failed:', getErrorMessage(error, 'Unknown error'))
-    publishNotification({ method: 'codex-ui/plan-persistence-warning', params: { active: true, message: '计划进度暂时无法保存；请保持页面打开，稍后重试。' } })
+    refreshPlanPersistenceWarning()
   })
   const deleteActivePlans = async (threadId: string) => {
     deletedPlanThreadIds.add(threadId)
     activePlanSnapshots.deleteThread(threadId)
+    for (const identity of failedPlanSummaryIdentities) {
+      if (JSON.parse(identity)[0] !== threadId) continue
+      failedPlanSummaryIdentities.delete(identity)
+      planSummaryRetryCounts.delete(identity)
+    }
+    refreshPlanPersistenceWarning()
     await planRestorePromise
     if (plansPersistenceEnabled) await planPersistence.removeThread(threadId)
   }
