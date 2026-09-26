@@ -1,7 +1,8 @@
 import type { ThreadGroupsPage, WorkspaceRootsState } from '../../api/codexGateway'
 import type { UiProjectGroup, UiThread } from '../../types/codex'
 
-export const BACKGROUND_THREAD_PAGINATION_DELAY_MS = 10_000
+export const BACKGROUND_THREAD_PAGINATION_DELAY_MS = 150
+export const THREAD_ROOTS_WAIT_MS = 1_500
 export const RECENT_THREAD_LIST_LOAD_REUSE_MS = 2_000
 
 export interface ThreadListLoaderEnvironment {
@@ -15,6 +16,8 @@ export interface ThreadListLoaderOptions {
   loadRootsState(): Promise<WorkspaceRootsState | null>
   loadTitleCache(options: { force?: boolean }): Promise<void>
   hydrateRootsState(groups: UiProjectGroup[], rootsState: WorkspaceRootsState | null): Promise<void>
+  applyPendingGroups?(groups: UiProjectGroup[]): void
+  setRootsPending?(pending: boolean): void
   applyGroups(groups: UiProjectGroup[], rootsState: WorkspaceRootsState | null): void
   hasLoadedThreads(): boolean
   setThreadsLoading(loading: boolean): void
@@ -26,9 +29,11 @@ export interface ThreadListLoaderOptions {
 }
 
 export interface ThreadListLoader {
-  load(options?: { force?: boolean }): Promise<void>
+  load(options?: { force?: boolean; restartPagination?: boolean }): Promise<void>
   scheduleRemaining(rootsState?: WorkspaceRootsState | null): void
   removeThread(threadId: string): void
+  mergeThreads(threads: UiThread[]): void
+  loadMore(): void
   hasRemaining(): boolean
   stop(): void
 }
@@ -111,10 +116,35 @@ export function createThreadListLoader(options: ThreadListLoaderOptions): Thread
   let nextCursor: string | null = null
   let backgroundTimerId: number | null = null
   let backgroundTimerEnvironment: ThreadListLoaderEnvironment | null = null
-  let isLoadingRemainingPages = false
-  let hasLoadedAllPages = false
+  let backgroundPromise: Promise<void> | null = null
+  let hasStartedPagination = false
+  let generation = 0
+  let stopped = false
   let loadedGroups: UiProjectGroup[] = []
   let loadedRootsState: WorkspaceRootsState | null = null
+  let rootsReady = false
+  let lastAppliedGroups: UiProjectGroup[] | null = null
+  let lastAppliedRoots: WorkspaceRootsState | null | undefined
+  let metadataPromise: Promise<void> | null = null
+  const removedThreadIds = new Set<string>()
+  const visitedCursors = new Set<string>()
+
+  function withoutRemoved(groups: UiProjectGroup[]): UiProjectGroup[] {
+    return groups.map(group => ({
+      ...group,
+      threads: group.threads.filter(thread => !removedThreadIds.has(thread.id)),
+    })).filter(group => group.threads.length > 0)
+  }
+
+  function applyLoadedGroups(): void {
+    if (stopped || (!hasStartedPagination && loadedGroups.length === 0)) return
+    if (rootsReady) {
+      if (lastAppliedGroups === loadedGroups && lastAppliedRoots === loadedRootsState) return
+      lastAppliedGroups = loadedGroups
+      lastAppliedRoots = loadedRootsState
+      options.applyGroups(loadedGroups, loadedRootsState)
+    } else options.applyPendingGroups?.(loadedGroups)
+  }
 
   function clearBackgroundTimer(): void {
     if (backgroundTimerId === null || !backgroundTimerEnvironment) return
@@ -123,107 +153,159 @@ export function createThreadListLoader(options: ThreadListLoaderOptions): Thread
     backgroundTimerEnvironment = null
   }
 
-  async function loadRemainingPages(rootsState: WorkspaceRootsState | null): Promise<void> {
-    if (isLoadingRemainingPages || !nextCursor || options.hasActiveThreads()) return
-    isLoadingRemainingPages = true
-
-    try {
-      const page = await options.fetchPage(nextCursor, options.getBackgroundPageLimit())
-      nextCursor = page.nextCursor
-      hasLoadedAllPages = page.nextCursor === null
-      loadedGroups = mergeThreadGroupPages(loadedGroups, page.groups)
-      options.applyGroups(loadedGroups, rootsState)
-    } catch {
-      // Keep the first page usable; a later refresh can retry remaining pages.
-    } finally {
-      isLoadingRemainingPages = false
-      if (nextCursor && !options.hasActiveThreads()) {
-        scheduleRemaining(rootsState)
+  async function loadRemainingPages(): Promise<void> {
+    if (backgroundPromise || !nextCursor || stopped) return
+    const requestGeneration = generation
+    const cursor = nextCursor
+    const request = (async () => {
+      try {
+        const page = await options.fetchPage(cursor, options.getBackgroundPageLimit())
+        if (stopped || requestGeneration !== generation) return
+        visitedCursors.add(cursor)
+        // A repeated server cursor must not turn pagination into an endless request loop.
+        nextCursor = page.nextCursor && !visitedCursors.has(page.nextCursor) ? page.nextCursor : null
+        loadedGroups = mergeThreadGroupPages(loadedGroups, withoutRemoved(page.groups))
+        applyLoadedGroups()
+      } catch {
+        // Retry only after an explicit refresh; a broken cursor must not poll forever.
+        return
       }
-    }
+      if (requestGeneration === generation && nextCursor) scheduleRemaining()
+    })().finally(() => {
+      if (backgroundPromise === request) backgroundPromise = null
+    })
+    backgroundPromise = request
+    await request
+    // Scheduling while the request was pending was intentionally ignored.
+    if (requestGeneration === generation && nextCursor && visitedCursors.has(cursor)) scheduleRemaining()
   }
 
   function scheduleRemaining(rootsState: WorkspaceRootsState | null = loadedRootsState): void {
-    if (!nextCursor || isLoadingRemainingPages || options.hasActiveThreads()) return
-
+    if (!nextCursor || backgroundPromise || backgroundTimerId !== null || stopped) return
     loadedRootsState = rootsState
     const environment = resolveEnvironment()
     if (!environment) {
-      void loadRemainingPages(rootsState)
+      void loadRemainingPages()
       return
     }
-
-    clearBackgroundTimer()
     backgroundTimerEnvironment = environment
     backgroundTimerId = environment.setTimeout(() => {
       backgroundTimerId = null
       backgroundTimerEnvironment = null
-      if (!nextCursor || options.hasActiveThreads()) return
-      void loadRemainingPages(loadedRootsState)
+      void loadRemainingPages()
     }, BACKGROUND_THREAD_PAGINATION_DELAY_MS)
   }
 
+  function loadMetadata(force: boolean, requestGeneration: number): Promise<void> {
+    if (metadataPromise) return metadataPromise
+    const request = (async () => {
+      let rootsState: WorkspaceRootsState | null
+      try {
+        rootsState = await options.loadRootsState()
+      } catch {
+        if (!stopped && requestGeneration === generation) options.setRootsPending?.(true)
+        return
+      }
+      if (stopped || requestGeneration !== generation) return
+      loadedRootsState = rootsState
+      rootsReady = true
+      options.setRootsPending?.(false)
+      // Hydration only updates labels/order and must not hold the list response hostage.
+      void options.hydrateRootsState(loadedGroups, rootsState).catch(() => {})
+      applyLoadedGroups()
+    })().finally(() => {
+      if (metadataPromise === request) metadataPromise = null
+    })
+    metadataPromise = request
+    void options.loadTitleCache({ force }).catch(() => {})
+    return request
+  }
+
+  async function waitForRoots(metadata: Promise<void>): Promise<void> {
+    const environment = resolveEnvironment()
+    if (!environment) return await metadata
+    let timerId: number | undefined
+    await Promise.race([
+      metadata,
+      new Promise<void>(resolve => {
+        timerId = environment.setTimeout(resolve, THREAD_ROOTS_WAIT_MS)
+      }),
+    ]).finally(() => {
+      if (timerId !== undefined) environment.clearTimeout(timerId)
+    })
+    if (!rootsReady && !stopped) options.setRootsPending?.(true)
+  }
+
   return {
-    async load(loadOptions: { force?: boolean } = {}) {
+    async load(loadOptions: { force?: boolean; restartPagination?: boolean } = {}) {
       if (loadPromise) {
         await loadPromise
+        if (loadOptions.restartPagination === true) return await this.load(loadOptions)
         return
       }
-      if (
-        loadOptions.force !== true
-        && options.hasLoadedThreads()
-        && now() - lastLoadAt < RECENT_THREAD_LIST_LOAD_REUSE_MS
-      ) {
-        return
-      }
-
-      loadPromise = (async () => {
-        if (!options.hasLoadedThreads()) {
-          options.setThreadsLoading(true)
-        }
-
+      if (loadOptions.force !== true && options.hasLoadedThreads()
+        && now() - lastLoadAt < RECENT_THREAD_LIST_LOAD_REUSE_MS) return
+      stopped = false
+      const requestGeneration = generation
+      const metadata = loadMetadata(loadOptions.force === true, requestGeneration)
+      const request = (async () => {
+        if (!options.hasLoadedThreads()) options.setThreadsLoading(true)
         try {
-          const [page, rootsState] = await Promise.all([
-            options.fetchPage(),
-            options.loadRootsState(),
-            options.loadTitleCache({ force: loadOptions.force === true }),
-          ])
-          loadedRootsState = rootsState
-          const groups = page.groups
-          loadedGroups = options.hasLoadedThreads()
-            ? mergeThreadGroupPages(loadedGroups, groups)
-            : groups
-          nextCursor = options.hasLoadedThreads() && !hasLoadedAllPages
-            ? nextCursor
-            : page.nextCursor
-          hasLoadedAllPages = page.nextCursor === null
-          await options.hydrateRootsState(groups, rootsState)
-
-          options.applyGroups(loadedGroups, rootsState)
+          if (loadOptions.restartPagination === true && backgroundPromise) await backgroundPromise
+          const page = await options.fetchPage()
+          if (stopped || requestGeneration !== generation) return
+          loadedGroups = mergeThreadGroupPages(loadedGroups, withoutRemoved(page.groups))
+          // Refreshing the first page never rewinds an active pagination traversal.
+          if (!hasStartedPagination || loadOptions.restartPagination === true) {
+            visitedCursors.clear()
+            hasStartedPagination = true
+            nextCursor = page.nextCursor
+          }
+          // Roots determine which projects can be shown. They are independent of the
+          // expensive list read; subsequent refreshes can use the last known roots.
+          if (!rootsReady) await waitForRoots(metadata)
+          if (stopped || requestGeneration !== generation) return
+          applyLoadedGroups()
           options.markThreadsLoaded()
           lastLoadAt = now()
-          if (!hasLoadedAllPages) {
-            scheduleRemaining(rootsState)
-          }
+          scheduleRemaining()
           options.afterPrimaryPageApplied()
         } finally {
-          options.setThreadsLoading(false)
+          if (requestGeneration === generation) options.setThreadsLoading(false)
         }
       })().finally(() => {
-        loadPromise = null
+        if (loadPromise === request) loadPromise = null
       })
-
-      await loadPromise
+      loadPromise = request
+      await request
     },
     scheduleRemaining,
     removeThread(threadId: string) {
-      loadedGroups = removeThreadFromGroups(loadedGroups, threadId)
+      const normalized = threadId.trim()
+      if (!normalized) return
+      removedThreadIds.add(normalized)
+      loadedGroups = removeThreadFromGroups(loadedGroups, normalized)
+    },
+    loadMore() {
+      clearBackgroundTimer()
+      void loadRemainingPages()
+    },
+    mergeThreads(threads: UiThread[]) {
+      const groups = threads.map(thread => ({ projectName: thread.projectName, threads: [thread] }))
+      loadedGroups = mergeThreadGroupPages(loadedGroups, withoutRemoved(groups))
+      applyLoadedGroups()
     },
     hasRemaining() {
       return Boolean(nextCursor)
     },
     stop() {
+      stopped = true
+      generation += 1
       clearBackgroundTimer()
+      loadPromise = null
+      metadataPromise = null
+      backgroundPromise = null
+      options.setThreadsLoading(false)
     },
   }
 }

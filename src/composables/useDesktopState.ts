@@ -1632,6 +1632,7 @@ export function useDesktopState() {
   const queueHandoffReleaseIdsByThreadId = ref<Record<string, string[]>>({})
   const queueHandoffReleaseTimerByThreadId = new Map<string, number>()
   let hasLoadedPersistedQueueState = false
+  let persistedQueueLoadPromise: Promise<void> | null = null
   const eventUnreadByThreadId = ref<Record<string, boolean>>({})
   const availableModelIds = ref<string[]>([])
   const availableModelCapabilities = ref<Record<string, UiModelCapability>>({})
@@ -1711,6 +1712,7 @@ export function useDesktopState() {
   const installedSkills = ref<SkillInfo[]>([])
   const accountRateLimitSnapshots = ref<UiRateLimitSnapshot[]>([])
 
+  const threadListWarning = ref('')
   const isLoadingThreads = ref(false)
   const isLoadingMessages = ref(false)
   const isSendingMessage = ref(false)
@@ -1803,6 +1805,14 @@ export function useDesktopState() {
   let shouldAutoScrollOnNextAgentEvent = false
   const pendingTurnStartsById = new Map<string, TurnStartedInfo>()
   let hasPersistedCodexPermissionMode = hasStoredCodexPermissionMode()
+  let composerInitializationPromise: Promise<void> | null = null
+  let hasInitializedComposer = false
+  let hasExplicitThreadSelection = false
+  let modelSelectionRevision = 0
+  let reasoningSelectionRevision = 0
+  let permissionSelectionRevision = 0
+  let selectionRevision = 0
+  const collaborationSelectionRevisionByContext = new Map<string, number>()
   let hasLoadedThreadModelPreferences = false
   let hasLoadedThreadCollaborationPreferences = false
   let threadCollaborationPreferencesLoadPromise: Promise<void> | null = null
@@ -2290,6 +2300,7 @@ export function useDesktopState() {
       return
     }
     const previousThreadId = selectedThreadId.value
+    selectionRevision += 1
     selectedThreadId.value = nextThreadId
     if (options.persist !== false) {
       saveSelectedThreadId(nextThreadId)
@@ -2324,6 +2335,7 @@ export function useDesktopState() {
     options: { manual?: boolean } = {},
   ): void {
     const normalizedModelId = modelId.trim()
+    if (options.manual !== false) modelSelectionRevision += 1
     const contextId = toThreadContextId(threadId)
     if (contextId === NEW_THREAD_COLLABORATION_MODE_CONTEXT) {
       newThreadDraftModelId.value = normalizedModelId
@@ -2432,6 +2444,7 @@ export function useDesktopState() {
     const contextId = toThreadContextId(selectedThreadId.value)
     const currentMode = readSelectedCollaborationMode(selectedCollaborationModeByContext.value, selectedThreadId.value)
     if (currentMode === nextMode && selectedCollaborationMode.value === nextMode) return
+    collaborationSelectionRevisionByContext.set(contextId, (collaborationSelectionRevisionByContext.get(contextId) ?? 0) + 1)
     selectedCollaborationMode.value = nextMode
     selectedCollaborationModeByContext.value = writeSelectedCollaborationModeForContext(
       selectedCollaborationModeByContext.value,
@@ -2452,6 +2465,7 @@ export function useDesktopState() {
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId) return
     const nextMode = mode === 'plan' ? 'plan' : 'default'
+    collaborationSelectionRevisionByContext.set(normalizedThreadId, (collaborationSelectionRevisionByContext.get(normalizedThreadId) ?? 0) + 1)
     selectedCollaborationModeByContext.value = writeSelectedCollaborationModeForContext(
       selectedCollaborationModeByContext.value,
       normalizedThreadId,
@@ -2472,7 +2486,9 @@ export function useDesktopState() {
       if (mode === 'plan') next[threadId] = 'plan'
     }
     selectedCollaborationModeByContext.value = next
-    selectedCollaborationMode.value = readSelectedCollaborationMode(next, selectedThreadId.value)
+    if (selectedThreadId.value.trim()) {
+      selectedCollaborationMode.value = readSelectedCollaborationMode(next, selectedThreadId.value)
+    }
     saveSelectedCollaborationModeMap(next)
   }
 
@@ -2525,6 +2541,7 @@ export function useDesktopState() {
     if (effort && !REASONING_EFFORT_OPTIONS.includes(effort)) {
       return
     }
+    reasoningSelectionRevision += 1
     selectedReasoningEffort.value = effort
   }
 
@@ -2577,8 +2594,10 @@ export function useDesktopState() {
   }
 
   async function refreshCodexRuntimeConfig(): Promise<void> {
+    const requestRevision = permissionSelectionRevision
     try {
       const currentConfig = await getCodexRuntimeConfig()
+      if (requestRevision !== permissionSelectionRevision) return
       if (!hasPersistedCodexPermissionMode) {
         selectedCodexPermissionMode.value = codexRuntimeConfigToPermissionMode(currentConfig)
         return
@@ -2598,6 +2617,7 @@ export function useDesktopState() {
       return
     }
 
+    permissionSelectionRevision += 1
     const previousMode = selectedCodexPermissionMode.value
     const previousHadPersistedMode = hasPersistedCodexPermissionMode
     selectedCodexPermissionMode.value = nextMode
@@ -2738,6 +2758,7 @@ export function useDesktopState() {
       return
     }
 
+    const revisionsAtRequest = new Map(collaborationSelectionRevisionByContext)
     const load = (async () => {
       try {
         let preferences = await getThreadCollaborationPreferences()
@@ -2755,7 +2776,14 @@ export function useDesktopState() {
             })).preferences
           }
         }
-        applyThreadCollaborationPreferences(preferences)
+        const modes = { ...preferences.modes }
+        for (const [contextId, revision] of collaborationSelectionRevisionByContext) {
+          if (!isNewThreadContextId(contextId) && revision !== revisionsAtRequest.get(contextId)) {
+            if (readSelectedCollaborationMode(selectedCollaborationModeByContext.value, contextId) === 'plan') modes[contextId] = 'plan'
+            else delete modes[contextId]
+          }
+        }
+        applyThreadCollaborationPreferences({ ...preferences, modes })
         hasLoadedThreadCollaborationPreferences = true
       } catch {
         // Keep the local cache usable while the supplementary preference endpoint is unavailable.
@@ -2822,6 +2850,9 @@ export function useDesktopState() {
 
   async function refreshModelPreferences(options?: { providerChanged?: boolean; includeProviderModels?: boolean }): Promise<void> {
     const selectedThreadAtRequest = selectedThreadId.value
+    const selectionAtRequest = selectionRevision
+    const modelRevisionAtRequest = modelSelectionRevision
+    const reasoningRevisionAtRequest = reasoningSelectionRevision
     codexCliMissingError.value = ''
     try {
       const currentConfig = await getCurrentModelConfig()
@@ -2844,7 +2875,7 @@ export function useDesktopState() {
         requireProviderModels: isProviderBacked,
         providerId: isProviderBacked ? targetProviderId : undefined,
       })
-      if (selectedThreadId.value !== selectedThreadAtRequest) return
+      if (selectedThreadId.value !== selectedThreadAtRequest || selectionRevision !== selectionAtRequest) return
       // Catalog loading can finish after a manual selection; read the current preference now.
       const selectedThreadPreference = readThreadModelPreference(selectedThreadId.value)
       const normalizedSelectedModelId = isNewThreadContext && !newThreadSelectionInitialized && !newThreadModelManuallySelected
@@ -2857,6 +2888,9 @@ export function useDesktopState() {
         ? normalizeStoredModelId(selectedModelIdByContext.value[providerModelContextId])
         : ''
       const nextModelIds = [...modelIds]
+      if (modelSelectionRevision !== modelRevisionAtRequest && normalizedSelectedModelId && !nextModelIds.includes(normalizedSelectedModelId)) {
+        nextModelIds.push(normalizedSelectedModelId)
+      }
       if (selectedThreadPreference?.model && !nextModelIds.includes(selectedThreadPreference.model)) {
         nextModelIds.push(selectedThreadPreference.model)
       }
@@ -2908,7 +2942,9 @@ export function useDesktopState() {
         saveSelectedModelMap(selectedModelIdByContext.value)
       }
 
-      if (selectedThreadPreference) {
+      if (reasoningSelectionRevision !== reasoningRevisionAtRequest) {
+        // Keep a choice made while config/catalog requests were in flight.
+      } else if (selectedThreadPreference) {
         selectedReasoningEffort.value = selectedThreadPreference.reasoningEffort
       } else if (isNewThreadContext && !newThreadReasoningManuallySelected) {
         selectedReasoningEffort.value = resolveNewChatDefaultReasoningEffort(selectedModelId.value)
@@ -3098,6 +3134,15 @@ export function useDesktopState() {
     const currentThreadId = selectedThreadId.value.trim()
     if (currentThreadId) {
       activeThreadIds.add(currentThreadId)
+    }
+    for (const [threadId, running] of Object.entries(inProgressById.value)) {
+      if (running && !isThreadDeleted(threadId)) activeThreadIds.add(threadId)
+    }
+    for (const [threadId, queue] of Object.entries(queuedMessagesByThreadId.value)) {
+      if (queue.length && !isThreadDeleted(threadId)) activeThreadIds.add(threadId)
+    }
+    for (const threadId of loadMessagePromiseByThreadId.keys()) {
+      if (!isThreadDeleted(threadId)) activeThreadIds.add(threadId)
     }
     for (const threadId of latestRuntimeStateByThreadId.keys()) {
       if (!activeThreadIds.has(threadId)) latestRuntimeStateByThreadId.delete(threadId)
@@ -3577,7 +3622,10 @@ export function useDesktopState() {
     const promise = getThreadSummary(threadId).then((summary) => {
       const listedMode = listedThreadHistoryMode(threadId)
       const mode = listedMode ?? (summary?.historyMode === 'paginated' ? 'paginated' : 'legacy')
-      if (probeGeneration === messageLoadGeneration) rememberThreadHistoryMode(threadId, mode)
+      if (probeGeneration === messageLoadGeneration) {
+        rememberThreadHistoryMode(threadId, mode)
+        if (summary && !isThreadDeleted(threadId)) threadListLoader.mergeThreads([summary])
+      }
       return mode
     })
     threadHistoryModeProbeByThreadId.set(threadId, promise)
@@ -5989,10 +6037,16 @@ export function useDesktopState() {
 
   async function loadThreadTitleCacheIfNeeded(options: { force?: boolean } = {}): Promise<void> {
     if (options.force !== true && Object.keys(threadTitleById.value).length > 0) return
+    const titlesAtRequest = threadTitleById.value
     try {
       const cache = await getThreadTitleCache()
       if (Object.keys(cache.titles).length > 0) {
-        threadTitleById.value = cache.titles
+        const nextTitles = { ...cache.titles }
+        for (const [threadId, title] of Object.entries(threadTitleById.value)) {
+          if (title !== titlesAtRequest[threadId]) nextTitles[threadId] = title
+        }
+        threadTitleById.value = nextTitles
+        applyThreadFlags()
       }
     } catch {
       // Title cache is optional; keep UI functional.
@@ -6000,11 +6054,7 @@ export function useDesktopState() {
   }
 
   async function loadWorkspaceRootsStateForThreadList(): Promise<WorkspaceRootsState | null> {
-    try {
-      return await getWorkspaceRootsState()
-    } catch {
-      return null
-    }
+    return await getWorkspaceRootsState()
   }
 
   async function requestThreadTitleGeneration(threadId: string, prompt: string, model: string): Promise<void> {
@@ -6132,13 +6182,26 @@ export function useDesktopState() {
   }
 
   async function loadPersistedQueueStateIfNeeded(): Promise<void> {
+    if (persistedQueueLoadPromise) return await persistedQueueLoadPromise
     if (hasLoadedPersistedQueueState) return
-    hasLoadedPersistedQueueState = true
-    try {
-      queuedMessagesByThreadId.value = await getThreadQueueState()
-    } catch {
-      // Backend queue state is optional during startup.
-    }
+    const request = (async () => {
+      try {
+        const stateAtRequest = queuedMessagesByThreadId.value
+        const persisted = await getThreadQueueState()
+        // Queue writes made during startup have precedence over a stale snapshot.
+        for (const [threadId, queue] of Object.entries(queuedMessagesByThreadId.value)) {
+          if (queue !== stateAtRequest[threadId]) persisted[threadId] = queue
+        }
+        queuedMessagesByThreadId.value = persisted
+        hasLoadedPersistedQueueState = true
+      } catch {
+        // A later explicit queue operation can retry loading the optional endpoint.
+      }
+    })().finally(() => {
+      if (persistedQueueLoadPromise === request) persistedQueueLoadPromise = null
+    })
+    persistedQueueLoadPromise = request
+    await request
   }
 
   function hasActiveInProgressThreads(): boolean {
@@ -6147,11 +6210,11 @@ export function useDesktopState() {
 
   function afterPrimaryThreadPageApplied(): void {
     const flatThreads = flattenThreads(projectGroups.value)
-    pruneThreadScopedState(flatThreads)
+    if (!threadListLoader.hasRemaining() && !threadListWarning.value) pruneThreadScopedState(flatThreads)
 
     const currentExists = flatThreads.some((thread) => thread.id === selectedThreadId.value)
 
-    if (!currentExists && !selectedThreadId.value) {
+    if (!hasExplicitThreadSelection && !currentExists && !selectedThreadId.value) {
       setSelectedThreadId(flatThreads[0]?.id ?? '')
     }
   }
@@ -6163,6 +6226,15 @@ export function useDesktopState() {
     loadTitleCache: loadThreadTitleCacheIfNeeded,
     hydrateRootsState: hydrateWorkspaceRootsStateIfNeeded,
     applyGroups: applyThreadGroups,
+    applyPendingGroups: (groups) => {
+      const projectless = groups.map(group => ({ ...group, threads: group.threads.filter(thread => (
+        !thread.cwd.trim() || isProjectlessChatPath(thread.cwd)
+      )) })).filter(group => group.threads.length > 0)
+      applyThreadGroups(projectless, null)
+    },
+    setRootsPending: (pending) => {
+      threadListWarning.value = pending ? '项目目录仍在同步，部分聊天将在同步后显示；若持续未显示，请刷新重试。' : ''
+    },
     hasLoadedThreads: () => hasLoadedThreads.value,
     setThreadsLoading: (loading) => {
       isLoadingThreads.value = loading
@@ -6181,8 +6253,16 @@ export function useDesktopState() {
     applyThreadFlags()
   }
 
-  function loadThreads(options: { force?: boolean } = {}): Promise<void> {
+  function loadThreads(options: { force?: boolean; restartPagination?: boolean } = {}): Promise<void> {
     return threadListLoader.load(options)
+  }
+
+  function mergeSearchThreads(threads: UiThread[]): void {
+    threadListLoader.mergeThreads(threads.filter(thread => !isThreadDeleted(thread.id)))
+  }
+
+  function loadMoreThreads(): void {
+    threadListLoader.loadMore()
   }
 
   async function loadMessages(threadId: string, options: { silent?: boolean; force?: boolean } = {}) {
@@ -6624,82 +6704,78 @@ export function useDesktopState() {
     await refreshSkillsPromise
   }
 
-  async function refreshAncillaryState(
-    options: { providerChanged?: boolean; includeProviderModels?: boolean } = {},
-  ): Promise<void> {
-    await Promise.allSettled([
-      refreshModelPreferences({
-        providerChanged: options.providerChanged,
-        includeProviderModels: options.includeProviderModels,
-      }),
-      refreshRateLimits(),
-      refreshCollaborationModes(),
-      refreshSkills(),
-    ])
+  async function refreshAncillaryState(): Promise<void> {
+    await Promise.allSettled([refreshRateLimits(), refreshCollaborationModes(), refreshSkills()])
   }
 
-  function scheduleAncillaryStateRefresh(
-    options: { providerChanged?: boolean; includeProviderModels?: boolean } = {},
-  ): void {
-    const run = () => {
-      void refreshAncillaryState(options)
-    }
+  function initializeComposer(options: {
+    providerChanged?: boolean
+    includeProviderModels?: boolean
+    forceThreadPreferenceRefresh?: boolean
+  } = {}): Promise<void> {
+    if (composerInitializationPromise) return composerInitializationPromise
+    const request = (async () => {
+      await Promise.all([
+        refreshCodexRuntimeConfig(),
+        loadThreadModelPreferencesIfNeeded(),
+        loadThreadCollaborationPreferencesIfNeeded(options.forceThreadPreferenceRefresh === true),
+        loadNewChatDefaultsIfNeeded(),
+      ])
+      await refreshModelPreferences(options)
+      hasInitializedComposer = true
+    })().finally(() => {
+      if (composerInitializationPromise === request) composerInitializationPromise = null
+    })
+    composerInitializationPromise = request
+    return request
+  }
 
-    if (typeof window === 'undefined') {
-      run()
-      return
-    }
-
-    window.setTimeout(run, 0)
+  async function ensureComposerReady(): Promise<void> {
+    if (composerInitializationPromise) await composerInitializationPromise
+    else if (!hasInitializedComposer) await initializeComposer({ includeProviderModels: false })
   }
 
   async function refreshAll(
-    options: { includeSelectedThreadMessages?: boolean; awaitAncillaryRefreshes?: boolean; providerChanged?: boolean; forceThreadRefresh?: boolean; forceThreadPreferenceRefresh?: boolean } = {},
+    options: { includeSelectedThreadMessages?: boolean; awaitAncillaryRefreshes?: boolean; providerChanged?: boolean; forceThreadRefresh?: boolean; forceThreadPreferenceRefresh?: boolean; awaitThreadList?: boolean } = {},
   ) {
     error.value = ''
     codexCliMissingError.value = ''
-    const includeSelectedThreadMessages = options.includeSelectedThreadMessages !== false
-    const awaitAncillaryRefreshes = options.awaitAncillaryRefreshes === true
-
-    try {
-      await refreshCodexRuntimeConfig()
-      await loadPersistedQueueStateIfNeeded()
-      await loadThreadModelPreferencesIfNeeded()
-      await loadThreadCollaborationPreferencesIfNeeded(
-        options.forceThreadPreferenceRefresh === true || options.forceThreadRefresh === true,
-      )
-      await loadNewChatDefaultsIfNeeded()
-      await loadThreads({ force: options.forceThreadRefresh === true })
-      if (includeSelectedThreadMessages) {
-        try {
-          await loadMessages(selectedThreadId.value)
-        } catch (unknownError) {
-          error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
-        }
-      }
-      if (awaitAncillaryRefreshes) {
-        await refreshAncillaryState({
-          providerChanged: options.providerChanged,
-          includeProviderModels: options.providerChanged === true || awaitAncillaryRefreshes,
-        })
-      } else {
-        scheduleAncillaryStateRefresh({
-          providerChanged: options.providerChanged,
-          includeProviderModels: false,
-        })
-      }
-    } catch (unknownError) {
+    const initialThreadId = selectedThreadId.value
+    let missingCliReported = false
+    const reportError = (unknownError: unknown) => {
       error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
       if (isCodexCliMissingError(unknownError)) {
+        missingCliReported = true
         codexCliMissingError.value = CODEX_CLI_MISSING_MESSAGE
-      } else {
-        codexCliMissingError.value = ''
       }
     }
+    // These paths share bridge initialization, but neither list nor history is a
+    // dependency of composer readiness. Direct links start their history read now.
+    void loadPersistedQueueStateIfNeeded()
+    const list = loadThreads({ force: options.forceThreadRefresh === true }).catch(reportError)
+    const history = options.includeSelectedThreadMessages !== false && initialThreadId
+      ? loadMessages(initialThreadId).catch(reportError)
+      : Promise.resolve()
+    const composer = initializeComposer({
+      providerChanged: options.providerChanged,
+      includeProviderModels: options.providerChanged === true || options.awaitAncillaryRefreshes === true,
+      forceThreadPreferenceRefresh: options.forceThreadPreferenceRefresh === true || options.forceThreadRefresh === true,
+    }).catch(reportError)
+    await Promise.all([composer, history, ...(options.awaitThreadList === false ? [] : [list])])
+    if (missingCliReported) codexCliMissingError.value = CODEX_CLI_MISSING_MESSAGE
+    // Preserve the non-routed useDesktopState contract: select the first list row
+    // only when the caller has not explicitly primed a home/thread route.
+    if (!initialThreadId && !hasExplicitThreadSelection && options.includeSelectedThreadMessages !== false && selectedThreadId.value) {
+      await loadMessages(selectedThreadId.value).catch(reportError)
+    }
+    if (options.awaitAncillaryRefreshes === true) await refreshAncillaryState()
+    else if (typeof window === 'undefined') void refreshAncillaryState()
+    else window.setTimeout(() => { void refreshAncillaryState() }, 0)
   }
 
   async function selectThread(threadId: string): Promise<SelectThreadResult> {
     if (isThreadDeleted(threadId)) return 'not-found'
+    hasExplicitThreadSelection = true
     setSelectedThreadId(threadId)
 
     try {
@@ -6991,6 +7067,8 @@ export function useDesktopState() {
     const threadId = selectedThreadId.value
     const nextText = text.trim()
     if (!threadId || (!nextText && imageUrls.length === 0 && fileAttachments.length === 0)) return
+    await ensureComposerReady()
+    if (selectedThreadId.value !== threadId || isThreadDeleted(threadId)) return
     const speedMode = speedModeOverride ?? selectedSpeedMode.value
 
     if (await maybeReplyToPendingUserInputRequest(threadId, nextText, imageUrls, skills, fileAttachments)) {
@@ -7000,6 +7078,7 @@ export function useDesktopState() {
     const isInProgress = inProgressById.value[threadId] === true
 
     if (isInProgress && mode === 'queue') {
+      await loadPersistedQueueStateIfNeeded()
       const capabilities = await getNativeCapabilities()
       const nativeState = await getNativeThreadState(threadId)
       if (nativeState.mode === 'native') {
@@ -7164,16 +7243,8 @@ export function useDesktopState() {
 
     const nextText = text.trim()
     const targetCwd = cwd.trim()
-    const selectedModel = readModelIdForThread(NEW_THREAD_COLLABORATION_MODE_CONTEXT).trim()
-    const selectedEffort = selectedReasoningEffort.value
-    const selectedMode = collaborationModeOverride === 'plan'
-      ? 'plan'
-      : collaborationModeOverride === 'default'
-        ? 'default'
-        : selectedCollaborationMode.value
-    const shouldPersistCollaborationMode = persistCollaborationModeOverride
-      ?? !collaborationModeDeveloperInstructions?.trim()
-    const speedMode = selectedSpeedMode.value
+    const selectedContextAtSend = selectedThreadId.value
+    const selectionAtSend = selectionRevision
     if (!nextText && imageUrls.length === 0 && fileAttachments.length === 0) return ''
 
     beginPendingNewThreadPreview(nextText, imageUrls, skills, fileAttachments)
@@ -7182,6 +7253,20 @@ export function useDesktopState() {
     let threadId = ''
 
     try {
+      await ensureComposerReady()
+      if (selectionRevision !== selectionAtSend || selectedThreadId.value !== selectedContextAtSend) {
+        throw new Error('聊天选择已改变，请在当前窗口重新发送。')
+      }
+      const selectedModel = readModelIdForThread(NEW_THREAD_COLLABORATION_MODE_CONTEXT).trim()
+      const selectedEffort = selectedReasoningEffort.value
+      const selectedMode = collaborationModeOverride === 'plan'
+        ? 'plan'
+        : collaborationModeOverride === 'default'
+          ? 'default'
+          : selectedCollaborationMode.value
+      const shouldPersistCollaborationMode = persistCollaborationModeOverride
+        ?? !collaborationModeDeveloperInstructions?.trim()
+      const speedMode = selectedSpeedMode.value
       const startedThread = await startThreadWithTurn(
         targetCwd || undefined,
         nextText,
@@ -8269,6 +8354,10 @@ export function useDesktopState() {
         if (notificationThreadId) markThreadDeleted(notificationThreadId)
         return
       }
+      if (notification.method === 'codex-ui/thread-index-updated') {
+        void loadThreads({ force: true, restartPagination: true }).catch(() => {})
+        return
+      }
       if (notificationThreadId && isThreadDeleted(notificationThreadId)) return
       publishNativeExtensionEvent(notification)
       if (notification.method.startsWith('thread/realtime/')) return
@@ -8541,6 +8630,7 @@ export function useDesktopState() {
   }
 
   function primeSelectedThread(threadId: string, options: { persist?: boolean } = {}): void {
+    hasExplicitThreadSelection = true
     setSelectedThreadId(threadId, options)
   }
 
@@ -8595,6 +8685,9 @@ export function useDesktopState() {
     error,
     newChatDefaultsError,
     refreshAll,
+    threadListWarning,
+    mergeSearchThreads,
+    loadMoreThreads,
     loadThreads,
     refreshSkills,
     selectThread,

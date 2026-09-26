@@ -27,6 +27,8 @@ const gatewayMocks = vi.hoisted(() => ({
   getAvailableCollaborationModes: vi.fn(),
   getAvailableModels: vi.fn(),
   getCurrentModelConfig: vi.fn(),
+  getCodexRuntimeConfig: vi.fn(),
+  setCodexRuntimeConfig: vi.fn(),
   getNewChatDefaults: vi.fn(),
   getPendingServerRequests: vi.fn(),
   getSkillsList: vi.fn(),
@@ -194,6 +196,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   nativeGatewayMocks.getNativeCapabilities.mockResolvedValue({ ...EMPTY_NATIVE_CAPABILITIES })
   nativeGatewayMocks.getNativeThreadState.mockResolvedValue({ mode: 'legacy', settings: null })
+  gatewayMocks.getCodexRuntimeConfig.mockResolvedValue({ sandboxMode: 'danger-full-access', approvalPolicy: 'never' })
+  gatewayMocks.setCodexRuntimeConfig.mockResolvedValue(undefined)
   gatewayMocks.archiveThread.mockResolvedValue(undefined)
   gatewayMocks.permanentlyDeleteThread.mockResolvedValue(undefined)
   gatewayMocks.getThreadDetail.mockResolvedValue({
@@ -275,7 +279,7 @@ beforeEach(() => {
   }))
   gatewayMocks.setThreadQueueState.mockResolvedValue(undefined)
   gatewayMocks.getThreadTitleCache.mockResolvedValue({ titles: {} })
-  gatewayMocks.getWorkspaceRootsState.mockRejectedValue(new Error('no workspace roots state'))
+  gatewayMocks.getWorkspaceRootsState.mockResolvedValue({ order: [], active: [], labels: {}, projectOrder: [] })
 })
 
 describe('planning clarification history', () => {
@@ -2227,6 +2231,123 @@ describe('Codex CLI availability', () => {
     expect(state.codexCliMissingError.value).toBe('')
   })
 
+})
+
+describe('independent startup paths', () => {
+  function configureModels(): void {
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({ model: 'gpt-5.5', providerId: 'codex', reasoningEffort: 'medium', speedMode: 'standard' })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities({ id: 'gpt-5.5', supportsFastMode: true }, { id: 'gpt-5.6-sol', supportsFastMode: true }))
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }, { value: 'plan', label: 'Plan' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+  }
+
+  it('loads a directly routed history while list and optional title requests are unresolved', async () => {
+    installTestWindow()
+    configureModels()
+    const list = deferred<{ groups: UiProjectGroup[]; nextCursor: null }>()
+    const titles = deferred<{ titles: Record<string, string> }>()
+    gatewayMocks.getThreadGroupsPage.mockReturnValue(list.promise)
+    gatewayMocks.getThreadTitleCache.mockReturnValue(titles.promise)
+    const state = useDesktopState()
+    state.primeSelectedThread('direct-old-thread')
+    await state.refreshAll({ awaitThreadList: false, includeSelectedThreadMessages: true })
+    expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledWith('direct-old-thread', 'legacy')
+    expect(state.isLoadingMessages.value).toBe(false)
+    expect(state.isLoadingThreads.value).toBe(true)
+    expect(state.selectedThreadId.value).toBe('direct-old-thread')
+    list.resolve({ groups: [], nextCursor: null })
+    titles.resolve({ titles: {} })
+    await Promise.resolve()
+    state.stopPolling()
+  })
+
+  it('sends with persisted model defaults and preserves a manual Plan choice before a delayed list returns', async () => {
+    installTestWindow()
+    configureModels()
+    const list = deferred<{ groups: UiProjectGroup[]; nextCursor: null }>()
+    const defaults = deferred<{ version: 1; revision: number; providers: Record<string, { model: string; reasoningEffort: 'high' }> }>()
+    const collaboration = deferred<{ version: 1; revision: number; persisted: boolean; modes: Record<string, 'plan'> }>()
+    const queue = deferred<Record<string, never>>()
+    gatewayMocks.getThreadGroupsPage.mockReturnValue(list.promise)
+    gatewayMocks.getNewChatDefaults.mockReturnValue(defaults.promise)
+    gatewayMocks.getThreadCollaborationPreferences.mockReturnValue(collaboration.promise)
+    gatewayMocks.getThreadQueueState.mockReturnValue(queue.promise)
+    gatewayMocks.startThreadWithTurn.mockResolvedValue({ threadId: 'new-fast-question', model: 'gpt-5.6-sol', modelProvider: 'codex', turnId: 'new-turn' })
+    const state = useDesktopState()
+    state.primeSelectedThread('', { persist: false })
+    const startup = state.refreshAll({ awaitThreadList: false, includeSelectedThreadMessages: false })
+    state.setSelectedCollaborationMode('plan')
+    const send = state.sendMessageToNewThread('a quick question', '/tmp/project')
+    expect(gatewayMocks.startThreadWithTurn).not.toHaveBeenCalled()
+    expect(state.pendingNewThreadMessages.value[0]?.text).toBe('a quick question')
+    defaults.resolve({ version: 1, revision: 1, providers: { codex: { model: 'gpt-5.6-sol', reasoningEffort: 'high' } } })
+    collaboration.resolve({ version: 1, revision: 1, persisted: true, modes: {} })
+    await startup
+    await expect(send).resolves.toBe('new-fast-question')
+    expect(gatewayMocks.startThreadWithTurn).toHaveBeenCalledWith('/tmp/project', 'a quick question', [], 'gpt-5.6-sol', 'high', undefined, [], 'plan', null, undefined)
+    expect(state.selectedThreadId.value).toBe('new-fast-question')
+    list.resolve({ groups: [{ projectName: 'project', threads: [thread('old-first-row', '/tmp/project')] }], nextCursor: null })
+    queue.resolve({})
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    expect(state.selectedThreadId.value).toBe('new-fast-question')
+    expect(gatewayMocks.getThreadModelPreferences).toHaveBeenCalledTimes(1)
+    state.stopPolling()
+  })
+
+  it('preserves existing thread Fast and Plan settings when sending before initial preferences return', async () => {
+    installTestWindow()
+    configureModels()
+    const list = deferred<{ groups: UiProjectGroup[]; nextCursor: null }>()
+    const preferences = deferred<Record<string, { model: string; reasoningEffort: 'ultra'; speedMode: 'fast' }>>()
+    gatewayMocks.getThreadGroupsPage.mockReturnValue(list.promise)
+    gatewayMocks.getThreadModelPreferences.mockReturnValue(preferences.promise)
+    gatewayMocks.getThreadCollaborationPreferences.mockResolvedValue({ version: 1, revision: 1, persisted: true, modes: { 'old-fast': 'plan' } })
+    gatewayMocks.resumeThread.mockResolvedValue({ model: 'gpt-5.6-sol', modelProvider: 'codex', messages: [], inProgress: false })
+    gatewayMocks.startThreadTurn.mockResolvedValue({ turnId: 'fast-turn' })
+    const state = useDesktopState()
+    state.primeSelectedThread('old-fast')
+    const startup = state.refreshAll({ awaitThreadList: false, includeSelectedThreadMessages: false })
+    const sending = state.sendMessageToSelectedThread('continue quickly')
+    expect(gatewayMocks.startThreadTurn).not.toHaveBeenCalled()
+    preferences.resolve({ 'old-fast': { model: 'gpt-5.6-sol', reasoningEffort: 'ultra', speedMode: 'fast' } })
+    await startup
+    await sending
+    expect(gatewayMocks.startThreadTurn.mock.calls.at(-1)).toEqual(expect.arrayContaining(['old-fast', 'continue quickly', 'gpt-5.6-sol', 'ultra', 'plan', 'fast']))
+    expect(state.selectedSpeedMode.value).toBe('fast')
+    list.resolve({ groups: [], nextCursor: null })
+    state.stopPolling()
+  })
+
+  it('keeps a permission change made while initial runtime config is still loading', async () => {
+    installTestWindow()
+    configureModels()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    const runtimeConfig = deferred<{ sandboxMode: 'danger-full-access'; approvalPolicy: 'never' }>()
+    gatewayMocks.getCodexRuntimeConfig.mockReturnValue(runtimeConfig.promise)
+    const state = useDesktopState()
+    state.primeSelectedThread('', { persist: false })
+    const startup = state.refreshAll({ includeSelectedThreadMessages: false })
+    await state.updateSelectedCodexPermissionMode('request-approval')
+    runtimeConfig.resolve({ sandboxMode: 'danger-full-access', approvalPolicy: 'never' })
+    await startup
+    expect(state.selectedCodexPermissionMode.value).toBe('request-approval')
+    expect(gatewayMocks.setCodexRuntimeConfig).toHaveBeenCalledTimes(1)
+    expect(gatewayMocks.setCodexRuntimeConfig).toHaveBeenCalledWith({ sandboxMode: 'workspace-write', approvalPolicy: 'on-request' })
+    state.stopPolling()
+  })
+
+  it('does not let a late list select an old thread on an explicitly primed home route', async () => {
+    installTestWindow()
+    configureModels()
+    const state = useDesktopState()
+    state.primeSelectedThread('', { persist: false })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [{ projectName: 'project', threads: [thread('old-thread', '/tmp/project')] }], nextCursor: null })
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    expect(state.selectedThreadId.value).toBe('')
+    expect(state.projectGroups.value[0]?.threads[0]?.id).toBe('old-thread')
+    state.stopPolling()
+  })
 })
 
 describe('startup request deduplication', () => {

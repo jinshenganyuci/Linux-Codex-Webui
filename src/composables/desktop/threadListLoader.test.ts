@@ -4,6 +4,7 @@ import type { UiProjectGroup, UiThread } from '../../types/codex'
 import {
   BACKGROUND_THREAD_PAGINATION_DELAY_MS,
   RECENT_THREAD_LIST_LOAD_REUSE_MS,
+  THREAD_ROOTS_WAIT_MS,
   createThreadListLoader,
   mergeThreadGroupPages,
   removeThreadFromGroups,
@@ -70,9 +71,7 @@ function createTimerEnvironment() {
 }
 
 async function flushMicrotasks(): Promise<void> {
-  await Promise.resolve()
-  await Promise.resolve()
-  await Promise.resolve()
+  for (let index = 0; index < 12; index += 1) await Promise.resolve()
 }
 
 function createOptions(
@@ -238,7 +237,7 @@ describe('createThreadListLoader', () => {
     expect(loader.hasRemaining()).toBe(false)
   })
 
-  it('pauses background pagination for active turns and stop clears the pending timer', async () => {
+  it('keeps background pagination available during active turns and stop clears the pending timer', async () => {
     const timerHarness = createTimerEnvironment()
     let loaded = false
     let active = true
@@ -254,7 +253,7 @@ describe('createThreadListLoader', () => {
 
     await loader.load()
     expect(loader.hasRemaining()).toBe(true)
-    expect(timerHarness.timers).toHaveLength(0)
+    expect(timerHarness.timers).toHaveLength(1)
 
     active = false
     loader.scheduleRemaining()
@@ -262,7 +261,7 @@ describe('createThreadListLoader', () => {
 
     loader.stop()
     expect(timerHarness.timers).toHaveLength(0)
-    expect(timerHarness.environment.clearTimeout).toHaveBeenCalledTimes(1)
+    expect(timerHarness.environment.clearTimeout).toHaveBeenCalled()
   })
 
   it('releases the load gate and loading state after a failed primary request', async () => {
@@ -286,4 +285,130 @@ describe('createThreadListLoader', () => {
     expect(fetchPage).toHaveBeenCalledTimes(2)
     expect(loadingStates).toEqual([true, false, true, false])
   })
+
+  it('does not let repeated forced first-page refreshes starve pagination or rewind its cursor', async () => {
+    const timers = createTimerEnvironment()
+    const fetchPage = vi.fn(async (cursor?: string | null) => page([], cursor === 'older-2' ? 'older-3' : 'older-2'))
+    const loader = createThreadListLoader(createOptions({ fetchPage, resolveEnvironment: () => timers.environment }))
+    await loader.load()
+    const originalTimer = timers.nextTimer()[0]
+    for (let index = 0; index < 5; index += 1) await loader.load({ force: true })
+    expect(timers.nextTimer()[0]).toBe(originalTimer)
+    timers.runNextTimer()
+    await flushMicrotasks()
+    expect(fetchPage).toHaveBeenLastCalledWith('older-2', 100)
+    await loader.load({ force: true })
+    timers.runNextTimer()
+    await flushMicrotasks()
+    expect(fetchPage).toHaveBeenLastCalledWith('older-3', 100)
+    // The deliberately repeated older-2 cursor is stopped, not polled forever.
+    expect(loader.hasRemaining()).toBe(false)
+    expect(timers.timers.size).toBe(0)
+  })
+
+  it('does not block the first page on title loading or directory hydration writes', async () => {
+    const title = deferred<void>()
+    const hydrate = deferred<void>()
+    const rows = [{ projectName: 'alpha', threads: [thread('ready', 'alpha', '2026-07-15T00:00:00Z')] }]
+    const applyGroups = vi.fn()
+    const loader = createThreadListLoader(createOptions({
+      fetchPage: async () => page(rows, null),
+      loadTitleCache: () => title.promise,
+      hydrateRootsState: () => hydrate.promise,
+      applyGroups,
+    }))
+    await loader.load()
+    expect(applyGroups).toHaveBeenCalledWith(rows, null)
+    title.resolve()
+    hydrate.resolve()
+    await flushMicrotasks()
+  })
+
+  it('bounds unknown roots, retains pending rows, and applies the actual filter state when roots arrive', async () => {
+    const timers = createTimerEnvironment()
+    const roots = deferred<WorkspaceRootsState | null>()
+    const rows = [{ projectName: 'alpha', threads: [thread('waiting', 'alpha', '2026-07-15T00:00:00Z')] }]
+    const applyGroups = vi.fn()
+    const applyPendingGroups = vi.fn()
+    const setRootsPending = vi.fn()
+    const loader = createThreadListLoader(createOptions({
+      fetchPage: async () => page(rows, null),
+      loadRootsState: () => roots.promise,
+      applyGroups, applyPendingGroups, setRootsPending,
+      resolveEnvironment: () => timers.environment,
+    }))
+    const loading = loader.load()
+    await flushMicrotasks()
+    expect(timers.nextTimer()[1].delayMs).toBe(THREAD_ROOTS_WAIT_MS)
+    timers.runNextTimer()
+    await loading
+    expect(applyGroups).not.toHaveBeenCalled()
+    expect(applyPendingGroups).toHaveBeenCalledWith(rows)
+    expect(setRootsPending).toHaveBeenLastCalledWith(true)
+    const state = { order: ['/tmp/allowed'], active: [], labels: {}, projectOrder: [] }
+    roots.resolve(state)
+    await flushMicrotasks()
+    expect(applyGroups).toHaveBeenLastCalledWith(rows, state)
+    expect(setRootsPending).toHaveBeenLastCalledWith(false)
+  })
+
+  it('does not resurrect deleted rows from an in-flight page or search results', async () => {
+    const timers = createTimerEnvironment()
+    const older = deferred<ThreadGroupsPage>()
+    const row = thread('deleted', 'alpha', '2026-07-15T00:00:00Z')
+    const applyGroups = vi.fn()
+    const fetchPage = vi.fn().mockResolvedValueOnce(page([], 'older')).mockReturnValueOnce(older.promise)
+    const loader = createThreadListLoader(createOptions({ fetchPage, applyGroups, resolveEnvironment: () => timers.environment }))
+    await loader.load()
+    timers.runNextTimer()
+    loader.removeThread(row.id)
+    older.resolve(page([{ projectName: 'alpha', threads: [row] }], null))
+    await flushMicrotasks()
+    loader.mergeThreads([row])
+    expect(applyGroups.mock.calls.at(-1)?.[0]).toEqual([])
+  })
+
+  it('invalidates primary and background responses after stop', async () => {
+    const primary = deferred<ThreadGroupsPage>()
+    const applyGroups = vi.fn()
+    const loader = createThreadListLoader(createOptions({ fetchPage: () => primary.promise, applyGroups }))
+    const loading = loader.load()
+    loader.stop()
+    primary.resolve(page([{ projectName: 'alpha', threads: [thread('late', 'alpha', '2026-07-15T00:00:00Z')] }], 'older'))
+    await loading
+    expect(applyGroups).not.toHaveBeenCalled()
+    expect(loader.hasRemaining()).toBe(false)
+
+    const timers = createTimerEnvironment()
+    const remaining = deferred<ThreadGroupsPage>()
+    const backgroundApply = vi.fn()
+    const otherLoader = createThreadListLoader(createOptions({
+      fetchPage: vi.fn().mockResolvedValueOnce(page([], 'older')).mockReturnValueOnce(remaining.promise),
+      applyGroups: backgroundApply, resolveEnvironment: () => timers.environment,
+    }))
+    await otherLoader.load()
+    timers.runNextTimer()
+    backgroundApply.mockClear()
+    otherLoader.stop()
+    remaining.resolve(page([{ projectName: 'alpha', threads: [thread('late', 'alpha', '2026-07-15T00:00:00Z')] }], 'next'))
+    await flushMicrotasks()
+    expect(backgroundApply).not.toHaveBeenCalled()
+    expect(timers.timers.size).toBe(0)
+  })
+
+  it('hydrates search rows while preserving the active page cursor', async () => {
+    const timers = createTimerEnvironment()
+    const fetchPage = vi.fn().mockResolvedValueOnce(page([], 'older')).mockResolvedValueOnce(page([], null))
+    const applyGroups = vi.fn()
+    const loader = createThreadListLoader(createOptions({ fetchPage, applyGroups, resolveEnvironment: () => timers.environment }))
+    await loader.load()
+    loader.mergeThreads([thread('found', 'alpha', '2026-07-15T00:00:00Z')])
+    expect(applyGroups.mock.calls.at(-1)?.[0]?.[0]?.threads?.[0]?.id).toBe('found')
+    expect(loader.hasRemaining()).toBe(true)
+    loader.loadMore()
+    await flushMicrotasks()
+    expect(fetchPage).toHaveBeenLastCalledWith('older', 100)
+    expect(applyGroups.mock.calls.at(-1)?.[0]?.[0]?.threads?.[0]?.id).toBe('found')
+  })
+
 })
