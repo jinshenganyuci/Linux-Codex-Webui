@@ -2,6 +2,7 @@ import { isServerRequestId, serverRequestIdentity, isBlockingServerRequest } fro
 import { spawn, spawnSync } from 'node:child_process'
 import { RuntimeCatalog, codexVersionFromUserAgent } from './runtimeCatalog.js'
 import { MethodCatalog } from './rpcMethodCatalog.js'
+import { PlanToolRuntimePolicy } from './planToolRuntime.js'
 import { ThreadIndexRecovery } from './threadIndexRecovery.js'
 import { createThreadSearchService } from './threadSearch.js'
 import { isVolatileRealtimeNotification } from '../nativeExtensions.js'
@@ -6582,6 +6583,10 @@ export class AppServerProcess {
   private readonly runtimeNotices = new RuntimeNoticeStore()
   private runtimeCommand = ''
   private runtimeUserAgent = ''
+  private readonly planToolRuntime = new PlanToolRuntimePolicy((summary) => {
+    console.warn(`[linux-codex-webui] ${summary}`)
+    this.emitLocalNotification('configWarning', { summary })
+  })
   private runtimeStartedAt = ''
   private runtimeHome = ''
   private readonly nativeThreadSettings = new Map<string, NativeThreadSettings>()
@@ -6694,6 +6699,7 @@ export class AppServerProcess {
     this.fastThreadListSupportPromise = null
     this.runtimeUserAgent = ''
     this.runtimeStartedAt = new Date().toISOString()
+    this.planToolRuntime.reset()
     this.runtimeHome = process.env.CODEX_HOME || join(homedir(), '.codex')
     const invocation = getSpawnInvocation(this.runtimeCommand, config.args)
     const spawnEnv = Object.keys(config.env).length > 0
@@ -6717,6 +6723,7 @@ export class AppServerProcess {
   private handleUnexpectedExit(generation: number): void {
     this.lifecycleEpoch++
     this.nativeThreadSettings.clear()
+    this.emitNotification({ method: 'codex-ui/runtime-stopped', params: {} }, generation)
     this.runtimeNotices.clear()
     const failure = new Error('codex app-server exited unexpectedly')
     for (const request of this.pending.values()) {
@@ -7489,7 +7496,12 @@ export class AppServerProcess {
     const threadId = method === 'turn/start' || method === 'thread/queue/start' ? this.extractThreadIdFromParams(params) : ''
     const pendingRuntimeTurnId = threadId ? this.threadRuntimeState?.beginTurn(threadId) ?? '' : ''
     try {
-      const result = await this.call(method, rpcParams)
+      const result = method === 'thread/start' || method === 'thread/resume'
+        ? await this.planToolRuntime.call(method, rpcParams, codexVersionFromUserAgent(this.runtimeUserAgent), (nativeMethod, nativeParams) => {
+          if (epoch !== this.lifecycleEpoch || !this.transport.running) throw new Error('Codex runtime changed during request initialization')
+          return this.call(nativeMethod, nativeParams)
+        })
+        : await this.call(method, rpcParams)
       this.threadRuntimeState?.observeRpcResult(method, params, result, pendingRuntimeTurnId)
       if (method === 'thread/start' || method === 'thread/resume') {
         const row = asRecord(result)
@@ -7588,6 +7600,7 @@ export class AppServerProcess {
         catalogStatus: this.runtimeCatalog.status,
       },
     }
+        planToolCompatibilityNotice: this.planToolRuntime.compatibilityNotice,
   }
 
   async getBundledModelCapabilities() {
@@ -7606,6 +7619,7 @@ export class AppServerProcess {
 
     this.nativeThreadSettings.clear()
     const generation = this.transport.stop()
+    this.emitNotification({ method: 'codex-ui/runtime-stopped', params: {} })
     this.initialized = false
     this.initializePromise = null
     this.activeConfigSignature = ''
