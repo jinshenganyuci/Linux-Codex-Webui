@@ -4232,3 +4232,45 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
   background: var(--progress-surface);
   border-color: var(--progress-divider);
 }
+
+.sidebar-history-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  margin: 0.45rem 0.8rem;
+  color: #596579;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.sidebar-history-status button {
+  border: 0;
+  border-radius: 0.4rem;
+  background: transparent;
+  color: #1767c7;
+  padding: 0.2rem 0.3rem;
+  cursor: pointer;
+}
+.sidebar-history-status button:hover {
+  background: #dceafa;
+}
+.sidebar-history-status button:focus-visible {
+  outline: 2px solid #1767c7;
+  outline-offset: 2px;
+}
+.sidebar-history-status button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+:root.dark .sidebar-history-status {
+  color: #a8b4c6;
+}
+:root.dark .sidebar-history-status button {
+  color: #80b7ff;
+}
+:root.dark .sidebar-history-status button:hover {
+  background: #23374e;
+}
+:root.dark .sidebar-history-status button:focus-visible {
+  outline-color: #80b7ff;
+}

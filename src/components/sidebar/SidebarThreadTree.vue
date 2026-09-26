@@ -24,6 +24,7 @@
         >
           <SidebarMenuRow
             class="thread-row"
+            :data-thread-id="thread.id"
             :data-active="thread.id === selectedThreadId"
             :data-pinned="isPinned(thread.id)"
             :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'"
@@ -128,6 +129,7 @@
         >
           <SidebarMenuRow
             class="thread-row"
+            :data-thread-id="thread.id"
             :data-active="thread.id === selectedThreadId"
             :data-pinned="isPinned(thread.id)"
             :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'"
@@ -291,6 +293,7 @@
       >
         <SidebarMenuRow
           class="thread-row"
+            :data-thread-id="thread.id"
           :data-active="thread.id === selectedThreadId"
           :data-pinned="isPinned(thread.id)"
           :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'"
@@ -486,6 +489,7 @@
             >
               <SidebarMenuRow
                 class="thread-row"
+            :data-thread-id="thread.id"
                 :data-active="thread.id === selectedThreadId"
                 :data-pinned="isPinned(thread.id)"
                 :data-menu-open="isThreadMenuOpen(thread.id) ? 'true' : 'false'"

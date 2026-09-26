@@ -55,6 +55,17 @@
             </button>
           </div>
 
+          <div v-if="!isSidebarCollapsed && sidebarSearchQuery.trim()" class="sidebar-history-status" data-testid="thread-search-status" role="status">
+            <span v-if="threadSearchError">{{ t('Search is temporarily unavailable. Current results are preserved.') }}</span>
+            <span v-else-if="threadSearchPending">{{ t('Finding conversations…') }}</span>
+            <span v-else-if="threadContentSearchState === 'loading'">{{ t('Searching conversation content') }} {{ threadContentSearchedCount }}/{{ threadContentThreadCount }}…</span>
+            <span v-else-if="threadContentSearchState === 'partial'">{{ t('Some conversation content was not fully searched. Open a conversation to keep looking.') }}<template v-if="threadContentSkippedCount"> {{ t('Large or unavailable conversations skipped:') }} {{ threadContentSkippedCount }}</template></span>
+            <span v-else-if="threadContentSearchState === 'error'">{{ t('Content search is temporarily unavailable. Current results are preserved.') }}</span>
+            <span v-else-if="threadContentSearchState === 'ready'">{{ t('Content searched in recent conversations:') }} {{ threadContentThreadCount }}</span>
+            <button v-if="threadSearchError || threadContentSearchState === 'error'" type="button" @click="retryThreadSearch">{{ t('Retry') }}</button>
+            <button v-else-if="!threadSearchIncludeContent" type="button" data-testid="search-thread-content" @click="includeThreadContentInSearch">{{ t('Search conversation content (latest 100)') }}</button>
+          </div>
+
           <button
             v-if="!isSidebarCollapsed"
             class="sidebar-skills-link"
@@ -102,6 +113,11 @@
               <span class="sidebar-skills-link-subtitle">{{ t('Scheduled work') }}</span>
             </span>
           </button>
+
+          <div v-if="!isSidebarCollapsed && (threadIndexStatusText || threadListWarning)" class="sidebar-history-status" data-testid="thread-index-status" role="status">
+            <span>{{ threadIndexStatusText || threadListWarning }}</span>
+            <button v-if="threadIndexCanRetry" type="button" :disabled="threadIndexRequestPending" data-testid="retry-history-sync" @click="refreshThreadIndexStatus(true)">{{ t('Retry sync') }}</button>
+          </div>
 
           <SidebarThreadTree ref="sidebarThreadTreeRef" :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
             :project-git-repo-by-name="projectGitRepoByName"
@@ -1108,6 +1124,7 @@ import {
   searchThreads,
   switchAccount,
 } from './api/codexGateway'
+import { getThreadIndexStatus, type ThreadIndexStatus, type ThreadSearchResult } from './api/projectGateway'
 import { REASONING_EFFORT_VALUES, type CodexPermissionMode, type ReasoningEffort, type SpeedMode, type UiAccountEntry, type UiRateLimitWindow, type UiServerRequest, type UiServerRequestReply, type UiThreadAutomation } from './types/codex'
 import type { ComposerDraftPayload, SubmitPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
 import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, TelegramStatus, ThreadTerminalQuickCommand, WorktreeBranchOption } from './api/codexGateway'
@@ -1210,6 +1227,9 @@ const {
   error: desktopError,
   refreshAll,
   loadThreads,
+  loadMoreThreads,
+  mergeSearchThreads,
+  threadListWarning,
   refreshSkills,
   selectThread,
   ensureThreadMessagesLoaded,
@@ -1342,6 +1362,33 @@ const settingsPanelRef = ref<HTMLElement | null>(null)
 const settingsButtonRef = ref<HTMLElement | null>(null)
 const serverMatchedThreadIds = ref<string[] | null>(null)
 let threadSearchTimer: ReturnType<typeof setTimeout> | null = null
+let threadSearchSequence = 0
+let threadSearchAbort: AbortController | null = null
+const threadSearchPending = ref(false)
+const threadSearchError = ref(false)
+const threadSearchIncludeContent = ref(false)
+const threadContentSearchState = ref<ThreadSearchResult['contentSearchState']>('idle')
+const threadContentSearchedCount = ref(0)
+const threadContentSkippedCount = ref(0)
+const threadContentThreadCount = ref(100)
+const threadIndexStatus = ref<ThreadIndexStatus | null>(null)
+const threadIndexRequestPending = ref(false)
+const threadIndexRequestFailed = ref(false)
+let threadIndexStatusTimer: ReturnType<typeof setTimeout> | null = null
+let historyUiDisposed = false
+const threadIndexStatusText = computed(() => {
+  if (threadIndexRequestFailed.value) return t('History sync status is temporarily unavailable.')
+  switch (threadIndexStatus.value?.state) {
+    case 'checking':
+    case 'repairing': return t('Conversation history is syncing. You can keep chatting.')
+    case 'paused': return t('History sync will continue shortly. You can keep chatting.')
+    case 'partial': return t('Some conversation history has not synced yet.')
+    case 'error': return t('Conversation history failed to sync.')
+    case 'unsupported': return t('Conversation history cannot sync automatically right now.')
+    default: return ''
+  }
+})
+const threadIndexCanRetry = computed(() => threadIndexRequestFailed.value || ['partial', 'error', 'unsupported'].includes(threadIndexStatus.value?.state ?? ''))
 let terminalKeyboardFocusFallbackTimer: ReturnType<typeof setTimeout> | null = null
 let sidebarScrollTop = 0
 let sidebarScrollRestoreRequestId = 0
@@ -1917,6 +1964,7 @@ onMounted(() => {
   applyDarkMode()
   darkModeMediaQuery?.addEventListener('change', applyDarkMode)
   void initialize()
+  void refreshThreadIndexStatus()
   void loadHomeDirectory()
   void loadFirstLaunchPluginsCardPreference()
   void loadWorkspaceRootOptionsState()
@@ -1938,6 +1986,9 @@ watch(visibleFeedbackErrors, (values, oldValues) => {
 })
 
 onUnmounted(() => {
+  historyUiDisposed = true
+  cancelThreadSearch()
+  if (threadIndexStatusTimer) clearTimeout(threadIndexStatusTimer)
   document.removeEventListener('pointerdown', onDocumentPointerDown)
   window.removeEventListener('keydown', onWindowKeyDown)
   document.removeEventListener('visibilitychange', onDocumentVisibilityChange)
@@ -1966,28 +2017,90 @@ function updateVisualViewportState(): void {
   visualViewportOffsetTop.value = window.visualViewport?.offsetTop ?? 0
 }
 
-watch(sidebarSearchQuery, (value) => {
-  const query = value.trim()
-  if (threadSearchTimer) {
-    clearTimeout(threadSearchTimer)
-    threadSearchTimer = null
-  }
-  if (!query) {
-    serverMatchedThreadIds.value = null
-    return
-  }
+function cancelThreadSearch(): void {
+  threadSearchSequence++
+  threadSearchAbort?.abort()
+  threadSearchAbort = null
+  if (threadSearchTimer) clearTimeout(threadSearchTimer)
+  threadSearchTimer = null
+  threadSearchPending.value = false
+}
 
-  threadSearchTimer = setTimeout(() => {
-    void searchThreads(query, 1000)
-      .then((result) => {
-        if (sidebarSearchQuery.value.trim() !== query) return
-        serverMatchedThreadIds.value = result.threadIds
-      })
-      .catch(() => {
-        if (sidebarSearchQuery.value.trim() !== query) return
-        serverMatchedThreadIds.value = null
-      })
-  }, 220)
+function requestThreadSearch(retryContent = false): void {
+  cancelThreadSearch()
+  const query = sidebarSearchQuery.value.trim()
+  if (!query || historyUiDisposed || document.visibilityState === 'hidden') return
+  const sequence = threadSearchSequence
+  const controller = new AbortController()
+  threadSearchAbort = controller
+  threadSearchPending.value = true
+  threadSearchError.value = false
+  void searchThreads(query, 1000, {
+    includeContent: threadSearchIncludeContent.value,
+    retryContent,
+    signal: controller.signal,
+  }).then((result) => {
+    if (sequence !== threadSearchSequence || historyUiDisposed) return
+    mergeSearchThreads(result.threads)
+    serverMatchedThreadIds.value = result.threadIds
+    threadContentSearchState.value = result.contentSearchState
+    threadContentSearchedCount.value = result.searchedContentCount
+    threadContentSkippedCount.value = result.skippedContentCount
+    threadContentThreadCount.value = result.contentThreadCount
+    if (result.contentSearchState === 'loading' || (threadSearchIncludeContent.value && result.contentSearchState === 'idle')) {
+      threadSearchTimer = setTimeout(() => requestThreadSearch(), 1000)
+    }
+  }).catch(() => {
+    if (sequence !== threadSearchSequence || historyUiDisposed) return
+    threadSearchError.value = true
+  }).finally(() => {
+    if (sequence === threadSearchSequence) threadSearchPending.value = false
+  })
+}
+
+function includeThreadContentInSearch(): void {
+  threadSearchIncludeContent.value = true
+  requestThreadSearch()
+}
+
+function retryThreadSearch(): void {
+  requestThreadSearch(threadSearchIncludeContent.value)
+}
+
+async function refreshThreadIndexStatus(repair = false): Promise<void> {
+  if (threadIndexRequestPending.value || historyUiDisposed) return
+  if (threadIndexStatusTimer) clearTimeout(threadIndexStatusTimer)
+  threadIndexRequestPending.value = true
+  try {
+    const status = await getThreadIndexStatus(repair)
+    if (historyUiDisposed) return
+    threadIndexStatus.value = status
+    threadIndexRequestFailed.value = false
+  } catch {
+    if (!historyUiDisposed) threadIndexRequestFailed.value = true
+  } finally {
+    threadIndexRequestPending.value = false
+    if (!historyUiDisposed) {
+      const busy = ['idle', 'checking', 'repairing', 'paused'].includes(threadIndexStatus.value?.state ?? '')
+      threadIndexStatusTimer = setTimeout(() => {
+        if (document.visibilityState === 'hidden') {
+          // Hidden tabs do not poll; the next focus refreshes state.
+          threadIndexStatusTimer = null
+          return
+        }
+        void refreshThreadIndexStatus()
+      }, busy ? 2000 : 60_000)
+    }
+  }
+}
+
+watch(sidebarSearchQuery, (value) => {
+  cancelThreadSearch()
+  threadSearchError.value = false
+  threadSearchIncludeContent.value = false
+  threadContentSearchState.value = 'idle'
+  serverMatchedThreadIds.value = null
+  if (value.trim()) threadSearchTimer = setTimeout(() => requestThreadSearch(), 220)
 })
 
 watch(isVirtualKeyboardOpen, (open) => {
@@ -2147,6 +2260,9 @@ function onSidebarScroll(event?: Event): void {
   const target = event?.currentTarget
   const container = target instanceof HTMLElement ? target : getSidebarScrollableElement()
   sidebarScrollTop = container?.scrollTop ?? sidebarScrollTop
+  if (container && !sidebarSearchQuery.value.trim() && container.scrollHeight - container.scrollTop - container.clientHeight < 180) {
+    loadMoreThreads()
+  }
 }
 
 function restoreSidebarScrollPosition(): void {
@@ -3070,6 +3186,8 @@ function onWindowPageShow(event: PageTransitionEvent): void {
 }
 
 function onWindowFocus(): void {
+  if (!threadIndexStatusTimer) void refreshThreadIndexStatus()
+  if (sidebarSearchQuery.value.trim() && !threadSearchPending.value) requestThreadSearch()
   if (route.name === 'home') {
     void loadWorkspaceRootOptionsState()
     void refreshDefaultProjectName()
@@ -4040,6 +4158,7 @@ async function initialize(): Promise<void> {
 
   await refreshAll({
     includeSelectedThreadMessages: route.name === 'thread',
+    awaitThreadList: false,
   })
   void loadAccountsState({ silent: true })
   await applyLaunchProjectPathFromUrl()

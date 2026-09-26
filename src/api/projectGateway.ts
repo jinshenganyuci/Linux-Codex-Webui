@@ -1,3 +1,6 @@
+import type { UiThread } from '../types/codex'
+import type { ThreadListResponse } from './appServerDtos'
+import { normalizeThreadGroupsV2 } from './normalizers/v2'
 import { normalizePathForUi } from '../pathUtils.js'
 import { fetchWithTimeout, requestWithTimeout } from './requestClient'
 
@@ -21,6 +24,23 @@ export type ComposerFileSuggestion = {
 export type ThreadSearchResult = {
   threadIds: string[]
   indexedThreadCount: number
+  threads: UiThread[]
+  contentSearchState: 'idle' | 'loading' | 'ready' | 'partial' | 'error'
+  searchedContentCount: number
+  skippedContentCount: number
+  contentThreadCount: number
+}
+
+export type ThreadIndexStatus = {
+  state: 'idle' | 'checking' | 'repairing' | 'paused' | 'ready' | 'partial' | 'error' | 'unsupported'
+  lastCheckedAt: string | null
+  scannedFiles: number
+  indexedThreads: number
+  missingThreads: number
+  repairedThreads: number
+  failedThreads: number
+  truncated: boolean
+  error: string | null
 }
 
 export type LocalDirectoryEntry = {
@@ -454,15 +474,37 @@ export async function searchComposerFiles(cwd: string, query: string, limit = 20
   return suggestions
 }
 
-export async function searchThreads(query: string, limit = 200): Promise<ThreadSearchResult> {
+export async function searchThreads(query: string, limit = 200, options: {
+  includeContent?: boolean
+  retryContent?: boolean
+  signal?: AbortSignal
+} = {}): Promise<ThreadSearchResult> {
   const response = await fetchWithTimeout('/codex-api/thread-search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, limit }),
-  })
-  const payload = (await response.json()) as { data?: ThreadSearchResult; error?: string }
+    body: JSON.stringify({ query, limit, includeContent: options.includeContent === true, retryContent: options.retryContent === true }),
+  }, { signal: options.signal })
+  const payload = (await response.json()) as { data?: Omit<ThreadSearchResult, 'threads'> & { threads?: ThreadListResponse['data'] }; error?: string }
   if (!response.ok) {
     throw new Error(payload.error || 'Failed to search threads')
   }
-  return payload.data ?? { threadIds: [], indexedThreadCount: 0 }
+  const data = payload.data
+  return {
+    threadIds: data?.threadIds ?? [],
+    indexedThreadCount: data?.indexedThreadCount ?? 0,
+    threads: normalizeThreadGroupsV2({ data: data?.threads ?? [], nextCursor: null }).flatMap(group => group.threads),
+    contentSearchState: data?.contentSearchState ?? 'idle',
+    searchedContentCount: data?.searchedContentCount ?? 0,
+    skippedContentCount: data?.skippedContentCount ?? 0,
+    contentThreadCount: data?.contentThreadCount ?? 100,
+  }
+}
+
+export async function getThreadIndexStatus(repair = false): Promise<ThreadIndexStatus> {
+  const response = await fetchWithTimeout(`/codex-api/thread-index/${repair ? 'repair' : 'status'}`, {
+    method: repair ? 'POST' : 'GET',
+  })
+  const payload = await response.json() as { data?: ThreadIndexStatus; error?: string }
+  if (!response.ok || !payload.data) throw new Error(payload.error || 'Failed to synchronize conversation history')
+  return payload.data
 }

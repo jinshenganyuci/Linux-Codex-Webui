@@ -166,4 +166,42 @@ describe('project gateway facade contract', () => {
 
     await expect(openProjectRoot('/missing')).rejects.toThrow('project root message')
   })
+  it('returns renderable older search summaries while preserving content search progress', async () => {
+    const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) => jsonResponse({ data: {
+      threadIds: ['older'], indexedThreadCount: 123,
+      threads: [{ id: 'older', name: 'Recovered title', preview: 'Question', cwd: '/workspace/project', updatedAt: 100, createdAt: 50 }],
+      contentSearchState: 'loading', searchedContentCount: 4, skippedContentCount: 2, contentThreadCount: 100,
+    } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { searchThreads } = await import('./projectGateway')
+    const result = await searchThreads('Recovered', 1000, { includeContent: true })
+    expect(result.threads[0]).toMatchObject({ id: 'older', title: 'Recovered title', cwd: '/workspace/project' })
+    expect(result.threads[0]?.updatedAtIso).toBe(new Date(100_000).toISOString())
+    expect(result).toMatchObject({ threadIds: ['older'], contentSearchState: 'loading', searchedContentCount: 4, skippedContentCount: 2 })
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toMatchObject({ includeContent: true, retryContent: false })
+  })
+
+  it('aborts a search when the caller clears or replaces its query', async () => {
+    vi.stubGlobal('fetch', vi.fn((_input: unknown, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
+    })))
+    const { searchThreads } = await import('./projectGateway')
+    const controller = new AbortController()
+    const pending = searchThreads('old query', 100, { signal: controller.signal })
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' })
+  })
+
+  it('requests history repair without waiting for repair completion', async () => {
+    const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) => jsonResponse({ data: {
+      state: 'checking', lastCheckedAt: null, scannedFiles: 0, indexedThreads: 0,
+      missingThreads: 0, repairedThreads: 0, failedThreads: 0, truncated: false, error: null,
+    } }, 202))
+    vi.stubGlobal('fetch', fetchMock)
+    const { getThreadIndexStatus } = await import('./projectGateway')
+    expect((await getThreadIndexStatus(true)).state).toBe('checking')
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/codex-api/thread-index/repair')
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('POST')
+  })
+
 })

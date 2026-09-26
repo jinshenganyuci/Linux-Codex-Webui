@@ -5,6 +5,21 @@ export type UiLanguage = 'en' | 'zh-CN'
 const UI_LANGUAGE_STORAGE_KEY = 'codex-web-local.ui-language.v1'
 
 const zhCN: Record<string, string> = {
+  'Large or unavailable conversations skipped:': '已跳过较大或暂不可读取的聊天：',
+  'Content searched in recent conversations:': '已搜索最近聊天内容，聊天数量：',
+  'Searching conversation content': '正在搜索聊天内容',
+  'Conversation history cannot sync automatically right now.': '历史聊天暂时无法自动同步。',
+  'Conversation history failed to sync.': '历史聊天同步失败。',
+  'Some conversation history has not synced yet.': '部分历史聊天尚未同步。',
+  'History sync will continue shortly. You can keep chatting.': '历史同步稍后继续，可以正常聊天。',
+  'Conversation history is syncing. You can keep chatting.': '历史聊天正在同步，可以继续聊天。',
+  'History sync status is temporarily unavailable.': '历史同步状态暂时无法获取。',
+  'Retry sync': '重试同步',
+  'Search conversation content (latest 100)': '搜索聊天内容（最近 100 个）',
+  'Content search is temporarily unavailable. Current results are preserved.': '内容搜索暂时失败，已保留当前结果。',
+  'Some conversation content was not fully searched. Open a conversation to keep looking.': '部分聊天内容未完整搜索，可打开聊天继续查找。',
+  'Finding conversations…': '正在查找聊天…',
+  'Search is temporarily unavailable. Current results are preserved.': '搜索暂时失败，已保留当前结果。',
   'English': 'English',
   'Simplified Chinese': '简体中文',
   'Search threads': '搜索线程',
