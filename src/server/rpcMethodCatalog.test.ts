@@ -43,13 +43,15 @@ describe('RPC schema catalog', () => {
     let supported = false
     const generate = vi.fn(async (_command: string, directory: string) => {
       const root = JSON.parse(schema(['thread/list']))
-      root.definitions = { ThreadListParams: { properties: supported ? { ancestorThreadId: { type: 'string' } } : {} } }
+      root.definitions = { ThreadListParams: { properties: supported ? { ancestorThreadId: { type: 'string' }, useStateDbOnly: { type: 'boolean' } } : {} } }
       await writeFile(join(directory, 'ClientRequest.json'), JSON.stringify(root))
       await writeFile(join(directory, 'ServerNotification.json'), schema([]))
     })
     const catalog = new MethodCatalog(generate, async () => ({ command: 'codex', key: String(supported) }))
     expect(await catalog.supportsDescendantThreads()).toBe(false)
+    expect(await catalog.supportsFastThreadList()).toBe(false)
     supported = true
     expect(await catalog.supportsDescendantThreads()).toBe(true)
+    expect(await catalog.supportsFastThreadList()).toBe(true)
   })
 })

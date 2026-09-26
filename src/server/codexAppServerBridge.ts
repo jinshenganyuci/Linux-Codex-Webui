@@ -2,6 +2,8 @@ import { isServerRequestId, serverRequestIdentity, isBlockingServerRequest } fro
 import { spawn, spawnSync } from 'node:child_process'
 import { RuntimeCatalog, codexVersionFromUserAgent } from './runtimeCatalog.js'
 import { MethodCatalog } from './rpcMethodCatalog.js'
+import { ThreadIndexRecovery } from './threadIndexRecovery.js'
+import { createThreadSearchService } from './threadSearch.js'
 import { isVolatileRealtimeNotification } from '../nativeExtensions.js'
 import { createThreadDeletion } from './threadDeletion.js'
 import { createExtensionInfoReader, NativeRealtimeSessions, RealtimeSessionConflict } from './nativeExtensionRuntime.js'
@@ -169,18 +171,6 @@ type ChatgptAuthTokensRefreshResponse = {
   chatgptPlanType: string | null
 }
 
-type ThreadSearchDocument = {
-  id: string
-  title: string
-  preview: string
-  messageText: string
-  searchableText: string
-}
-
-type ThreadSearchIndex = {
-  docsById: Map<string, ThreadSearchDocument>
-}
-
 type ProviderModelsResponse = {
   data: string[]
   providerId: string
@@ -293,7 +283,6 @@ const THREAD_COMMAND_OUTPUT_ITEM_PAGE_LIMIT = 100
 const THREAD_COMMAND_OUTPUT_MAX_PAGES = 16
 const THREAD_METHODS_WITH_THREAD_SNAPSHOT = new Set([...THREAD_METHODS_WITH_TURNS, 'thread/start'])
 const THREAD_METHODS_WITH_SESSION_SKILL_RECOVERY = new Set([...THREAD_METHODS_WITH_TURNS, 'thread/turns/list'])
-const THREAD_SEARCH_FULL_TEXT_THREAD_LIMIT = 100
 const PROJECTLESS_THREAD_DIRECTORY_MAX_ATTEMPTS = 100
 const PROJECTLESS_THREAD_READABLE_DIRECTORY_ATTEMPTS = 20
 const PROJECTLESS_THREAD_SLUG_MAX_LENGTH = 80
@@ -1835,151 +1824,6 @@ function readImportedSessionRecord(raw: string, path: string, cwd: string, fallb
   return { id, path, cwd, title, createdAtMs, updatedAtMs, model, modelProvider, cliVersion, firstUserMessage }
 }
 
-function sqlString(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`
-}
-
-function ensureImportedThreadsStateDbTable(stateDbPath: string): boolean {
-  const sql = `
-CREATE TABLE IF NOT EXISTS threads (
-  id TEXT PRIMARY KEY,
-  rollout_path TEXT,
-  created_at INTEGER,
-  updated_at INTEGER,
-  source TEXT,
-  model TEXT,
-  model_provider TEXT,
-  cwd TEXT,
-  title TEXT,
-  sandbox_policy TEXT,
-  approval_mode TEXT,
-  tokens_used INTEGER,
-  has_user_event INTEGER,
-  archived INTEGER,
-  archived_at INTEGER,
-  git_sha TEXT,
-  git_branch TEXT,
-  git_origin_url TEXT,
-  cli_version TEXT,
-  first_user_message TEXT,
-  created_at_ms INTEGER,
-  updated_at_ms INTEGER,
-  thread_source TEXT,
-  preview TEXT
-);`
-  const result = spawnSync('sqlite3', [stateDbPath, sql], { encoding: 'utf8' })
-  if (result.status !== 0) {
-    console.warn('[project-import] failed to initialize state database', result.stderr || result.stdout)
-    return false
-  }
-  return true
-}
-
-function buildImportedSessionStateDbValues(session: ImportedSessionRecord): Record<string, string> {
-  const title = session.title || session.firstUserMessage || 'Imported chat'
-  const createdAt = Math.floor(session.createdAtMs / 1000)
-  const updatedAt = Math.floor(session.updatedAtMs / 1000)
-  const sandboxPolicy = JSON.stringify({ type: 'workspace-write', network_access: true })
-  return {
-    id: sqlString(session.id),
-    rollout_path: sqlString(session.path),
-    created_at: String(createdAt),
-    updated_at: String(updatedAt),
-    source: "'cli'",
-    model: sqlString(session.model),
-    model_provider: sqlString(session.modelProvider),
-    cwd: sqlString(session.cwd),
-    title: sqlString(title),
-    sandbox_policy: sqlString(sandboxPolicy),
-    approval_mode: "'on-request'",
-    tokens_used: '0',
-    has_user_event: '1',
-    archived: '0',
-    archived_at: 'NULL',
-    git_sha: 'NULL',
-    git_branch: 'NULL',
-    git_origin_url: 'NULL',
-    cli_version: sqlString(session.cliVersion),
-    first_user_message: sqlString(session.firstUserMessage),
-    created_at_ms: String(Math.trunc(session.createdAtMs)),
-    updated_at_ms: String(Math.trunc(session.updatedAtMs)),
-    thread_source: "'user'",
-    preview: sqlString(title),
-  }
-}
-
-function registerImportedSessionsInStateDb(sessions: ImportedSessionRecord[]): void {
-  if (sessions.length === 0) return
-  const stateDbPath = join(getCodexHomeDir(), 'state_5.sqlite')
-  if (!ensureImportedThreadsStateDbTable(stateDbPath)) return
-  const columnsResult = spawnSync('sqlite3', [stateDbPath, 'PRAGMA table_info(threads);'], { encoding: 'utf8' })
-  if (columnsResult.status !== 0) {
-    console.warn('[project-import] failed to inspect state database', columnsResult.stderr || columnsResult.stdout)
-    return
-  }
-  const availableColumns = new Set(columnsResult.stdout
-    .split(/\r?\n/u)
-    .map((line) => line.split('|')[1])
-    .filter((value): value is string => Boolean(value)))
-  const values = buildImportedSessionStateDbValues(sessions[0])
-  const columns = Object.keys(values).filter((column) => availableColumns.has(column))
-  const inserts = sessions.map((session) => {
-    const sessionValues = buildImportedSessionStateDbValues(session)
-    return `INSERT OR REPLACE INTO threads (${columns.join(', ')}) VALUES (${columns.map((column) => sessionValues[column]).join(', ')});`
-  })
-  const sql = ['BEGIN;', ...inserts, 'COMMIT;'].join('\n')
-  const result = spawnSync('sqlite3', [stateDbPath, sql], { encoding: 'utf8' })
-  if (result.status !== 0) {
-    console.warn('[project-import] failed to register imported sessions in state database', result.stderr || result.stdout)
-  }
-}
-
-function listImportedThreadsFromStateDb(): Array<Record<string, unknown>> {
-  const stateDbPath = join(getCodexHomeDir(), 'state_5.sqlite')
-  if (!existsSync(stateDbPath)) return []
-  const sql = `
-SELECT id, rollout_path, created_at, updated_at, source, model_provider, cwd, title,
-       cli_version, first_user_message, archived
-FROM threads
-WHERE archived = 0 AND replace(rollout_path, '\\', '/') LIKE '%/sessions/%' AND id IN (
-  SELECT id FROM threads WHERE first_user_message != '' OR title != ''
-)
-ORDER BY updated_at DESC
-LIMIT 200;
-`
-  const result = spawnSync('sqlite3', ['-json', stateDbPath, sql], { encoding: 'utf8' })
-  if (result.status !== 0 || !result.stdout.trim()) return []
-  try {
-    const rows = JSON.parse(result.stdout) as unknown
-    if (!Array.isArray(rows)) return []
-    return rows.flatMap((row) => {
-      const record = asRecord(row)
-      const id = readNonEmptyString(record?.id)
-      const path = readNonEmptyString(record?.rollout_path)
-      const cwd = readNonEmptyString(record?.cwd)
-      if (!id || !path || !cwd) return []
-      const title = readNonEmptyString(record?.title) || readNonEmptyString(record?.first_user_message) || 'Imported chat'
-      const createdAt = typeof record?.created_at === 'number' ? record.created_at : Math.floor(Date.now() / 1000)
-      const updatedAt = typeof record?.updated_at === 'number' ? record.updated_at : createdAt
-      return [{
-        id,
-        preview: title,
-        modelProvider: readNonEmptyString(record?.model_provider) || 'openai',
-        createdAt,
-        updatedAt,
-        path,
-        cwd,
-        cliVersion: readNonEmptyString(record?.cli_version),
-        source: 'cli',
-        gitInfo: null,
-        turns: [],
-      }]
-    })
-  } catch {
-    return []
-  }
-}
-
 function readStateDbThreadExportMetadata(): Map<string, ExportedThreadMetadata> {
   const stateDbPath = join(getCodexHomeDir(), 'state_5.sqlite')
   if (!existsSync(stateDbPath)) return new Map()
@@ -2026,38 +1870,6 @@ ${archivedPredicate};
     return metadata
   } catch {
     return new Map()
-  }
-}
-
-function mergeImportedThreadsIntoThreadListResult(result: unknown): unknown {
-  const record = asRecord(result)
-  const data = Array.isArray(record?.data) ? record.data : null
-  if (!record || !data) return result
-  const importedById = new Map<string, Record<string, unknown>>()
-  for (const thread of listImportedThreadsFromStateDb()) {
-    const id = readNonEmptyString(thread.id)
-    if (id) importedById.set(id, thread)
-  }
-  if (importedById.size === 0) return result
-  const mergedData: unknown[] = []
-  for (const item of data) {
-    const id = readNonEmptyString(asRecord(item)?.id)
-    const imported = id ? importedById.get(id) : undefined
-    if (imported) {
-      mergedData.push({ ...asRecord(item), ...imported })
-      importedById.delete(id)
-    } else {
-      mergedData.push(item)
-    }
-  }
-  mergedData.push(...importedById.values())
-  return {
-    ...record,
-    data: mergedData.sort((a, b) => {
-      const aUpdated = typeof asRecord(a)?.updatedAt === 'number' ? asRecord(a)?.updatedAt as number : 0
-      const bUpdated = typeof asRecord(b)?.updatedAt === 'number' ? asRecord(b)?.updatedAt as number : 0
-      return bUpdated - aUpdated
-    }),
   }
 }
 
@@ -2185,7 +1997,7 @@ function parseStoredProjectZip(buffer: Buffer): ParsedProjectZipEntry[] {
   return entries
 }
 
-async function importProjectZip(buffer: Buffer, destinationParent: string): Promise<{ projectPath: string; importedSessions: number }> {
+async function importProjectZip(buffer: Buffer, destinationParent: string): Promise<{ projectPath: string; importedSessions: number; importedThreadIds: string[] }> {
   const entries = parseStoredProjectZip(buffer)
   const manifestEntry = entries.find((entry) => entry.path === '.codex-project/manifest.json' && !entry.isDirectory)
   let projectName = 'imported-project'
@@ -2247,9 +2059,10 @@ async function importProjectZip(buffer: Buffer, destinationParent: string): Prom
     })
     .sort((first, second) => second.updatedAtMs - first.updatedAtMs)
 
-  for (const [index, chatEntry] of chatEntries.entries()) {
+  for (const chatEntry of chatEntries) {
     const importedThreadId = randomUUID()
-    const target = join(importedSessionsRoot, 'imported', `${String(index + 1).padStart(6, '0')}-${importedThreadId}.jsonl`)
+    const timestamp = new Date(chatEntry.sourceRecord.createdAtMs).toISOString()
+    const target = join(importedSessionsRoot, timestamp.slice(0, 4), timestamp.slice(5, 7), timestamp.slice(8, 10), `rollout-${timestamp.slice(0, 19).replace(/:/g, '-')}-${importedThreadId}.jsonl`)
     await mkdir(dirname(target), { recursive: true })
     const importedSessionRaw = rewriteImportedSession(chatEntry.sourceSessionRaw, projectPath, importedThreadId)
     await writeFile(target, importedSessionRaw, 'utf8')
@@ -2267,7 +2080,6 @@ async function importProjectZip(buffer: Buffer, destinationParent: string): Prom
     }
     importedSessions += 1
   }
-  registerImportedSessionsInStateDb(importedSessionRecords)
 
   for (const entry of entries) {
     if (entry.path.startsWith('.codex-project/chats/')) {
@@ -2284,7 +2096,7 @@ async function importProjectZip(buffer: Buffer, destinationParent: string): Prom
   }
 
   await persistWorkspaceRoot(projectPath, projectName)
-  return { projectPath, importedSessions }
+  return { projectPath, importedSessions, importedThreadIds: importedSessionRecords.map(session => session.id) }
 }
 
 function logProviderModelDiscoveryWarning(message: string, details: Record<string, unknown>): void {
@@ -2598,44 +2410,6 @@ async function readProviderModelIdsForProvider(
   }
 
   return readProviderBackedModelIds(appServer)
-}
-
-function extractThreadMessageText(threadReadPayload: unknown): string {
-  const payload = asRecord(threadReadPayload)
-  const thread = asRecord(payload?.thread)
-  const turns = Array.isArray(thread?.turns) ? thread.turns : []
-  const parts: string[] = []
-
-  for (const turn of turns) {
-    const turnRecord = asRecord(turn)
-    const items = Array.isArray(turnRecord?.items) ? turnRecord.items : []
-    for (const item of items) {
-      const itemRecord = asRecord(item)
-      const type = typeof itemRecord?.type === 'string' ? itemRecord.type : ''
-      if (type === 'agentMessage' && typeof itemRecord?.text === 'string' && itemRecord.text.trim().length > 0) {
-        parts.push(itemRecord.text.trim())
-        continue
-      }
-      if (type === 'userMessage') {
-        const content = Array.isArray(itemRecord?.content) ? itemRecord.content : []
-        for (const block of content) {
-          const blockRecord = asRecord(block)
-          if (blockRecord?.type === 'text' && typeof blockRecord.text === 'string' && blockRecord.text.trim().length > 0) {
-            parts.push(blockRecord.text.trim())
-          }
-        }
-        continue
-      }
-      if (type === 'commandExecution') {
-        const command = typeof itemRecord?.command === 'string' ? itemRecord.command.trim() : ''
-        const output = typeof itemRecord?.aggregatedOutput === 'string' ? itemRecord.aggregatedOutput.trim() : ''
-        if (command) parts.push(command)
-        if (output) parts.push(output)
-      }
-    }
-  }
-
-  return parts.join('\n').trim()
 }
 
 function extractLastAgentMessage(threadReadPayload: unknown, maxBytes = 64 * 1024): { text: string; truncated: boolean } {
@@ -4454,16 +4228,6 @@ function mergeSessionCommandsIntoTurns(turns: unknown[], sessionLogRaw: string):
       items: interleaved,
     }
   })
-}
-
-function isExactPhraseMatch(query: string, doc: ThreadSearchDocument): boolean {
-  const q = query.trim().toLowerCase()
-  if (!q) return false
-  return (
-    doc.title.toLowerCase().includes(q) ||
-    doc.preview.toLowerCase().includes(q) ||
-    doc.messageText.toLowerCase().includes(q)
-  )
 }
 
 function scoreFileCandidate(path: string, query: string): number {
@@ -6784,7 +6548,10 @@ const MERGEABLE_ITEM_TYPES = new Set([
 export class AppServerProcess {
   private readonly transport: AppServerJsonlTransportLike
   private initialized = false
+  private lifecycleEpoch = 0
   private initializePromise: Promise<void> | null = null
+  private fastThreadListSupportPromise: Promise<boolean> | null = null
+  private readonly methodCatalog = new MethodCatalog()
   private nextId = 1
   private pendingConfigRestart = false
   private readonly pending = new Map<number, { generation: number; resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
@@ -6823,6 +6590,7 @@ export class AppServerProcess {
     private readonly threadRuntimeState: ThreadRuntimeState | null = null,
     private readonly agentProgressTracker: AgentProgressTracker = new AgentProgressTracker(),
     transportFactory: AppServerJsonlTransportFactory = (emit) => new AppServerJsonlTransport(emit),
+    private readonly detectFastThreadList: () => Promise<boolean> = () => this.methodCatalog.supportsFastThreadList(),
   ) {
     this.transport = transportFactory((event) => this.handleTransportEvent(event))
   }
@@ -6893,6 +6661,10 @@ export class AppServerProcess {
     return this.shouldDeferConfigRestart()
   }
 
+  hasPendingRpc(): boolean { return this.pending.size > 0 }
+
+  hasActiveTurns(): boolean { return this.activeTurnThreadIds.size > 0 || this.optimisticTurnThreadIds.size > 0 }
+
   isThreadBusy(threadId: string): boolean {
     return this.activeTurnThreadIds.has(threadId) || this.optimisticTurnThreadIds.has(threadId)
       || this.listPendingServerRequests().some(request => extractThreadIdFromNotificationParams(request.params) === threadId)
@@ -6919,6 +6691,7 @@ export class AppServerProcess {
     const config = this.buildAppServerConfig()
     this.activeConfigSignature = this.getAppServerConfigSignature(config)
     this.runtimeCommand = this.getCodexCommand()
+    this.fastThreadListSupportPromise = null
     this.runtimeUserAgent = ''
     this.runtimeStartedAt = new Date().toISOString()
     this.runtimeHome = process.env.CODEX_HOME || join(homedir(), '.codex')
@@ -6942,6 +6715,7 @@ export class AppServerProcess {
   }
 
   private handleUnexpectedExit(generation: number): void {
+    this.lifecycleEpoch++
     this.nativeThreadSettings.clear()
     this.runtimeNotices.clear()
     const failure = new Error('codex app-server exited unexpectedly')
@@ -7680,15 +7454,38 @@ export class AppServerProcess {
     await this.initializePromise
   }
 
+  supportsFastThreadList(): Promise<boolean> {
+    if (!this.fastThreadListSupportPromise) {
+      // Resolve the CLI/schema once per child generation, never on each list.
+      this.fastThreadListSupportPromise = this.detectFastThreadList().catch(() => false)
+    }
+    return this.fastThreadListSupportPromise
+  }
+
+  /** Initialize once at server startup, without waiting for a browser request. */
+  async warmup(): Promise<void> {
+    const epoch = this.lifecycleEpoch
+    await this.ensureInitialized()
+    if (epoch !== this.lifecycleEpoch) throw new Error('Codex runtime stopped during startup initialization')
+    await this.rpc('thread/list', { limit: 50, archived: false, modelProviders: [], sortKey: 'updated_at' })
+  }
+
   async rpc(method: string, params: unknown): Promise<unknown> {
     this.disposeIfConfigChanged()
+    const epoch = this.lifecycleEpoch
     await this.ensureInitialized()
+    if (epoch !== this.lifecycleEpoch) throw new Error('Codex runtime changed during request initialization')
     // Listing is a metadata read. The native default also scans JSONL rollouts
     // to repair metadata on every request (hundreds of MB for a full history).
     // Keep that maintenance path explicit; normal reads use Codex's live index.
-    const rpcParams = method === 'thread/list'
-      ? { ...asRecord(params), useStateDbOnly: asRecord(params)?.useStateDbOnly !== false }
-      : params
+    let rpcParams = params
+    if (method === 'thread/list') {
+      const { useStateDbOnly, ...listParams } = asRecord(params) ?? {}
+      rpcParams = await this.supportsFastThreadList()
+        ? { ...listParams, useStateDbOnly: useStateDbOnly !== false }
+        : listParams
+    }
+    if (epoch !== this.lifecycleEpoch || !this.transport.running) throw new Error('Codex runtime changed during request initialization')
     const threadId = method === 'turn/start' || method === 'thread/queue/start' ? this.extractThreadIdFromParams(params) : ''
     const pendingRuntimeTurnId = threadId ? this.threadRuntimeState?.beginTurn(threadId) ?? '' : ''
     try {
@@ -7803,6 +7600,8 @@ export class AppServerProcess {
   }
 
   dispose(): void {
+    this.lifecycleEpoch++
+    this.fastThreadListSupportPromise = null
     if (!this.transport.running) return
 
     this.nativeThreadSettings.clear()
@@ -8382,83 +8181,7 @@ function getSharedBridgeState(): SharedBridgeState {
   return created
 }
 
-async function loadAllThreadsForSearch(appServer: AppServerProcess): Promise<ThreadSearchDocument[]> {
-  const threads: Array<{ id: string; title: string; preview: string }> = []
-  let cursor: string | null = null
-
-  do {
-    const response = asRecord(await appServer.rpc('thread/list', {
-      archived: false,
-      limit: 100,
-      sortKey: 'updated_at',
-      modelProviders: [],
-      cursor,
-    }))
-    const data = Array.isArray(response?.data) ? response.data : []
-    for (const row of data) {
-      const record = asRecord(row)
-      const id = typeof record?.id === 'string' ? record.id : ''
-      if (!id) continue
-      const title = typeof record?.name === 'string' && record.name.trim().length > 0
-        ? record.name.trim()
-        : (typeof record?.preview === 'string' && record.preview.trim().length > 0 ? record.preview.trim() : 'Untitled thread')
-      const preview = typeof record?.preview === 'string' ? record.preview : ''
-      threads.push({ id, title, preview })
-    }
-    cursor = typeof response?.nextCursor === 'string' && response.nextCursor.length > 0 ? response.nextCursor : null
-  } while (cursor)
-
-  const docs: ThreadSearchDocument[] = threads.map((thread) => {
-    const searchableText = [thread.title, thread.preview].filter(Boolean).join('\n')
-    return {
-      id: thread.id,
-      title: thread.title,
-      preview: thread.preview,
-      messageText: '',
-      searchableText,
-    } satisfies ThreadSearchDocument
-  })
-
-  const docsById = new Map<string, ThreadSearchDocument>(docs.map((doc) => [doc.id, doc]))
-  const fullTextThreads = threads.slice(0, THREAD_SEARCH_FULL_TEXT_THREAD_LIMIT)
-  const concurrency = 4
-  for (let offset = 0; offset < fullTextThreads.length; offset += concurrency) {
-    const batch = fullTextThreads.slice(offset, offset + concurrency)
-    const loaded = await Promise.all(batch.map(async (thread) => {
-      try {
-        const readResponse = await appServer.rpc('thread/read', {
-          threadId: thread.id,
-          includeTurns: true,
-        })
-        const messageText = extractThreadMessageText(readResponse)
-        const searchableText = [thread.title, thread.preview, messageText].filter(Boolean).join('\n')
-        return [thread.id, {
-          id: thread.id,
-          title: thread.title,
-          preview: thread.preview,
-          messageText,
-          searchableText,
-        } satisfies ThreadSearchDocument] as const
-      } catch {
-        return null
-      }
-    }))
-    for (const row of loaded) {
-      if (!row) continue
-      docsById.set(row[0], row[1])
-    }
-  }
-
-  return Array.from(docsById.values())
-}
-
-async function buildThreadSearchIndex(appServer: AppServerProcess): Promise<ThreadSearchIndex> {
-  const docs = await loadAllThreadsForSearch(appServer)
-  const docsById = new Map<string, ThreadSearchDocument>(docs.map((doc) => [doc.id, doc]))
-  return { docsById }
-}
-
-export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
+export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: boolean } = {}): CodexBridgeMiddleware {
   const { appServer, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor, threadRuntimeState } = getSharedBridgeState()
   const extensionInfo = createExtensionInfoReader((method, params) => appServer.rpc(method, params), () => appServer.getRuntimeInfo())
   const realtimeSessions = new NativeRealtimeSessions((method, params) => appServer.rpc(method, params))
@@ -8491,7 +8214,14 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       console.warn('[plan-summary-history] Failed to persist a terminal plan:', getErrorMessage(error, 'Unknown error'))
     })
   }
+  const threadSearch = createThreadSearchService({
+    rpc: (method, params) => appServer.rpc(method, params),
+    readTitles: async () => (await readThreadTitleCache()).titles,
+  })
   const publishNotification = (notification: { method: string; params: unknown; generation?: number }) => {
+    if (['turn/completed', 'thread/started', 'thread/name/updated', 'thread/archived', 'thread/unarchived', 'codex-ui/thread-deleted', 'codex-ui/thread-index-updated'].includes(notification.method)) {
+      threadSearch.invalidate(readNonEmptyString(asRecord(notification.params)?.threadId) || undefined)
+    }
     realtimeSessions.observe(notification.method, notification.params, notification.generation)
     const atIso = new Date().toISOString()
     activePlanSnapshots.applyNotification(
@@ -8535,22 +8265,18 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     onError: (threadId, error) => console.warn('[thread-delete-cleanup]', threadId, getErrorMessage(error, 'Cleanup failed')),
   })
   const unsubscribeTerminalNotifications = terminalManager.subscribe(publishNotification)
-  let threadSearchIndex: ThreadSearchIndex | null = null
-  let threadSearchIndexPromise: Promise<ThreadSearchIndex> | null = null
-
-  async function getThreadSearchIndex(): Promise<ThreadSearchIndex> {
-    if (threadSearchIndex) return threadSearchIndex
-    if (!threadSearchIndexPromise) {
-      threadSearchIndexPromise = buildThreadSearchIndex(appServer)
-        .then((index) => {
-          threadSearchIndex = index
-          return index
-        })
-        .finally(() => {
-          threadSearchIndexPromise = null
-        })
-    }
-    return threadSearchIndexPromise
+  const threadIndexRecovery = new ThreadIndexRecovery({
+    home: getCodexHomeDir,
+    rpc: (method, params) => appServer.rpc(method, params),
+    supportsFastList: () => appServer.supportsFastThreadList(),
+    isBusy: () => appServer.hasPendingRpc(),
+    hasActiveTurns: () => appServer.hasActiveTurns(),
+    onRecovered: () => publishNotification({ method: 'codex-ui/thread-index-updated', params: {} }),
+  })
+  // Unit middleware fixtures do not spawn a real CLI or touch the user's home.
+  if (options.backgroundMaintenance ?? process.env.NODE_ENV !== 'test') {
+    void appServer.warmup().catch(error => console.warn('[codex-prewarm]', getErrorMessage(error, 'Startup initialization failed')))
+    threadIndexRecovery.start()
   }
   void initializeSkillsSyncOnStartup(appServer)
   void readTelegramBridgeConfig()
@@ -8611,6 +8337,16 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       const url = new URL(req.url, 'http://localhost')
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/thread-index/status') {
+        setJson(res, 200, { data: threadIndexRecovery.getStatus() })
+        return
+      }
+      if (req.method === 'POST' && url.pathname === '/codex-api/thread-index/repair') {
+        void threadIndexRecovery.check()
+        setJson(res, 202, { data: threadIndexRecovery.getStatus() })
+        return
+      }
 
       if (await handleAccountRoutes(req, res, url, { appServer })) {
         return
@@ -9110,10 +8846,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         const errorMergedResult = THREAD_METHODS_WITH_TURNS.has(body.method) || body.method === 'thread/turns/list'
           ? mergeStreamTurnErrorsIntoThreadResult(appServer, trimmedResult, body.method, rpcThreadId)
           : trimmedResult
-        const listMergedResult = body.method === 'thread/list' && !rpcParams?.ancestorThreadId && !rpcParams?.parentThreadId
-          ? mergeImportedThreadsIntoThreadListResult(errorMergedResult)
-          : errorMergedResult
-        const sanitizedResult = await sanitizeThreadTurnsInlinePayloads(body.method, listMergedResult)
+        if (['thread/start', 'thread/archive', 'thread/unarchive', 'thread/delete', 'thread/name/set', 'turn/start'].includes(body.method)) threadSearch.invalidate(rpcThreadId || undefined)
+        const sanitizedResult = await sanitizeThreadTurnsInlinePayloads(body.method, errorMergedResult)
         let fallbackSessionPath = ''
         if (body.method === 'thread/turns/list') {
           const snapshotRecord = asRecord(rpcThreadId ? appServer.getLastThreadReadSnapshot(rpcThreadId) : null)
@@ -10347,6 +10081,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             return
           }
           const result = await importProjectZip(buffer, parent)
+          // Native Codex owns its index and schema; files use discoverable rollout names.
+          // Recovery is coalesced in the background and announces refreshed lists.
+          threadSearch.invalidate()
+          void threadIndexRecovery.check(true)
           setJson(res, 200, { data: { path: result.projectPath, importedSessions: result.importedSessions } })
         } catch (error) {
           setJson(res, 400, { error: getErrorMessage(error, 'Failed to import project') })
@@ -10609,18 +10347,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         const query = typeof payload?.query === 'string' ? payload.query.trim() : ''
         const limitRaw = typeof payload?.limit === 'number' ? payload.limit : 200
         const limit = Math.max(1, Math.min(1000, Math.floor(limitRaw)))
-        if (!query) {
-          setJson(res, 200, { data: { threadIds: [], indexedThreadCount: 0 } })
-          return
-        }
-
-        const index = await getThreadSearchIndex()
-        const matchedIds = Array.from(index.docsById.entries())
-          .filter(([, doc]) => isExactPhraseMatch(query, doc))
-          .slice(0, limit)
-          .map(([id]) => id)
-
-        setJson(res, 200, { data: { threadIds: matchedIds, indexedThreadCount: index.docsById.size } })
+        const result = await threadSearch.search(query, limit, {
+          includeContent: payload?.includeContent === true,
+          retryContent: payload?.retryContent === true,
+        })
+        setJson(res, 200, { data: result })
         return
       }
 
@@ -10635,6 +10366,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         const cache = await readThreadTitleCache()
         const next = title ? updateThreadTitleCache(cache, id, title) : removeFromThreadTitleCache(cache, id)
         await writeThreadTitleCache(next)
+        threadSearch.invalidate(id)
         setJson(res, 200, { ok: true })
         return
       }
@@ -10841,7 +10573,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     clearInterval(realtimeLeaseTimer)
     void realtimeSessions.dispose()
     extensionInfo.invalidate()
-    threadSearchIndex = null
+    threadSearch.dispose()
+    threadIndexRecovery.dispose()
     threadTitleGenerator.dispose()
     telegramBridge.stop()
     terminalManager.dispose()
@@ -10857,7 +10590,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     clearInterval(realtimeLeaseTimer)
     await realtimeSessions.dispose()
     extensionInfo.invalidate()
-    threadSearchIndex = null
+    threadSearch.dispose()
+    threadIndexRecovery.dispose()
     threadTitleGenerator.dispose()
     telegramBridge.stop()
     backendQueueProcessor.dispose()

@@ -32,7 +32,7 @@ afterEach(() => {
   }
 })
 
-function createAppServerHarness(initialGeneration = 1): {
+function createAppServerHarness(initialGeneration = 1, supportsFastList = async () => true): {
   appServer: AppServerProcess
   writes: string[]
   start: ReturnType<typeof vi.fn>
@@ -81,7 +81,7 @@ function createAppServerHarness(initialGeneration = 1): {
     emit = listener
     return transport
   }
-  const appServer = new AppServerProcess(null, undefined, factory)
+  const appServer = new AppServerProcess(null, undefined, factory, supportsFastList)
   const emitLine = (message: unknown, generation = activeGeneration) => {
     if (!running || generation === 0 || generation !== activeGeneration) return
     const line = typeof message === 'string' ? message : JSON.stringify(message)
@@ -118,7 +118,7 @@ describe('indexed thread listing', () => {
       { ancestorThreadId: 'parent', sourceKinds: ['subAgentThreadSpawn'], limit: 10 },
     ]) {
       const pending = appServer.rpc('thread/list', params)
-      await Promise.resolve()
+      await new Promise(resolve => setImmediate(resolve))
       const request = JSON.parse(writes.at(-1)!)
       expect(request.params).toEqual({ ...params, useStateDbOnly: true })
       const response = { data: [{ id: 'recent-thread', historyMode: 'paginated' }], nextCursor: 'native-cursor' }
@@ -126,6 +126,39 @@ describe('indexed thread listing', () => {
       await expect(pending).resolves.toEqual(response)
     }
     appServer.dispose()
+  })
+
+  it('omits unsupported fast-list parameters on older CLIs and caches capability detection', async () => {
+    const detect = vi.fn(async () => false)
+    const { appServer, writes, emitLine } = createAppServerHarness(1, detect)
+    ;(appServer as unknown as { initialized: boolean }).initialized = true
+    vi.spyOn(appServer as unknown as { disposeIfConfigChanged(): void }, 'disposeIfConfigChanged').mockImplementation(() => {})
+    for (let index = 0; index < 2; index++) {
+      const pending = appServer.rpc('thread/list', { limit: 50, useStateDbOnly: true })
+      await new Promise(resolve => setImmediate(resolve))
+      const request = JSON.parse(writes.at(-1)!)
+      expect(request.params).toEqual({ limit: 50 })
+      emitLine({ id: request.id, result: { data: [] } })
+      await pending
+    }
+    expect(detect).toHaveBeenCalledTimes(1)
+    appServer.dispose()
+  })
+
+  it('does not restart a disposed runtime when delayed capability detection resolves', async () => {
+    let resolveCapability!: (value: boolean) => void
+    const capability = new Promise<boolean>(resolve => { resolveCapability = resolve })
+    const { appServer, writes, start } = createAppServerHarness(1, () => capability)
+    ;(appServer as unknown as { initialized: boolean }).initialized = true
+    vi.spyOn(appServer as unknown as { disposeIfConfigChanged(): void }, 'disposeIfConfigChanged').mockImplementation(() => {})
+    const request = appServer.rpc('thread/list', { limit: 50 })
+    const rejection = expect(request).rejects.toThrow('runtime changed')
+    await new Promise(resolve => setImmediate(resolve))
+    appServer.dispose()
+    resolveCapability(true)
+    await rejection
+    expect(writes).toEqual([])
+    expect(start).not.toHaveBeenCalled()
   })
 
   it('allows an explicit metadata repair read without changing history requests', async () => {
@@ -137,7 +170,7 @@ describe('indexed thread listing', () => {
       ['thread/read', { threadId: 'old-thread', includeTurns: true }],
     ] as const) {
       const pending = appServer.rpc(method, params)
-      await Promise.resolve()
+      await new Promise(resolve => setImmediate(resolve))
       const request = JSON.parse(writes.at(-1)!)
       expect(request.params).toEqual(params)
       emitLine({ id: request.id, result: { data: [] } })
