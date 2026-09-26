@@ -161,17 +161,22 @@ async function createSession(name, width, theme, data, reducedMotion = false) {
   async function checkVisuals() {
     const result = await page.evaluate(() => {
       const root = document.documentElement
+      const canvas = document.createElement('canvas'); canvas.width = 1; canvas.height = 1
+      const context = canvas.getContext('2d')
+      const colorBytes = color => {
+        context.clearRect(0, 0, 1, 1); context.fillStyle = color; context.fillRect(0, 0, 1, 1)
+        return [...context.getImageData(0, 0, 1, 1).data]
+      }
       return { dark: root.classList.contains('dark'), overflow: Math.max(root.scrollWidth, document.body.scrollWidth) - innerWidth,
         reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
         cards: [...document.querySelectorAll('.plan-card')].map(element => ({ background: getComputedStyle(element).backgroundColor,
-          color: getComputedStyle(element).color, width: element.getBoundingClientRect().width })) }
+          backgroundRgba: colorBytes(getComputedStyle(element).backgroundColor), color: getComputedStyle(element).color, width: element.getBoundingClientRect().width })) }
     })
     assert.equal(result.dark, theme === 'dark')
     assert(result.overflow <= 2, `Horizontal overflow ${result.overflow}px`)
     assert.equal(result.reduced, reducedMotion)
     if (theme === 'dark') for (const card of result.cards) {
-      const channels = card.background.match(/[\d.]+/g)?.slice(0, 3).map(Number) || []
-      if (channels.length && !card.background.includes('rgba(0, 0, 0, 0)')) assert(Math.max(...channels) < 150, `Light plan surface in dark theme: ${card.background}`)
+      if (card.backgroundRgba[3] > 0) assert(Math.max(...card.backgroundRgba.slice(0, 3)) < 150, `Light plan surface in dark theme: ${card.background}`)
     }
     row.visuals = result
   }
@@ -302,6 +307,23 @@ async function restorationCase(s) {
     assert.equal(await card.count(), 1, `Restore ${state} card exactly once`)
     if (state !== 'completed') assert(!/^(计划完成|已完成)$/.test((await card.locator('.plan-card-badge').innerText()).trim()))
   }
+  const completed = s.page.locator('.plan-card[data-lifecycle="completed"]')
+  assert.equal(await completed.getAttribute('data-collapsed'), 'true')
+  assert.equal(await completed.getAttribute('data-compact-completed'), 'true')
+  await textIncludes(completed.locator('.plan-card-summary'), '1/1')
+  assert.equal(await completed.locator('.plan-card-current-step').count(), 0, 'Completed compact card omits redundant current-step line')
+  const compact = await completed.evaluate(element => {
+    const selectors = ['.plan-card-title', '.plan-card-summary', '.plan-card-header-actions']
+    return { height: element.getBoundingClientRect().height, centers: selectors.map(selector => {
+      const box = element.querySelector(selector).getBoundingClientRect()
+      return box.top + box.height / 2
+    }) }
+  })
+  assert(compact.height <= 52, `Completed plan should be a compact row, measured ${compact.height}px`)
+  assert(Math.max(...compact.centers) - Math.min(...compact.centers) <= 4, 'Completed title, count and badge must share one row')
+  s.row.metrics.completedCardHeightPx = compact.height
+  await completed.scrollIntoViewIfNeeded()
+  await s.screenshot('completed-compact')
   const unconfirmed = s.page.locator('.plan-card[data-lifecycle="unconfirmed"]')
   assert(/确认|恢复/.test(await unconfirmed.innerText()), 'Recovered active progress must disclose uncertain status')
   const current = unconfirmed.locator('.plan-card-current-step')
@@ -315,6 +337,7 @@ async function restorationCase(s) {
   await warning.waitFor()
   assert.equal(await warning.getAttribute('role'), 'status')
   assert(!/PRIVATE_TEST_DETAIL|\/fixture\/private-plan-data|ACCESS_TOKEN_PLACEHOLDER/.test(await warning.innerText()), 'Warning displays fixed safe copy instead of backend details')
+  await warning.scrollIntoViewIfNeeded()
   await s.screenshot('restored-states')
   await s.open(ROOT, true)
   await warning.waitFor()
@@ -326,7 +349,7 @@ async function restorationCase(s) {
   await s.event('ready', { planSnapshotsVersion: 1, activePlans: [...s.data.snapshots.values()].reverse(), replayAvailable: true })
   assert.equal(await s.page.locator('.plan-card').count(), 5)
   assert.equal(await s.page.locator('.plan-card[data-lifecycle="completed"]').getAttribute('data-plan-identity'), terminalBefore)
-  s.row.assertions.push('terminal-and-unconfirmed-restoration', 'truncated-does-not-claim-completion', 'summary-snapshot-dedup', 'reconnect-order-independent', 'persistence-warning-safe-refresh-recovery', 'reduced-motion')
+  s.row.assertions.push('terminal-and-unconfirmed-restoration', 'completed-single-compact-row', 'truncated-does-not-claim-completion', 'summary-snapshot-dedup', 'reconnect-order-independent', 'persistence-warning-safe-refresh-recovery', 'reduced-motion')
 }
 
 async function run(kind, width, theme) {
