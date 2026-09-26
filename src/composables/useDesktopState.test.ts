@@ -1579,6 +1579,61 @@ describe('paginated thread history state', () => {
     expect(state.hasMoreOlderMessages.value).toBe(true)
   })
 
+  it('keeps background child history and direct child navigation out of the main thread list', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'project', threads: [thread('parent-thread', '/tmp/project')] }],
+      nextCursor: null,
+    })
+    gatewayMocks.getThreadSummary.mockImplementation(async (id: string) => thread(id, '/tmp/project', { historyMode: 'paginated' }))
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue(paginatedDetail({
+      messages: [{ id: 'child-answer', role: 'assistant', text: 'Child result remains readable', messageType: 'agentMessage', turnId: 'child-turn' }],
+      inProgress: true, activeTurnId: 'child-turn',
+    }))
+    const state = useDesktopState()
+    state.primeSelectedThread('parent-thread')
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    const ids = () => state.projectGroups.value.flatMap(group => group.threads.map(row => row.id))
+
+    await Promise.all(['child-spawn', 'child-review', 'archived-thread'].map(id => state.loadMessages(id, { silent: true })))
+    expect(ids()).toEqual(['parent-thread'])
+    state.primeSelectedThread('child-spawn')
+    await state.loadMessages('child-spawn')
+    expect(state.selectedThread.value).toMatchObject({ id: 'child-spawn', cwd: '/tmp/project' })
+    expect(state.selectedThread.value?.inProgress).toBe(true)
+    expect(state.messages.value).toEqual([expect.objectContaining({ text: 'Child result remains readable' })])
+    expect(ids()).toEqual(['parent-thread'])
+    await state.refreshAll({ includeSelectedThreadMessages: false, forceThreadRefresh: true })
+    expect(ids()).toEqual(['parent-thread'])
+    expect(state.selectedThread.value?.inProgress).toBe(true)
+    expect(gatewayMocks.getThreadSummary.mock.calls.filter(([id]) => id === 'child-spawn')).toHaveLength(1)
+    state.mergeSearchThreads([thread('normal-fork-search-result', '/tmp/project')])
+    expect(ids()).toEqual(['parent-thread', 'normal-fork-search-result'])
+    state.stopPolling()
+  })
+
+  it('hydrates child turn notifications without making the child a sidebar member', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'project', threads: [thread('parent-thread', '/tmp/project')] }], nextCursor: null,
+    })
+    gatewayMocks.getThreadSummary.mockImplementation(async (id: string) => thread(id, '/tmp/project'))
+    let notify!: (notification: { method: string; params: unknown }) => void
+    gatewayMocks.subscribeCodexNotifications.mockImplementation(handler => { notify = handler; return vi.fn() })
+    const state = useDesktopState()
+    state.primeSelectedThread('')
+    await state.refreshAll({ includeSelectedThreadMessages: false })
+    state.startNotificationStream()
+    vi.mocked(window.setTimeout).mockClear()
+    notify({ method: 'turn/started', params: { threadId: 'child-live', turn: { id: 'child-turn', status: 'inProgress' } } })
+    const callback = vi.mocked(window.setTimeout).mock.calls.find(([, delay]) => delay === 220)?.[0]
+    expect(callback).toEqual(expect.any(Function))
+    ;(callback as () => void)()
+    await vi.waitFor(() => expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledWith('child-live', 'legacy'))
+    expect(state.projectGroups.value.flatMap(group => group.threads.map(row => row.id))).toEqual(['parent-thread'])
+    state.stopPolling()
+  })
+
   it('passes opaque older cursors once and deduplicates repeated page messages', async () => {
     installTestWindow()
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({
@@ -2249,6 +2304,7 @@ describe('independent startup paths', () => {
     const titles = deferred<{ titles: Record<string, string> }>()
     gatewayMocks.getThreadGroupsPage.mockReturnValue(list.promise)
     gatewayMocks.getThreadTitleCache.mockReturnValue(titles.promise)
+    gatewayMocks.getThreadSummary.mockResolvedValue({ ...thread('direct-old-thread', '/tmp/project'), title: 'Old chat title' })
     const state = useDesktopState()
     state.primeSelectedThread('direct-old-thread')
     await state.refreshAll({ awaitThreadList: false, includeSelectedThreadMessages: true })
@@ -2256,6 +2312,8 @@ describe('independent startup paths', () => {
     expect(state.isLoadingMessages.value).toBe(false)
     expect(state.isLoadingThreads.value).toBe(true)
     expect(state.selectedThreadId.value).toBe('direct-old-thread')
+    expect(state.selectedThread.value).toMatchObject({ id: 'direct-old-thread', title: 'Old chat title', cwd: '/tmp/project' })
+    expect(state.projectGroups.value.flatMap(group => group.threads)).toEqual([])
     list.resolve({ groups: [], nextCursor: null })
     titles.resolve({ titles: {} })
     await Promise.resolve()

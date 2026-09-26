@@ -1586,6 +1586,9 @@ export function filterGroupsByWorkspaceRoots(
 export function useDesktopState() {
   const projectGroups = ref<UiProjectGroup[]>([])
   const sourceGroups = ref<UiProjectGroup[]>([])
+  // Reading a conversation (including a child agent or archived thread) is not
+  // evidence that it belongs to the interactive sidebar list.
+  const threadSummaryById = ref<Record<string, UiThread>>({})
   const selectedThreadId = ref(loadSelectedThreadId())
   const persistedMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
   const livePlanMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
@@ -1841,9 +1844,17 @@ export function useDesktopState() {
   const newChatDefaultReasoningEffort = computed<ReasoningEffort | ''>(() => (
     activeNewChatDefaultPreference.value.reasoningEffort ?? ''
   ))
-  const selectedThread = computed(() =>
-    allThreads.value.find((thread) => thread.id === selectedThreadId.value) ?? null,
-  )
+  const selectedThread = computed(() => {
+    const id = selectedThreadId.value
+    const listed = allThreads.value.find(thread => thread.id === id)
+    if (listed) return listed
+    const summary = threadSummaryById.value[id]
+    return summary ? {
+      ...summary,
+      title: threadTitleById.value[id] || summary.title,
+      inProgress: inProgressById.value[id] === true,
+    } : null
+  })
   const selectedThreadTerminalOpen = computed(() => {
     const threadId = selectedThreadId.value
     return Boolean(threadId && terminalOpenByThreadId.value[threadId] === true)
@@ -3181,6 +3192,7 @@ export function useDesktopState() {
     loadedMessagesByThreadId.value = pruneThreadStateMap(loadedMessagesByThreadId.value, activeThreadIds)
     loadedVersionByThreadId.value = pruneThreadStateMap(loadedVersionByThreadId.value, activeThreadIds)
     threadHistoryStateById.value = pruneThreadStateMap(threadHistoryStateById.value, activeThreadIds)
+    threadSummaryById.value = pruneThreadStateMap(threadSummaryById.value, activeThreadIds)
     hasMoreOlderMessagesByThreadId.value = pruneThreadStateMap(hasMoreOlderMessagesByThreadId.value, activeThreadIds)
     loadingOlderMessagesByThreadId.value = pruneThreadStateMap(loadingOlderMessagesByThreadId.value, activeThreadIds)
     resumedThreadById.value = pruneThreadStateMap(resumedThreadById.value, activeThreadIds)
@@ -3514,6 +3526,7 @@ export function useDesktopState() {
   }
 
   function evictThreadHistoryCache(threadId: string): void {
+    threadSummaryById.value = omitKey(threadSummaryById.value, threadId)
     threadHistoryStateById.value = omitKey(threadHistoryStateById.value, threadId)
     persistedMessagesByThreadId.value = omitKey(persistedMessagesByThreadId.value, threadId)
     loadedMessagesByThreadId.value = omitKey(loadedMessagesByThreadId.value, threadId)
@@ -3536,6 +3549,7 @@ export function useDesktopState() {
 
   function enforceThreadHistoryCacheLimit(): void {
     const cachedThreadIds = new Set([
+      ...Object.keys(threadSummaryById.value),
       ...Object.keys(threadHistoryStateById.value),
       ...Object.keys(persistedMessagesByThreadId.value),
       ...Object.keys(loadedMessagesByThreadId.value),
@@ -3623,8 +3637,10 @@ export function useDesktopState() {
       const listedMode = listedThreadHistoryMode(threadId)
       const mode = listedMode ?? (summary?.historyMode === 'paginated' ? 'paginated' : 'legacy')
       if (probeGeneration === messageLoadGeneration) {
+        if (summary && !isThreadDeleted(threadId)) {
+          threadSummaryById.value = { ...threadSummaryById.value, [threadId]: summary }
+        }
         rememberThreadHistoryMode(threadId, mode)
-        if (summary && !isThreadDeleted(threadId)) threadListLoader.mergeThreads([summary])
       }
       return mode
     })
@@ -6163,7 +6179,13 @@ export function useDesktopState() {
     sourceGroups.value = mergeThreadGroups(sourceGroups.value, mergedWithInProgress)
     inProgressById.value = pruneThreadStateMap(
       inProgressById.value,
-      new Set(flattenThreads(sourceGroups.value).map((thread) => thread.id)),
+      // Sidebar membership does not determine whether a directly viewed child
+      // still has a running turn. Metadata follows the history cache lifecycle.
+      new Set([
+        ...flattenThreads(sourceGroups.value).map((thread) => thread.id),
+        ...Object.keys(threadSummaryById.value),
+        selectedThreadId.value,
+      ]),
     )
     applyThreadFlags()
   }
@@ -8550,6 +8572,7 @@ export function useDesktopState() {
     loadedMessagesByThreadId.value = {}
     loadedVersionByThreadId.value = {}
     threadHistoryStateById.value = {}
+    threadSummaryById.value = {}
     hasMoreOlderMessagesByThreadId.value = {}
     loadingOlderMessagesByThreadId.value = {}
     resumedThreadById.value = {}
