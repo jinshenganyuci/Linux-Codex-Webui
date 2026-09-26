@@ -98,9 +98,22 @@ export class PlanToolRuntimePolicy {
       return call(method, params)
     }
 
-    // Native layers are ordered highest precedence first, including selected
-    // profile layers. Disabled/untrusted project layers must not take effect.
+    // Native layers are ordered highest precedence first. Disabled/untrusted
+    // project layers must not take effect. Current app-server rejects legacy
+    // profiles, but older runtimes may leave them nested in raw layer data;
+    // never guess which nested profile is active and override its disable.
     const layers = payload.layers as unknown[]
+    const activeConfigs = [original.config, ...layers.flatMap(value => {
+      const layer = record(value)
+      return layer && !layer.disabledReason ? [layer.config] : []
+    })]
+    if (activeConfigs.some(value => {
+      const config = record(value)
+      return typeof config?.profile === 'string' || record(config?.profiles) !== null
+    })) {
+      this.notice('profiles', '当前配置包含无法确认有效层级的旧式 profile，已保留原生工具设置，未覆盖配置档中的计划工具开关。')
+      return call(method, params)
+    }
     let configured: boolean | undefined
     for (const value of layers) {
       const layer = record(value)

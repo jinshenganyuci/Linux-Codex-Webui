@@ -43,18 +43,22 @@ describe('plan tool runtime policy', () => {
     expect(call).toHaveBeenCalledExactlyOnceWith('thread/start', params)
   })
 
-  it('respects project/profile precedence and ignores disabled untrusted project layers', async () => {
-    for (const layers of [
-      [layer(false, { name: { type: 'project' } }), layer(true)],
-      [layer(false, { name: { type: 'user', profile: 'restricted' } }), layer(true)],
-    ]) {
-      const { policy, call } = setup(layers)
-      await policy.call('thread/start', { cwd: '/project' }, '0.154.0', call)
-      expect(call).toHaveBeenLastCalledWith('thread/start', { cwd: '/project' })
-    }
+  it('respects native project-over-user precedence and ignores disabled untrusted project layers', async () => {
+    const disabled = setup([layer(false, { name: { type: 'project' } }), layer(true, { name: { type: 'user' } })])
+    await disabled.policy.call('thread/start', { cwd: '/project' }, '0.154.0', disabled.call)
+    expect(disabled.call).toHaveBeenLastCalledWith('thread/start', { cwd: '/project' })
     const { policy, call } = setup([layer(false, { disabledReason: 'untrusted' }), layer(true)])
     await policy.call('thread/start', {}, '0.154.0', call)
     expect(call.mock.calls.at(-1)?.[1]).toMatchObject({ config: { 'tools.update_plan.enabled': true } })
+  })
+
+  it('never guesses legacy nested profile precedence when older native layers do not resolve it', async () => {
+    const { policy, call, notify } = setup([{
+      config: { profile: 'restricted', tools: { update_plan: { enabled: true } }, profiles: { restricted: { tools: { update_plan: { enabled: false } } } } },
+    }])
+    await policy.call('thread/start', { cwd: '/project' }, '0.152.0', call)
+    expect(call).toHaveBeenLastCalledWith('thread/start', { cwd: '/project' })
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('旧式 profile'))
   })
 
   it('honors explicit request enable over lower layers and preserves custom developer guidance once', async () => {
