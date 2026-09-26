@@ -339,6 +339,7 @@
                   :data-plan-kind="readPlanKind(message)"
                   :data-streaming="message.plan?.lifecycle ? message.plan.lifecycle === 'live' : message.messageType === 'plan.live'"
                   :data-collapsed="!isPlanExpanded(message)"
+                  :data-compact-completed="isCompletedPlanCompact(message)"
                   :data-lifecycle="resolvedPlanLifecycle(message)"
                 >
                   <button
@@ -350,8 +351,8 @@
                   >
                     <span class="plan-card-heading">
                       <span class="plan-card-title">{{ t(readPlanKind(message) === 'proposal' ? 'Proposed plan' : 'Plan') }}</span>
-                      <span class="plan-card-summary">{{ planSummaryLabel(message) }}</span>
-                      <span v-if="readPlanKind(message) === 'checklist'" class="plan-card-current-step">{{ planCurrentStepLabel(message) }}</span>
+                      <span class="plan-card-summary">{{ isCompletedPlanCompact(message) ? planCompactCountLabel(message) : planSummaryLabel(message) }}</span>
+                      <span v-if="readPlanKind(message) === 'checklist' && !isCompletedPlanCompact(message)" class="plan-card-current-step">{{ planCurrentStepLabel(message) }}</span>
                     </span>
                     <span class="plan-card-header-actions">
                       <span v-if="planLifecycleBadge(message)" class="plan-card-badge" :data-lifecycle="resolvedPlanLifecycle(message)">
@@ -1328,6 +1329,15 @@ function togglePlanExpanded(message: UiMessage): void {
   delete next[key]
   next[key] = isPlanExpanded(message) ? 'collapsed' : 'expanded'
   persistPlanCardOverrides(next)
+}
+
+function isCompletedPlanCompact(message: UiMessage): boolean {
+  return readPlanKind(message) === 'checklist' && resolvedPlanLifecycle(message) === 'completed' && !isPlanExpanded(message)
+}
+
+function planCompactCountLabel(message: UiMessage): string {
+  const steps = readPlanSteps(message)
+  return `${planConfirmedCount(steps)}/${steps.length}`
 }
 
 function planSummaryLabel(message: UiMessage): string {

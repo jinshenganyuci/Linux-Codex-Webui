@@ -4419,3 +4419,35 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
     transition: none;
   }
 }
+
+/* Completed, collapsed checklists retain the original small single-row card. */
+.conversation-root .plan-card[data-compact-completed='true'][data-collapsed='true'] {
+  padding: 0 12px;
+  border-radius: 14px;
+  gap: 0;
+}
+.plan-card[data-compact-completed='true'] .plan-card-header {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+}
+.plan-card[data-compact-completed='true'] .plan-card-heading {
+  flex: 0 1 auto;
+  flex-direction: row;
+  flex-basis: auto;
+  align-items: center;
+  gap: 8px;
+}
+.plan-card[data-compact-completed='true'] .plan-card-summary {
+  white-space: nowrap;
+}
+.plan-card[data-compact-completed='true'] .plan-card-header-actions {
+  align-items: center;
+  max-width: none;
+  margin-left: 0;
+  gap: 8px;
+}
+.plan-card[data-compact-completed='true'] .plan-card-badge {
+  white-space: nowrap;
+}

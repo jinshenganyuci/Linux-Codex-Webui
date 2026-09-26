@@ -234,7 +234,10 @@ describe('ThreadConversation plan lifecycle presentation', () => {
     const html = await renderConversation([planMessage('turn-completed', 'completed')])
     expect(html).toContain('data-collapsed="true"')
     expect(html).toContain('aria-expanded="false"')
-    expect(html).toContain('已确认 2/2')
+    expect(html).toContain('data-compact-completed="true"')
+    expect(html).toContain('>2/2</span>')
+    expect(html).not.toContain('plan-card-current-step')
+    expect(html).not.toContain('步骤已完成')
     expect(html).not.toContain('Inspect unique plan step')
   })
 
