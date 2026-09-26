@@ -3,7 +3,7 @@ import { createSSRApp, h, type Component } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import { createServer, type ViteDevServer } from 'vite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type { UiFileChange, UiMessage } from '../../types/codex'
+import type { UiFileChange, UiMessage, UiLiveOverlay } from '../../types/codex'
 
 let component: Component
 let viteServer: ViteDevServer
@@ -37,12 +37,12 @@ afterAll(async () => {
   await viteServer?.close()
 })
 
-async function renderConversation(messages: UiMessage[]): Promise<string> {
+async function renderConversation(messages: UiMessage[], liveOverlay: UiLiveOverlay | null = null): Promise<string> {
   return await renderToString(createSSRApp({
     render: () => h(component, {
       messages,
       pendingRequests: [],
-      liveOverlay: null,
+      liveOverlay,
       isLoading: false,
       activeThreadId: 'thread-under-test',
       cwd: '/workspace/project',
@@ -226,14 +226,15 @@ describe('ThreadConversation plan lifecycle presentation', () => {
     expect(html).toContain('data-lifecycle="live"')
     expect(html).toContain('aria-expanded="true"')
     expect(html).toContain('Inspect unique plan step')
-    expect(html).toContain('更新中')
+    expect(html).toContain('已确认 1/2')
+    expect(html).toContain('当前：Publish unique plan step')
   })
 
   it('collapses a completed plan into a compact progress summary', async () => {
     const html = await renderConversation([planMessage('turn-completed', 'completed')])
     expect(html).toContain('data-collapsed="true"')
     expect(html).toContain('aria-expanded="false"')
-    expect(html).toContain('已完成 2/2')
+    expect(html).toContain('已确认 2/2')
     expect(html).not.toContain('Inspect unique plan step')
   })
 
@@ -247,6 +248,73 @@ describe('ThreadConversation plan lifecycle presentation', () => {
     expect(html).toContain('data-lifecycle="completed"')
     expect(html).toContain('data-collapsed="true"')
     expect(html).not.toContain('plan-card-implement-button')
+  })
+
+  it('keeps current progress visible in the header, including multiple real current steps', async () => {
+    const message = planMessage('multi-current', 'live')
+    message.plan!.steps.push({ step: 'Second concurrent step', status: 'inProgress' })
+    const html = await renderConversation([message])
+    expect(html).toContain('已确认 1/3')
+    expect(html).toContain('当前：Publish unique plan step · Second concurrent step')
+    expect(html).not.toContain('%')
+  })
+
+  it('does not turn pending steps into a current step or infer a completed turn from checkmarks', async () => {
+    const waiting = planMessage('waiting', 'live')
+    waiting.plan!.steps = [{ step: 'Not started yet', status: 'pending' }]
+    const waitingHtml = await renderConversation([waiting])
+    expect(waitingHtml).toContain('等待计划更新')
+    expect(waitingHtml).not.toContain('当前：Not started yet')
+    const liveDone = planMessage('live-done', 'live')
+    liveDone.plan!.steps.forEach(step => { step.status = 'completed' })
+    const liveHtml = await renderConversation([liveDone])
+    expect(liveHtml).toContain('data-lifecycle="live"')
+    expect(liveHtml).toContain('步骤已完成')
+    expect(liveHtml).toContain('data-collapsed="false"')
+    liveDone.messageType = 'plan'
+    delete liveDone.plan!.lifecycle
+    const unknownHtml = await renderConversation([liveDone])
+    expect(unknownHtml).toContain('data-lifecycle="unconfirmed"')
+    expect(unknownHtml).toContain('状态待确认')
+  })
+
+  it('corrects an inconsistent completed snapshot and keeps stopped and failed outcomes separate', async () => {
+    const incomplete = planMessage('incomplete', 'completed')
+    incomplete.plan!.steps[1]!.status = 'pending'
+    const html = await renderConversation([incomplete])
+    expect(html).toContain('data-lifecycle="incomplete"')
+    expect(html).toContain('本轮结束，剩余步骤未确认')
+    expect(await renderConversation([planMessage('stop', 'interrupted')])).toContain('用户已停止')
+    expect(await renderConversation([planMessage('failure', 'failed')])).toContain('失败')
+  })
+
+  it('offers implement only on a proposal, with independent identities for documents and checklist cards', async () => {
+    const checklist = planMessage('same-turn', 'live')
+    checklist.plan!.kind = 'checklist'
+    checklist.plan!.itemId = 'checklist'
+    const proposal: UiMessage = { id: 'document', turnId: 'same-turn', role: 'assistant', messageType: 'plan', text: 'Proposed changes', plan: { kind: 'proposal', itemId: 'document', steps: [], lifecycle: 'unconfirmed' } }
+    const secondProposal: UiMessage = { ...proposal, id: 'document-2', plan: { ...proposal.plan!, itemId: 'document-2' } }
+    const html = await renderConversation([checklist, proposal, secondProposal])
+    expect(countClass(html, 'plan-card-implement-button')).toBe(2)
+    const identities = Array.from(html.matchAll(/data-plan-identity="([^"]+)"/g), match => match[1])
+    expect(new Set(identities).size).toBe(3)
+  })
+
+  it('summarizes only the root current turn and renders an accessible locate action', async () => {
+    const older = planMessage('older', 'live')
+    older.plan!.steps[1]!.step = 'OLD RUN SHOULD NOT BE CURRENT'
+    const current = planMessage('current', 'live')
+    const overlay: UiLiveOverlay = {
+      activityLabel: 'Working', activityDetails: [], reasoningText: '', errorText: '',
+      turnProgress: { rootThreadId: 'thread-under-test', turnId: 'current', status: 'running', phase: 'executing', startedAtMs: 1000, lastActivityAtMs: 1000, mainLastActivityAtMs: 1000, updatedAtMs: 1000, agents: [], events: [] },
+    }
+    const html = await renderConversation([older, current], overlay)
+    const compact = html.match(/<button[^>]+class="turn-progress-plan-link"[^>]*>(.*?)<\/button>/s)?.[1] ?? ''
+    expect(compact).toContain('已确认 1/2')
+    expect(compact).toContain('Publish unique plan step')
+    expect(compact).not.toContain('OLD RUN SHOULD NOT BE CURRENT')
+    overlay.turnProgress!.rootThreadId = 'child-thread'
+    expect(await renderConversation([current], overlay)).not.toContain('turn-progress-plan-link')
   })
 
   it('keeps a failed plan open until a newer user turn exists', async () => {

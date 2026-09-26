@@ -41,6 +41,8 @@
       </div>
     </header>
 
+    <slot name="plan-summary"></slot>
+
     <div v-if="overlay.runtimeNotices?.length" class="runtime-notices" role="status" aria-live="polite">
       <section v-for="notice in overlay.runtimeNotices" :key="notice.kind" class="runtime-notice" :data-kind="notice.kind" :data-action="notice.requiresAction">
         <strong>{{ t(notice.title) }}</strong>

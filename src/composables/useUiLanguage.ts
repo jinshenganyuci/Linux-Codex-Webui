@@ -5,6 +5,20 @@ export type UiLanguage = 'en' | 'zh-CN'
 const UI_LANGUAGE_STORAGE_KEY = 'codex-web-local.ui-language.v1'
 
 const zhCN: Record<string, string> = {
+  'The current plan is not in the loaded history. Load earlier messages and try again.': '当前显示范围内未找到计划，请加载较早消息后重试。',
+  'View plan': '查看计划',
+  'Finding plan…': '正在定位计划…',
+  'View current turn plan': '查看本轮计划',
+  'Status unconfirmed': '状态待确认',
+  'Turn ended; remaining steps unconfirmed': '本轮结束，剩余步骤未确认',
+  'Stopped by user': '用户已停止',
+  'Plan ready': '计划已拟定',
+  'In progress': '执行中',
+  'Waiting for plan update': '等待计划更新',
+  'Current: {steps}': '当前：{steps}',
+  'Steps completed': '步骤已完成',
+  'Confirmed {completed}/{total}': '已确认 {completed}/{total}',
+  'Proposed plan': '计划文稿',
   'Large or unavailable conversations skipped:': '已跳过较大或暂不可读取的聊天：',
   'Content searched in recent conversations:': '已搜索最近聊天内容，聊天数量：',
   'Searching conversation content': '正在搜索聊天内容',

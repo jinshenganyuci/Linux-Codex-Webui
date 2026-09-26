@@ -331,6 +331,9 @@
                 <div
                   v-else-if="isPlanMessage(message)"
                   class="plan-card"
+                  tabindex="-1"
+                  :data-plan-identity="planOverrideIdentity(message)"
+                  :data-plan-kind="readPlanKind(message)"
                   :data-streaming="message.plan?.lifecycle ? message.plan.lifecycle === 'live' : message.messageType === 'plan.live'"
                   :data-collapsed="!isPlanExpanded(message)"
                   :data-lifecycle="resolvedPlanLifecycle(message)"
@@ -342,8 +345,11 @@
                     :aria-label="planToggleLabel(message)"
                     @click="togglePlanExpanded(message)"
                   >
-                    <span class="plan-card-title">{{ t('Plan') }}</span>
-                    <span v-if="!isPlanExpanded(message)" class="plan-card-summary">{{ planSummaryLabel(message) }}</span>
+                    <span class="plan-card-heading">
+                      <span class="plan-card-title">{{ t(readPlanKind(message) === 'proposal' ? 'Proposed plan' : 'Plan') }}</span>
+                      <span class="plan-card-summary">{{ planSummaryLabel(message) }}</span>
+                      <span v-if="readPlanKind(message) === 'checklist'" class="plan-card-current-step">{{ planCurrentStepLabel(message) }}</span>
+                    </span>
                     <span class="plan-card-header-actions">
                       <span v-if="planLifecycleBadge(message)" class="plan-card-badge" :data-lifecycle="resolvedPlanLifecycle(message)">
                         {{ planLifecycleBadge(message) }}
@@ -780,6 +786,16 @@
         <div class="message-row">
           <div class="message-stack">
             <TurnProgressCard :overlay="liveOverlay" :load-agent-result="loadAgentResult">
+              <template v-if="currentRootPlan" #plan-summary>
+                <div class="turn-progress-plan-summary">
+                  <button type="button" class="turn-progress-plan-link" :disabled="isLocatingPlan" @click="locateCurrentPlan">
+                    <span>{{ currentRootPlan ? planSummaryLabel(currentRootPlan) : t('View current turn plan') }}</span>
+                    <span v-if="currentRootPlan">{{ planCurrentStepLabel(currentRootPlan) }}</span>
+                    <span class="turn-progress-plan-action">{{ isLocatingPlan ? t('Finding plan…') : t('View plan') }}</span>
+                  </button>
+                  <span v-if="planLocateError" class="turn-progress-plan-error" role="status">{{ planLocateError }}</span>
+                </div>
+              </template>
               <template #error-action>
                 <a class="live-overlay-feedback" :href="feedbackMailto" @click="prepareLiveErrorFeedback($event, liveOverlay.errorText)">{{ t('Send feedback') }}</a>
               </template>
@@ -1051,6 +1067,7 @@ export function createThreadCommandOutputCache(
 
 <script setup lang="ts">
 import { useSubagentNavigation } from '../../router/subagentNavigation'
+import { planCardIdentity, planConfirmedCount, planCurrentSteps, planKind, truthfulPlanLifecycle } from './planProgress'
 import { isBlockingServerRequest } from '../../serverRequests'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { UiFileChange, UiLiveOverlay, UiMessage, UiPlanLifecycle, UiPlanStep, UiRequestUserInputQuestionSummary, UiServerRequest } from '../../types/codex'
@@ -1244,14 +1261,14 @@ function isPlanMessage(message: UiMessage): boolean {
 }
 
 function planOverrideIdentity(message: UiMessage): string {
-  return `${props.activeThreadId}\u0000${message.turnId?.trim() || messageIdentityKey(message)}`
+  return planCardIdentity(props.activeThreadId, message, readPlanSteps(message))
 }
 
 function persistPlanCardOverrides(next: Record<string, PlanCardManualOverride>): void {
   const bounded = Object.fromEntries(Object.entries(next).slice(-PLAN_CARD_OVERRIDE_LIMIT))
   planCardOverrideByIdentity.value = bounded
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(PLAN_CARD_OVERRIDE_STORAGE_KEY, JSON.stringify(bounded))
+  try { window.localStorage.setItem(PLAN_CARD_OVERRIDE_STORAGE_KEY, JSON.stringify(bounded)) } catch { /* Keep the manual choice for this page when storage is unavailable. */ }
 }
 
 function hasNewerUserTurn(message: UiMessage): boolean {
@@ -1277,20 +1294,14 @@ function hasNewerUserTurn(message: UiMessage): boolean {
   return false
 }
 
-function resolvedPlanLifecycle(message: UiMessage): UiPlanLifecycle | 'unknown' {
-  if (message.plan?.lifecycle) return message.plan.lifecycle
-  if (message.messageType === 'plan.live') return 'live'
+function readPlanKind(message: UiMessage) {
+  return planKind(message, readPlanSteps(message))
+}
+
+function resolvedPlanLifecycle(message: UiMessage): UiPlanLifecycle {
   const turnId = message.turnId?.trim() ?? ''
-  if (turnId && props.messages.some((candidate) => (
-    candidate.turnId?.trim() === turnId
-    && candidate.messageType === 'turnError'
-  ))) {
-    return 'failed'
-  }
-  const steps = readPlanSteps(message)
-  if (steps.length > 0 && steps.every((step) => step.status === 'completed')) return 'completed'
-  if (hasNewerUserTurn(message)) return 'incomplete'
-  return 'unknown'
+  const failedTurn = Boolean(turnId && failedPlanTurnIds.value.has(turnId))
+  return truthfulPlanLifecycle(message, readPlanSteps(message), failedTurn)
 }
 
 function isPlanAutomaticallyCollapsed(message: UiMessage): boolean {
@@ -1318,19 +1329,30 @@ function togglePlanExpanded(message: UiMessage): void {
 
 function planSummaryLabel(message: UiMessage): string {
   const steps = readPlanSteps(message)
-  if (steps.length === 0) return t('Plan details')
-  const completed = steps.filter((step) => step.status === 'completed').length
-  return t('{completed}/{total} completed', { completed, total: steps.length })
+  if (readPlanKind(message) === 'proposal') return t('Plan details')
+  return t('Confirmed {completed}/{total}', { completed: planConfirmedCount(steps), total: steps.length })
+}
+
+function planCurrentStepLabel(message: UiMessage): string {
+  const steps = readPlanSteps(message)
+  const lifecycle = resolvedPlanLifecycle(message)
+  if (steps.length > 0 && planConfirmedCount(steps) === steps.length) return t('Steps completed')
+  if (lifecycle !== 'live') return planLifecycleBadge(message)
+  const current = planCurrentSteps(steps)
+  return current.length ? t('Current: {steps}', { steps: current.join(' · ') }) : t('Waiting for plan update')
 }
 
 function planLifecycleBadge(message: UiMessage): string {
   const lifecycle = resolvedPlanLifecycle(message)
-  if (lifecycle === 'live') return t('Updating')
-  if (lifecycle === 'completed') return t('Completed')
+  if (lifecycle === 'live') {
+    const steps = readPlanSteps(message)
+    return steps.length > 0 && planConfirmedCount(steps) === steps.length ? t('Steps completed') : t('In progress')
+  }
+  if (lifecycle === 'completed') return readPlanKind(message) === 'proposal' ? t('Plan ready') : t('Completed')
   if (lifecycle === 'failed') return t('Failed')
-  if (lifecycle === 'interrupted') return t('Interrupted')
-  if (lifecycle === 'incomplete') return t('Incomplete')
-  return ''
+  if (lifecycle === 'interrupted') return t('Stopped by user')
+  if (lifecycle === 'incomplete') return t('Turn ended; remaining steps unconfirmed')
+  return t('Status unconfirmed')
 }
 
 function planToggleLabel(message: UiMessage): string {
@@ -1355,7 +1377,9 @@ function buildPlanMessageText(explanation: string, steps: UiPlanStep[]): string 
 
 function showImplementPlanButton(message: UiMessage): boolean {
   return isPlanMessage(message)
-    && message.messageType === 'plan'
+    && message.messageType !== 'plan.summary'
+    && readPlanKind(message) === 'proposal'
+    && resolvedPlanLifecycle(message) !== 'live'
     && message.role === 'assistant'
     && Boolean(message.turnId)
 }
@@ -1662,6 +1686,49 @@ const props = defineProps<{
   loadEarlierMessages?: (threadId: string) => Promise<void>
   loadAgentResult?: (threadId: string) => Promise<void>
 }>()
+
+const failedPlanTurnIds = computed(() => new Set(props.messages
+  .filter(message => message.messageType === 'turnError')
+  .map(message => message.turnId?.trim()).filter(Boolean)))
+const currentRootTurnId = computed(() => {
+  const progress = props.liveOverlay?.turnProgress
+  if (progress?.rootThreadId && progress.rootThreadId !== props.activeThreadId) return ''
+  return progress?.turnId?.trim() ?? ''
+})
+const currentRootPlan = computed(() => {
+  const turnId = currentRootTurnId.value
+  if (!turnId) return null
+  return [...props.messages].reverse().find(message => (
+    isPlanMessage(message) && message.turnId?.trim() === turnId && readPlanKind(message) === 'checklist'
+  )) ?? null
+})
+const isLocatingPlan = ref(false)
+const planLocateError = ref('')
+async function locateCurrentPlan(): Promise<void> {
+  if (isLocatingPlan.value || !currentRootPlan.value) return
+  const threadId = props.activeThreadId
+  const turnId = currentRootTurnId.value
+  const message = currentRootPlan.value
+  isLocatingPlan.value = true
+  planLocateError.value = ''
+  autoFollowOutput.value = false
+  try {
+    const identity = planOverrideIdentity(message)
+    if (!isPlanExpanded(message)) persistPlanCardOverrides({ ...planCardOverrideByIdentity.value, [identity]: 'expanded' })
+    await nextTick()
+    if (props.activeThreadId !== threadId || currentRootTurnId.value !== turnId) return
+    const card = Array.from(conversationListRef.value?.querySelectorAll<HTMLElement>('[data-plan-identity]') ?? [])
+      .find(element => element.dataset.planIdentity === identity)
+    if (card) {
+      card.scrollIntoView({ block: 'center', behavior: 'auto' })
+      card.focus({ preventScroll: true })
+    } else {
+      planLocateError.value = t('The current plan is not in the loaded history. Load earlier messages and try again.')
+    }
+  } finally {
+    isLocatingPlan.value = false
+  }
+}
 
 const { childHref } = useSubagentNavigation(() => props.activeThreadId)
 

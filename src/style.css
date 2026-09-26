@@ -4274,3 +4274,131 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
 :root.dark .sidebar-history-status button:focus-visible {
   outline-color: #80b7ff;
 }
+
+/* Plan execution stays in the conversation and existing run-status region. */
+.plan-card .plan-card-header {
+  align-items: flex-start;
+  min-height: 44px;
+}
+.plan-card .plan-card-heading {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+.plan-card .plan-card-summary {
+  flex: none;
+  white-space: normal;
+  font-variant-numeric: tabular-nums;
+}
+.plan-card-current-step {
+  min-width: 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.plan-card .plan-card-header-actions {
+  max-width: 45%;
+  align-items: flex-start;
+}
+.plan-card .plan-card-badge {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.plan-card:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 3px;
+}
+.plan-card .plan-step-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.plan-card .plan-card-implement-button {
+  min-height: 44px;
+}
+.plan-card .plan-card-badge[data-lifecycle='unconfirmed'] {
+  background: #e2e8f0;
+  color: #475569;
+}
+.turn-progress-plan-summary {
+  min-width: 0;
+}
+.turn-progress-plan-link {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  border: 1px solid #bae6fd;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #f0f9ff;
+  color: #075985;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+.turn-progress-plan-link > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.turn-progress-plan-link > span:nth-child(2) {
+  flex: 1 1 180px;
+}
+.turn-progress-plan-action {
+  flex: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.turn-progress-plan-link:focus-visible {
+  outline: 2px solid #0284c7;
+  outline-offset: 2px;
+}
+.turn-progress-plan-link:disabled {
+  cursor: wait;
+}
+.turn-progress-plan-error {
+  display: block;
+  margin-top: 6px;
+  color: #a16207;
+  font-size: 12px;
+}
+:root.dark .plan-card-current-step,
+:root.dark .plan-card .plan-card-summary {
+  color: #cbd5e1;
+}
+:root.dark .plan-card .plan-card-badge[data-lifecycle='unconfirmed'] {
+  background: #334155;
+  color: #e2e8f0;
+}
+:root.dark .turn-progress-plan-link {
+  border-color: #075985;
+  background: #082f49;
+  color: #bae6fd;
+}
+:root.dark .turn-progress-plan-error {
+  color: #fcd34d;
+}
+@media (max-width: 480px) {
+  .plan-card .plan-card-header {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .plan-card .plan-card-heading {
+    flex-basis: 100%;
+  }
+  .plan-card .plan-card-header-actions {
+    margin-left: 0;
+    max-width: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plan-card .plan-card-chevron {
+    transition: none;
+  }
+}
