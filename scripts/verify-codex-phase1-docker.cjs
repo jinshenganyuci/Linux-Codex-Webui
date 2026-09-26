@@ -77,9 +77,10 @@ async function checkUi(browser, name, port) {
   mkdirSync(output, { recursive: true })
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] })
   try {
-    // Every provider is an in-container mock. An internal bridge also prevents
-    // no-auth startup probes from reaching a real provider on the internet.
-    docker('network', 'create', '--internal', network)
+    // Every submitted turn uses an in-container mock. Keep localhost port
+    // publication working on Docker engines that suppress ports on --internal
+    // networks; no real credentials or provider turn endpoints are used here.
+    docker('network', 'create', network)
     networkCreated = true
     const baseConfig = 'model = "gpt-6-astra"\nmodel_reasoning_effort = "low"\n'
     for (const [name, port, auth] of [['no-auth', 4191, undefined], ['malformed-auth', 4192, '{invalid-json']]) {
@@ -164,11 +165,11 @@ async function checkUi(browser, name, port) {
     }
 
     writeFileSync(resolve(output, `${reportPrefix}-docker-report.json`), JSON.stringify(reports, null, 2))
-    writeFileSync(resolve(output, `${reportPrefix}-docker-runtime.json`), JSON.stringify({ image, expectedCodexVersion, networkIsolation: 'internal Docker bridge; all provider requests use container loopback', legacyFallback: 'No automatic Zen fallback; custom mock provider switch is alpha to beta', passed: true }, null, 2))
+    writeFileSync(resolve(output, `${reportPrefix}-docker-runtime.json`), JSON.stringify({ image, expectedCodexVersion, networkIsolation: 'dedicated Docker bridge; host ports bind to loopback; all submitted turns use container loopback mock providers', legacyFallback: 'No automatic Zen fallback; custom mock provider switch is alpha to beta', passed: true }, null, 2))
     console.log(JSON.stringify(reports, null, 2))
   } catch (error) {
     writeFileSync(resolve(output, `${reportPrefix}-docker-report.json`), JSON.stringify(reports, null, 2))
-    writeFileSync(resolve(output, `${reportPrefix}-docker-runtime.json`), JSON.stringify({ image, expectedCodexVersion, networkIsolation: 'internal Docker bridge', passed: false, error: error.stack }, null, 2))
+    writeFileSync(resolve(output, `${reportPrefix}-docker-runtime.json`), JSON.stringify({ image, expectedCodexVersion, networkIsolation: 'dedicated Docker bridge with host loopback ports', passed: false, error: error.stack }, null, 2))
     for (const container of containers) console.error(container, docker('logs', '--tail', '30', container))
     throw error
   } finally {
