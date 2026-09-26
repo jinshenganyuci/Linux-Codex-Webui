@@ -543,6 +543,7 @@
                   :active-thread-id="composerThreadContextId"
                   :cwd="composerCwd"
                   :live-overlay="pendingNewThreadLiveOverlay"
+                  :plan-persistence-warning="Boolean(planPersistenceWarning)"
                   :pending-requests="[]"
                   :has-more-persisted-above="false"
                   :is-loading-persisted-above="false"
@@ -932,6 +933,7 @@
                   <ThreadConversation ref="threadConversationRef" :messages="filteredMessages" :is-loading="isLoadingMessages"
                     :active-thread-id="composerThreadContextId" :cwd="composerCwd"
                     :live-overlay="liveOverlay"
+                    :plan-persistence-warning="Boolean(planPersistenceWarning)"
                     :pending-requests="selectedThreadServerRequests"
                     :has-more-persisted-above="hasMoreOlderMessages"
                     :is-loading-persisted-above="isLoadingOlderMessages"
@@ -1192,6 +1194,7 @@ const {
   selectedThreadTerminalOpen,
   selectedThreadServerRequests,
   selectedLiveOverlay,
+  planPersistenceWarning,
   pendingNewThreadMessages,
   pendingNewThreadLiveOverlay,
   loadAgentResult,

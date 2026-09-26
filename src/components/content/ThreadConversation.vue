@@ -1,5 +1,8 @@
 <template>
   <section class="conversation-root" @contextmenu.capture="onConversationContextMenu">
+    <p v-if="planPersistenceWarning" class="plan-persistence-warning" role="status">
+      {{ t('Plan progress could not be saved. Keep this page open until saving recovers.') }}
+    </p>
     <p v-if="isLoading" class="conversation-loading">{{ t('Loading messages...') }}</p>
 
     <p
@@ -1680,6 +1683,7 @@ const props = defineProps<{
   pendingRequests: UiServerRequest[]
   liveOverlay: UiLiveOverlay | null
   isLoading: boolean
+  planPersistenceWarning?: boolean
   activeThreadId: string
   cwd: string
   hasMorePersistedAbove?: boolean

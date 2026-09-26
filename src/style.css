@@ -1539,6 +1539,23 @@ body:has(.native-extension-backdrop) > .composer-dropdown-menu-wrap { z-index: 1
   @apply border-sky-700/70 bg-slate-900/78;
 }
 
+.plan-persistence-warning {
+  margin: 8px 16px;
+  padding: 10px 12px;
+  border: 1px solid #c28a36;
+  border-radius: 10px;
+  background: #fff7e8;
+  color: #75470c;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+:root.dark .plan-persistence-warning {
+  background: #33281a;
+  border-color: #89662f;
+  color: #f5cd8b;
+}
+
 :root.dark .plan-card-title {
   @apply text-sky-200;
 }

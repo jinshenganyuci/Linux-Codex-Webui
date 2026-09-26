@@ -210,6 +210,7 @@ const zhCN: Record<string, string> = {
   'Selected image': '已选图片',
   'Loading messages...': '加载消息中...',
   'Plan': '计划',
+  'Plan progress could not be saved. Keep this page open until saving recovers.': '计划进度暂时无法保存；恢复前请保持页面打开。',
   'Planning clarification': '规划澄清',
   '{count} questions': '{count} 个问题',
   'Answered': '已回答',
