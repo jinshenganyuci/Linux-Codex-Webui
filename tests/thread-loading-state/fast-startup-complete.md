@@ -149,3 +149,25 @@ node scripts/verify-startup-complete.cjs
 认证报告 `output/playwright/startup-complete/auth-final/report.json`；截图为同目录的 `home-1440-light.png`、`thread-1440-light.png`，实际 URL 分别为 `http://127.0.0.2:13511/#/` 与 `http://127.0.0.2:13511/#/thread/01a09549-9bb5-71c0-955e-dd74cc8e32be`。加上此前 23 个用例共 25 个浏览器用例，另有 Docker 测试。
 
 最终保留记录 `final-deployment.json`、`preservation-final.json`：13510 PID 656、启动时间、重启次数与原工作目录均未变，正式配置和前后端入口哈希未变；没有向 13510 发送 HTTP 验收请求。13511 检查结果为 833 个文件、480 个原生可见索引、353 个正常隐藏、缺失与失败 0、状态 `ready`；临时 4173、4191–4194、5910 均无本轮 WebUI 监听。代码与文档均本地提交，本轮未推送 GitHub 或升级 13510。
+
+## 随后的正式 13510 升级授权
+
+用户随后明确要求升级 13510。已准备正式 release `/root/.local/share/linux-codex-webui/releases/startup-complete-13510-20260926`，复用同一 `fbc6bbc` 干净构建，33 个前端文件、2 个后端文件完全相同，继续使用原正式 `/root/.codex`、CLI 固定路径、密码和 `/root/Codex-Webui` 工作目录。没有将 13511 的隔离 home 或 runner 复制到正式服务。
+
+当前对话确实由 13510 承载，因此升级由另一个 cgroup 中的持久作业执行，避免部署脚本随正式服务一起被杀。`scripts/deploy-startup-production.cjs` 的 `--prepare` 已验证产物和当前运行版本，`--self-test` 验证活动回合、审批、桥接请求及队列都能阻止切换。三个连续空闲样本后，才读取所有预存历史 ID、配置/偏好摘要和聊天文件前缀 SHA；并在实际切换前再次检查。历史哈希不在等待活动任务期间反复计算。
+
+正式覆盖将使用 `KillMode=process` 和 `TimeoutStopSec=infinity`，让 Node 自己等待并关闭原生子进程；旧单元的 `control-group` 不适合在竞争窗口保护活动回合。出错回滚也先等空闲，再恢复原 ExecStart；不覆写聊天正文或配置。保留全部未过期登录 token 的摘要，真实登录前后均检查；密码/token 原文不写入部署报告。
+
+```bash
+node scripts/deploy-startup-production.cjs --self-test
+node scripts/deploy-startup-production.cjs --prepare
+systemd-analyze verify /etc/systemd/system/codex-webui-deploy-startup-20260926.service
+systemctl status codex-webui-deploy-startup-20260926.service
+cat /root/.local/share/linux-codex-webui/deployments/13510-startup-20260926/status.json
+```
+
+记录时的真实状态为 `waiting-for-idle`，只有发起部署的当前对话仍在执行，待审批和队列为 0；13510 与 13511 PID 未变。这是已启动的升级任务，尚不能宣称新版已运行。作业在当前回复结束且其他任务空闲后自动切换，成功验证后状态写为 `complete`，验证失败恢复原版本并写 `rolled-back`；部署前条件变化则写 `failed`，不强行覆盖。持久作业完成后自行禁用。
+
+升级后的浏览器脚本为 `scripts/verify-startup-production.cjs`，固定需要密码的 `http://127.0.0.2:13510`，要求显式 `VERIFY_PRODUCTION_STARTUP=1`。两个 1440×900 新上下文分别验证浅色首页与深色旧聊天，禁用 HTTP 缓存及 Service Worker；只允许明确读取 RPC 和不带模型覆盖的旧线程恢复，禁止新回合、配置和偏好写入。准备阶段只验证语法和请求白名单，尚未运行正式升级后的浏览器。
+
+最终证据由作业写入 `/root/.local/share/linux-codex-webui/deployments/13510-startup-20260926/`：`preflight.json`、`status.json`、`deploy.log` 及 `browser/report.json`。截图为 `browser/production-home-1440-light.png`、`browser/production-thread-1440-dark.png`，必须待对应报告通过后才引用为验收成功。新正式覆盖路径为 `/etc/systemd/system/codex-webui-13510.service.d/zzzzzz-startup-complete-20260926.conf`；旧目录和其他覆盖不删除，可恢复旧入口。本轮不推送 GitHub，13511 保持已验收版本。
