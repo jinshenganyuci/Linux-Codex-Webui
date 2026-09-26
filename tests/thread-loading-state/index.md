@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [无缓存访问、历史发现与独立聊天启动](fast-startup-complete.md) |
 | [子任务对话左上角返回入口](subagent-return-navigation.md) |
 | [Pinned threads remain visible during background pagination](pinned-threads-remain-visible-during-background-pagination.md) |
 | [Thread archive recovery and sidebar pruning](thread-archive-recovery-and-sidebar-pruning.md) |
