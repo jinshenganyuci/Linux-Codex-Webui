@@ -5,6 +5,8 @@ export type UiLanguage = 'en' | 'zh-CN'
 const UI_LANGUAGE_STORAGE_KEY = 'codex-web-local.ui-language.v1'
 
 const zhCN: Record<string, string> = {
+  'Plan content truncated': '计划内容已截断',
+  'Shown {completed}/{total}; some steps are not shown': '已展示 {completed}/{total}，部分步骤未展示',
   'The current plan is not in the loaded history. Load earlier messages and try again.': '当前显示范围内未找到计划，请加载较早消息后重试。',
   'View plan': '查看计划',
   'Finding plan…': '正在定位计划…',

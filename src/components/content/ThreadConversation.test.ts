@@ -288,6 +288,21 @@ describe('ThreadConversation plan lifecycle presentation', () => {
     expect(await renderConversation([planMessage('failure', 'failed')])).toContain('失败')
   })
 
+  it('never treats a truncated fully checked subset as the whole plan being complete', async () => {
+    const message = planMessage('truncated-checklist', 'completed')
+    message.plan = { ...message.plan!, truncated: true }
+    const html = await renderConversation([message])
+    expect(html).toContain('已展示 2/2，部分步骤未展示')
+    expect(html).toContain('data-lifecycle="incomplete"')
+    expect(html).not.toContain('步骤已完成')
+    message.plan.lifecycle = 'live'
+    const liveHtml = await renderConversation([message])
+    expect(liveHtml).toContain('等待计划更新')
+    expect(liveHtml).not.toContain('步骤已完成')
+    const proposal: UiMessage = { id: 'truncated-document', turnId: 'proposal', role: 'assistant', text: 'Partial proposal', messageType: 'plan', plan: { kind: 'proposal', steps: [], lifecycle: 'completed', truncated: true } }
+    expect(await renderConversation([proposal])).toContain('计划内容已截断')
+  })
+
   it('offers implement only on a proposal, with independent identities for documents and checklist cards', async () => {
     const checklist = planMessage('same-turn', 'live')
     checklist.plan!.kind = 'checklist'

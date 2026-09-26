@@ -21,7 +21,7 @@ export function truthfulPlanLifecycle(message: UiMessage, steps: UiPlanStep[], f
   if (explicit === 'failed' || explicit === 'interrupted') return explicit
   if (failedTurn) return 'failed'
   if (explicit === 'completed') {
-    if (planKind(message, steps) === 'checklist' && (!steps.length || steps.some(step => step.status !== 'completed'))) return 'incomplete'
+    if (planKind(message, steps) === 'checklist' && (message.plan?.truncated || !steps.length || steps.some(step => step.status !== 'completed'))) return 'incomplete'
     return 'completed'
   }
   if (explicit) return explicit

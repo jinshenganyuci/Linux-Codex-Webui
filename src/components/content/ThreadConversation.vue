@@ -1329,14 +1329,15 @@ function togglePlanExpanded(message: UiMessage): void {
 
 function planSummaryLabel(message: UiMessage): string {
   const steps = readPlanSteps(message)
-  if (readPlanKind(message) === 'proposal') return t('Plan details')
+  if (readPlanKind(message) === 'proposal') return message.plan?.truncated ? t('Plan content truncated') : t('Plan details')
+  if (message.plan?.truncated) return t('Shown {completed}/{total}; some steps are not shown', { completed: planConfirmedCount(steps), total: steps.length })
   return t('Confirmed {completed}/{total}', { completed: planConfirmedCount(steps), total: steps.length })
 }
 
 function planCurrentStepLabel(message: UiMessage): string {
   const steps = readPlanSteps(message)
   const lifecycle = resolvedPlanLifecycle(message)
-  if (steps.length > 0 && planConfirmedCount(steps) === steps.length) return t('Steps completed')
+  if (!message.plan?.truncated && steps.length > 0 && planConfirmedCount(steps) === steps.length) return t('Steps completed')
   if (lifecycle !== 'live') return planLifecycleBadge(message)
   const current = planCurrentSteps(steps)
   return current.length ? t('Current: {steps}', { steps: current.join(' · ') }) : t('Waiting for plan update')
@@ -1346,7 +1347,7 @@ function planLifecycleBadge(message: UiMessage): string {
   const lifecycle = resolvedPlanLifecycle(message)
   if (lifecycle === 'live') {
     const steps = readPlanSteps(message)
-    return steps.length > 0 && planConfirmedCount(steps) === steps.length ? t('Steps completed') : t('In progress')
+    return !message.plan?.truncated && steps.length > 0 && planConfirmedCount(steps) === steps.length ? t('Steps completed') : t('In progress')
   }
   if (lifecycle === 'completed') return readPlanKind(message) === 'proposal' ? t('Plan ready') : t('Completed')
   if (lifecycle === 'failed') return t('Failed')
