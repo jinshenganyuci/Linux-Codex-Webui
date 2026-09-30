@@ -93,3 +93,33 @@ PHASE1_DOCKER_IMAGE=linux-codex-webui-plan-progress:20260927-47e2280-cli01540 \
 前后端和通知版本标记需同次发布。先在隔离 13511 创建独立 release、保留原配置及认证来源，确认无活动任务后切换；不得复制测试 home 到正式服务。回退恢复原 13511 服务入口并空闲重启，新增活动快照文件可保留，旧版忽略它；既有历史摘要维持兼容格式。
 
 原生脚本只允许删除自己创建的会话。使用 `PLAN_NATIVE_KEEP=1` 时记录报告内的 `threadId`，完成重启验证后删除该测试会话及其摘要；不清理其他聊天、配置、登录和历史数据。合成浏览器脚本不写真实会话。
+
+## 随后的正式 13510 升级授权（2026-09-30 发起，10-01 准备完成）
+
+用户已明确要求升级 13510。新正式 release 为 `/root/.local/share/linux-codex-webui/releases/plan-progress-13510-20260930`，复制已验收后端 `47e2280`、前端 `5e67870`，源构建与 13511 当前发布的 33/2 个文件哈希一致；固定 CLI 0.154.0 不变。继续使用正式 `/root/.codex`、`/root/Codex-Webui` 工作目录以及旧 runner 的密码来源，测试 home 不复制到正式端。
+
+部署脚本与两个验证脚本复制到独立目录，文件哈希写入准备回执，防止工作区后续变化影响待执行作业。作业 `codex-webui-deploy-plan-20260930.service` 在服务外持久运行，并持有 `13510-deploy.lock`；三个空闲样本后才记录原交互列表 ID、配置/偏好、登录令牌摘要和 JSONL 文件前缀 SHA。切换使用原子服务覆盖 `/etc/systemd/system/codex-webui-13510.service.d/zzzzzzz-plan-progress-20260930.conf`，优雅等待抢先进入的任务完成。若主机在等待期间重启，只在旧版本与原单元指纹不变时重新准备；若切换阶段中断，核对实际新旧版本再继续验证或回滚。
+
+计划兼容副本与完整聊天备份分开：只保存小型 `plan-summary-history` 和 `active-plans` 原始文件及存在性/哈希，升级后校验已有摘要内容保留。回滚前停止新版并另存其最后状态，副本一旦完整写入便不再被重试覆盖；不会以升级前副本覆盖新聊天。旧版本无法表示同回合的独立文稿/清单，保留新版副本是恢复该信息的依据。
+
+```bash
+node scripts/deploy-plan-production.cjs --self-test
+node scripts/deploy-plan-production.cjs --prepare
+systemd-analyze verify /etc/systemd/system/codex-webui-deploy-plan-20260930.service
+systemctl show codex-webui-deploy-plan-20260930.service -p ActiveState -p SubState -p MainPID -p ControlGroup
+cat /root/.local/share/linux-codex-webui/deployments/13510-plan-progress-20260930/status.json
+```
+
+实际准备阶段通过：隔离 home 的 CLI 帮助检查、脚本语法与空闲/中断/副本不覆盖自测、单元校验、7 个验收 URL 门控用例，以及 13511 手机暗色两项夹具预演。预演报告 `output/playwright/plan-progress/production-rehearsal-20260930/report.json`，视口 375×812、URL `http://127.0.0.1:13511/#/thread/01a0aaaa-0000-7000-8000-000000000001`。下图是预演证据，不代表正式升级已完成：
+
+![13511 正式升级前计划卡预演](/root/.local/share/linux-codex-webui/worktrees/plan-progress-20260927/output/playwright/plan-progress/production-rehearsal-20260930/live-375-dark-current-step.png)
+
+切换后作业自动运行两项真实密码登录浏览器检查（首页/旧聊天，1440×900 明暗），再在显式允许的 `127.0.0.1:13510` 运行手机暗色 live/restoration 两项计划夹具；夹具不写真实聊天，不调用生产模型。另直接检查真实 WebSocket `ready.planSnapshotsVersion=1`。旧聊天恢复可能由后端为当前会话启用计划工具并追加原生上下文，所以校验允许 JSONL 尾部正常追加，禁止已有字节被改写或截短。
+
+```bash
+PLAN_ALLOW_PRODUCTION=1 PROFILE_BASE_URL=http://127.0.0.1:13510 \
+PLAN_RUN_LABEL=production-20260930 PLAN_VIEWPORTS=375 PLAN_THEMES=dark \
+PLAN_CASES=live,restoration node scripts/verify-plan-progress.cjs
+```
+
+最终回执目录 `/root/.local/share/linux-codex-webui/deployments/13510-plan-progress-20260930` 包含 `preflight.json`、`status.json`、`deploy.log` 和 `browser/report.json`；计划卡报告在工作区 `output/playwright/plan-progress/production-20260930/report.json`。记录时作业为 `waiting-for-idle`，发起对话仍在执行，正式覆盖尚未安装；必须看到最终 `complete` 才能认定正式升级成功。出错时回滚需同时校验旧后端和旧前端 HTTP 文件，而非只比后端提交号。13511 保持原进程与产物。
