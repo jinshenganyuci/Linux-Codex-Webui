@@ -2,6 +2,8 @@
  * Read-only plan-card acceptance on the current isolated 13511 build.
  * PLAN_RUN_LABEL=current PLAN_VIEWPORTS=375,768,1440 PLAN_THEMES=light,dark
  * PLAN_CASES=live,identity,restoration selects a bounded subset.
+ * Production fixture replay requires PLAN_ALLOW_PRODUCTION=1 and the exact
+ * PROFILE_BASE_URL=http://127.0.0.1:13510; no production model turns are sent.
  * Routes and notification injection need Playwright rather than Browser Use.
  * All conversations/plans are browser fixtures; no real messages or writes.
  */
@@ -11,7 +13,10 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const base = (process.env.PROFILE_BASE_URL || 'http://127.0.0.1:13511').replace(/\/$/, '')
-assert.equal(new URL(base).port, '13511', 'Plan acceptance must never target production')
+const authorizedProduction = process.env.PLAN_ALLOW_PRODUCTION === '1'
+  && process.env.PROFILE_BASE_URL === 'http://127.0.0.1:13510'
+assert(new URL(base).port === '13511' || authorizedProduction,
+  'Production fixtures require PLAN_ALLOW_PRODUCTION=1 and exactly PROFILE_BASE_URL=http://127.0.0.1:13510')
 assert(['127.0.0.1', '127.0.0.2', 'localhost'].includes(new URL(base).hostname), 'Use local isolated acceptance')
 const out = path.resolve('output/playwright/plan-progress', process.env.PLAN_RUN_LABEL || 'current')
 const widths = (process.env.PLAN_VIEWPORTS || '375,768,1440').split(',').map(Number)
