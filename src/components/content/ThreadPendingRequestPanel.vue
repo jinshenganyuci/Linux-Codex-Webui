@@ -253,6 +253,9 @@
           </button>
         </section>
       </template>
+      <p v-if="hasSubmissionError" class="thread-pending-request-submission-error" role="alert" data-testid="pending-response-submit-error">
+        {{ t('Response failed to send. Please try again.') }}
+      </p>
       </fieldset>
     </article>
   </section>
@@ -263,6 +266,7 @@ import { isBlockingServerRequest } from '../../serverRequests'
 import { computed, ref, toRef, watch } from 'vue'
 import { isSecretInputQuestion, isUserInputRequest, pendingRequestDraftIdentity } from '../../pendingRequestDrafts'
 import { usePendingRequestDraft } from '../../composables/usePendingRequestDraft'
+import { usePendingRequestSubmission } from '../../composables/usePendingRequestSubmission'
 import type { UiServerRequest, UiServerRequestReply } from '../../types/codex'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import ComposerDropdown from './ComposerDropdown.vue'
@@ -316,7 +320,7 @@ const emit = defineEmits<{
 const selectedApprovalDecision = ref<ApprovalDecision>('accept')
 const approvalFreeformText = ref('')
 const { answers: toolQuestionAnswers, otherAnswers: toolQuestionOtherAnswers, status: draftStatus, flush: flushDraft, clearSubmitted } = usePendingRequestDraft(toRef(props, 'request'))
-const isSubmitting = ref(false)
+const { isSubmitting, hasSubmissionError, submit: submitWithStatus } = usePendingRequestSubmission(toRef(props, 'request'))
 const mcpElicitationAnswers = ref<Record<string, string | number | boolean | string[] | null>>({})
 const mcpElicitationValidationError = ref('')
 const { t } = useUiLanguage()
@@ -340,15 +344,9 @@ async function submitResponse(payload: UiServerRequestReply): Promise<void> {
     emit('respondServerRequest', payload)
     return
   }
-  const key = pendingRequestDraftIdentity(current)
-  isSubmitting.value = true
-  try {
-    if (await props.submitRequest(payload)) clearSubmitted(key)
-  } catch {
-    // The parent surfaces request errors; retain the draft for a retry.
-  } finally {
-    isSubmitting.value = false
-  }
+  const submitRequest = props.submitRequest
+  const submittedKey = await submitWithStatus(() => submitRequest(payload))
+  if (submittedKey) clearSubmitted(submittedKey)
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -1151,6 +1149,17 @@ function onRejectUnknownRequest(request: UiServerRequest): void {
 
 .thread-pending-request-validation-error {
   @apply m-0 mt-3 text-sm leading-relaxed text-rose-300;
+}
+
+.thread-pending-request-submission-error {
+  margin: 0.75rem 0 0;
+  color: #b42318;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+:global(:root.dark) .thread-pending-request-submission-error {
+  color: #fda4af;
 }
 
 .thread-pending-request-question-options,

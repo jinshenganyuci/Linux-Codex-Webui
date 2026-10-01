@@ -4379,6 +4379,11 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
 .thread-pending-request-inbox .thread-pending-request-option-index { color: var(--pending-muted); }
 .thread-pending-request-inbox .thread-pending-request-option.is-selected { background: var(--pending-active); border-color: var(--pending-accent); box-shadow: none; }
 .thread-pending-request-inbox .thread-pending-request-primary { background: var(--pending-text); color: var(--pending-surface); border-color: var(--pending-text); }
+.thread-pending-request-inbox .thread-pending-request-primary:hover:not(:disabled) {
+  background: var(--pending-text);
+  color: var(--pending-surface);
+  filter: brightness(0.92);
+}
 .thread-pending-request-inbox .thread-pending-request-secondary { color: var(--pending-text); border-color: var(--pending-border); }
 .thread-pending-request-inbox .thread-pending-request-secondary:hover { background: var(--pending-raised); }
 .thread-pending-request-inbox :disabled { cursor: wait; opacity: 0.65; }

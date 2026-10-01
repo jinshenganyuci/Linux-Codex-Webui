@@ -875,6 +875,7 @@ const zhCN: Record<string, string> = {
   'Draft saved in this browser for 7 days. Secret answers are not saved.': '草稿已保存在此浏览器，保留 7 天。密码类答案不会保存。',
   'Answers are saved in this browser for 7 days. Secret answers are not saved.': '答案草稿保存在此浏览器，保留 7 天。密码类答案不会保存。',
   'Draft could not be saved in this browser.': '此浏览器无法保存草稿，离开前请先复制答案。',
+  'Response failed to send. Please try again.': '回复发送失败，请重试。',
 
   'MCP server input required': '需要 MCP 服务器输入',
   'Tool call waiting for response': '工具调用正在等待响应',
