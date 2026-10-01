@@ -89,6 +89,11 @@ import {
 } from './newChatDefaults.js'
 import { ThreadTitleGenerator } from './threadTitleGenerator.js'
 import {
+  isUnsupportedThreadItemsListError,
+  readBoundedFullTurnItem,
+  readCompleteCommandOutput,
+} from './boundedThreadHistory.js'
+import {
   limitRuntimeItemPayload,
   limitCommandOutputsInTurns,
   limitThreadCommandOutputs,
@@ -2521,12 +2526,23 @@ async function readBoundedPaginatedAgentResult(
   appServer: RpcExecutor,
   threadId: string,
 ): Promise<{ text: string; truncated: boolean }> {
-  const page = asRecord(await appServer.rpc('thread/items/list', {
-    threadId,
-    cursor: null,
-    limit: AGENT_RESULT_HISTORY_ITEM_LIMIT,
-    sortDirection: 'desc',
-  }))
+  let page: Record<string, unknown> | null
+  try {
+    page = asRecord(await appServer.rpc('thread/items/list', {
+      threadId,
+      cursor: null,
+      limit: AGENT_RESULT_HISTORY_ITEM_LIMIT,
+      sortDirection: 'desc',
+    }))
+  } catch (error) {
+    if (!isUnsupportedThreadItemsListError(error)) throw error
+    // Do not persist an unsupported flag: a replacement runtime must be probed
+    // again, and these explicit result reads are not part of startup polling.
+    return await readBoundedFullTurnItem(appServer, threadId, (item) => {
+      if (item.type !== 'agentMessage' || typeof item.text !== 'string' || !item.text.trim()) return null
+      return extractLastAgentMessage({ thread: { turns: [{ items: [item] }] } })
+    }) ?? { text: '', truncated: false }
+  }
   const descendingEntries = Array.isArray(page?.data)
     ? page.data.slice(0, AGENT_RESULT_HISTORY_ITEM_LIMIT)
     : []
@@ -2544,13 +2560,7 @@ function readMatchingCommandOutputFromTurns(turns: unknown[], turnId: string, it
     const items = Array.isArray(turn?.items) ? turn.items : []
     for (const itemValue of items) {
       const item = asRecord(itemValue)
-      if (
-        readNonEmptyString(item?.id) === itemId
-        && item?.type === 'commandExecution'
-        && typeof item.aggregatedOutput === 'string'
-      ) {
-        return item.aggregatedOutput
-      }
+      if (item && readNonEmptyString(item.id) === itemId) return readCompleteCommandOutput(item)
     }
   }
   return null
@@ -2579,13 +2589,23 @@ export async function readFullThreadCommandOutput(
     if (seenCursors.has(cursorKey)) break
     seenCursors.add(cursorKey)
 
-    const page = asRecord(await appServer.rpc('thread/items/list', {
-      threadId,
-      turnId,
-      cursor,
-      limit: THREAD_COMMAND_OUTPUT_ITEM_PAGE_LIMIT,
-      sortDirection: 'asc',
-    }))
+    let page: Record<string, unknown> | null
+    try {
+      page = asRecord(await appServer.rpc('thread/items/list', {
+        threadId,
+        turnId,
+        cursor,
+        limit: THREAD_COMMAND_OUTPUT_ITEM_PAGE_LIMIT,
+        sortDirection: 'asc',
+      }))
+    } catch (error) {
+      if (!isUnsupportedThreadItemsListError(error)) throw error
+      return readBoundedFullTurnItem(appServer, threadId, (item, candidateTurnId) => (
+        candidateTurnId === turnId && readNonEmptyString(item.id) === itemId
+          ? readCompleteCommandOutput(item)
+          : null
+      ))
+    }
     const entries = Array.isArray(page?.data)
       ? page.data.slice(0, THREAD_COMMAND_OUTPUT_ITEM_PAGE_LIMIT)
       : []
@@ -2593,13 +2613,7 @@ export async function readFullThreadCommandOutput(
       const entry = asRecord(entryValue)
       if (readNonEmptyString(entry?.turnId) !== turnId) continue
       const item = asRecord(entry?.item)
-      if (
-        readNonEmptyString(item?.id) === itemId
-        && item?.type === 'commandExecution'
-        && typeof item.aggregatedOutput === 'string'
-      ) {
-        return item.aggregatedOutput
-      }
+      if (item && readNonEmptyString(item.id) === itemId) return readCompleteCommandOutput(item)
     }
 
     const nextCursor = readNonEmptyString(page?.nextCursor)
