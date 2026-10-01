@@ -29,3 +29,10 @@ Invalid Codex auth failed-turn error rendering.
 - Stop the invalid-auth Docker container after verification.
 
 ---
+
+### 中断回合的错误原因（Codex 0.159.3）
+
+- 前置条件：隔离的 13511 验收环境；准备 `turn/completed` 的 `status: interrupted` 且 `error.message` 非空的通知，以及同一回合的 legacy / paginated 历史记录。
+- 操作：接收通知，查看真实聊天错误行和回合状态，然后刷新会话；分别使用明暗主题验证。再对照用户主动停止且 `error: null` 或空白字符串的回合。
+- 预期：有错误时即时展示原因，刷新后保留且不叠加重复 live error；回合和计划终态保留“已中断”。无错误的正常停止不凭空生成红色错误消息。
+- 清理：移除隔离测试会话和通知 fixture；本用例不使用真实账号凭据或正式服务。

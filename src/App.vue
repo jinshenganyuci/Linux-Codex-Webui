@@ -2874,8 +2874,8 @@ async function handleServerRequestResponse(payload: UiServerRequestReply): Promi
   }
 }
 
-async function onForkThreadFromMessage(payload: { threadId: string; turnIndex: number }): Promise<void> {
-  const forkedThreadId = await forkThreadFromTurn(payload.threadId, payload.turnIndex)
+async function onForkThreadFromMessage(payload: { threadId: string; turnIndex?: number; turnId?: string }): Promise<void> {
+  const forkedThreadId = await forkThreadFromTurn(payload.threadId, payload.turnIndex, payload.turnId)
   if (!forkedThreadId) return
   await router.push({ name: 'thread', params: { threadId: forkedThreadId } })
   if (selectedThreadId.value !== forkedThreadId) {
@@ -4010,21 +4010,21 @@ function onInterruptTurn(): void {
   void interruptSelectedThreadTurn()
 }
 
-function onRollback(payload: { turnId: string }): void {
+async function onRollback(payload: { turnId: string }): Promise<void> {
+  const threadId = selectedThreadId.value
   const targetTurnId = payload.turnId.trim()
-  if (targetTurnId.length > 0) {
-    const rollbackUserMessage = [...filteredMessages.value]
-      .reverse()
-      .find((message) => (
-        message.role === 'user'
-        && (message.turnId?.trim() ?? '') === targetTurnId
-        && message.text.trim().length > 0
-      ))
-    if (rollbackUserMessage?.text && threadComposerRef.value) {
-      threadComposerRef.value.appendTextToDraft(rollbackUserMessage.text)
-    }
+  const rollbackUserText = [...filteredMessages.value].reverse().find((message) => (
+    message.role === 'user' && (message.turnId?.trim() ?? '') === targetTurnId && message.text.trim().length > 0
+  ))?.text
+  const rolledBack = await rollbackSelectedThread(payload.turnId)
+  if (!rolledBack || selectedThreadId.value !== rolledBack.threadId) return
+  if (rolledBack.threadId !== threadId) {
+    await router.push({ name: 'thread', params: { threadId: rolledBack.threadId } })
+    await nextTick()
   }
-  void rollbackSelectedThread(payload.turnId)
+  if (selectedThreadId.value === rolledBack.threadId && rollbackUserText && threadComposerRef.value) {
+    threadComposerRef.value.appendTextToDraft(rollbackUserText)
+  }
 }
 
 function onImplementPlan(payload: { turnId: string }): void {

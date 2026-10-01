@@ -36,7 +36,8 @@ import {
   interruptThreadTurn,
   pickCodexRateLimitSnapshot,
   replyToServerRequest,
-  revertThreadFileChanges,
+  getThreadHistoryMutationCapabilities,
+  revertThread,
   rollbackThread,
   getThreadGroupsPage,
   getThreadQueueState,
@@ -1774,6 +1775,7 @@ export function useDesktopState() {
   let rateLimitRefreshTimer: number | null = null
   const delayedTurnSyncTimerByThreadId = new Map<string, number>()
   const loadMessagePromiseByThreadId = new Map<string, Promise<void>>()
+  const historyLoadRevisionByPromise = new WeakMap<Promise<void>, number>()
   const forcedMessageLoadPromiseByThreadId = new Map<string, Promise<void>>()
   const threadHistoryModeProbeByThreadId = new Map<string, Promise<ThreadHistoryMode>>()
   const paginatedTurnReconcileByKey = new Map<string, {
@@ -1784,6 +1786,7 @@ export function useDesktopState() {
   const threadHistoryAccessOrderByThreadId = new Map<string, number>()
   let threadHistoryAccessSequence = 0
   let visibleMessageLoadOwnerThreadId = ''
+  const historyMutationRevisionByThreadId = new Map<string, number>()
   let messageLoadGeneration = 0
   const deletedThreadIds = ref(new Set<string>())
   const deletingThreads = new Map<string, Promise<boolean>>()
@@ -3099,7 +3102,7 @@ export function useDesktopState() {
     projectGroups.value = mergeThreadGroups(projectGroups.value, flaggedGroups)
   }
 
-  function insertOptimisticThread(threadId: string, cwd: string, firstMessageText: string): void {
+  function insertOptimisticThread(threadId: string, cwd: string, firstMessageText: string, historyMode: ThreadHistoryMode = 'legacy'): void {
     const nowIso = new Date().toISOString()
     const normalizedCwd = normalizePathForUi(cwd)
     const projectName = toProjectName(normalizedCwd)
@@ -3114,7 +3117,7 @@ export function useDesktopState() {
       preview: firstMessageText,
       unread: false,
       inProgress: false,
-      historyMode: 'legacy',
+      historyMode,
     }
 
     const existingGroupIndex = sourceGroups.value.findIndex((group) => group.projectName === projectName)
@@ -4681,9 +4684,9 @@ export function useDesktopState() {
     if (notification.method !== 'turn/completed') return ''
     const params = asRecord(notification.params)
     const turn = asRecord(params?.turn)
-    if (!turn || turn.status !== 'failed') return ''
+    if (!turn || (turn.status !== 'failed' && turn.status !== 'interrupted')) return ''
     const errorPayload = asRecord(turn.error)
-    return readString(errorPayload?.message)
+    return readString(errorPayload?.message).trim()
   }
 
   function readNotificationErrorState(notification: RpcNotification): { message: string } | null {
@@ -5693,10 +5696,10 @@ export function useDesktopState() {
     let completionEndsActiveRun = false
     if (completedTurn) {
       const rawCompletedStatus = readString(asRecord(asRecord(notification.params)?.turn)?.status).toLowerCase()
-      const completedPlanLifecycle: UiTerminalPlanLifecycle = turnErrorMessage || rawCompletedStatus.includes('fail') || rawCompletedStatus.includes('error')
-        ? 'failed'
-        : rawCompletedStatus.includes('interrupt') || rawCompletedStatus.includes('cancel')
-          ? 'interrupted'
+      const completedPlanLifecycle: UiTerminalPlanLifecycle = rawCompletedStatus.includes('interrupt') || rawCompletedStatus.includes('cancel')
+        ? 'interrupted'
+        : turnErrorMessage || rawCompletedStatus.includes('fail') || rawCompletedStatus.includes('error')
+          ? 'failed'
           : 'completed'
       finalizeLivePlanMessage(
         completedTurn.threadId,
@@ -5776,11 +5779,7 @@ export function useDesktopState() {
         || currentProgress.turnId === completedTurn.turnId
         || correctsInterruptedOverlap
       )) {
-        const phase: UiTurnProgress['phase'] = turnErrorMessage || rawCompletedStatus.includes('fail') || rawCompletedStatus.includes('error')
-          ? 'failed'
-          : rawCompletedStatus.includes('interrupt') || rawCompletedStatus.includes('cancel')
-            ? 'interrupted'
-            : 'completed'
+        const phase: UiTurnProgress['phase'] = completedPlanLifecycle
         agentProgressByThreadId.value = {
           ...agentProgressByThreadId.value,
           [completedTurn.threadId]: {
@@ -6319,7 +6318,8 @@ export function useDesktopState() {
     if (existingLoad) {
       const existingLoadIsForced = forcedMessageLoadPromiseByThreadId.get(threadId) === existingLoad
       await existingLoad
-      if (!options.force || existingLoadIsForced) return
+      const existingLoadIsCurrent = historyLoadRevisionByPromise.get(existingLoad) === (historyMutationRevisionByThreadId.get(threadId) ?? 0)
+      if (existingLoadIsCurrent && (!options.force || existingLoadIsForced)) return
       const newerLoad = loadMessagePromiseByThreadId.get(threadId)
       if (newerLoad) {
         await newerLoad
@@ -6335,12 +6335,13 @@ export function useDesktopState() {
     }
 
     const loadGeneration = messageLoadGeneration
+    const mutationRevision = historyMutationRevisionByThreadId.get(threadId) ?? 0
     const loadPromise = (async () => {
       try {
       void loadRequestUserInputHistoryForThread(threadId)
       void loadPlanSummaryHistoryForThread(threadId)
       const historyMode = await resolveThreadHistoryMode(threadId)
-      if (loadGeneration !== messageLoadGeneration || isThreadDeleted(threadId)) return
+      if (loadGeneration !== messageLoadGeneration || mutationRevision !== (historyMutationRevisionByThreadId.get(threadId) ?? 0) || isThreadDeleted(threadId)) return
       invalidateThreadHistoryCache(threadId, historyMode)
       const alreadyLoaded = loadedMessagesByThreadId.value[threadId] === true
       const version = currentThreadVersion(threadId)
@@ -6378,7 +6379,7 @@ export function useDesktopState() {
           }
         : await getThreadHistoryDetail(threadId, historyMode)
 
-      if (loadGeneration !== messageLoadGeneration || isThreadDeleted(threadId)) return
+      if (loadGeneration !== messageLoadGeneration || mutationRevision !== (historyMutationRevisionByThreadId.get(threadId) ?? 0) || isThreadDeleted(threadId)) return
 
       if (detail.modelProvider) {
         setThreadModelProviderId(threadId, detail.modelProvider)
@@ -6480,7 +6481,7 @@ export function useDesktopState() {
         void loadAgentProgressSnapshot(threadId)
       }
       } catch (unknownError) {
-        if (loadGeneration !== messageLoadGeneration || isThreadDeleted(threadId)) return
+        if (loadGeneration !== messageLoadGeneration || mutationRevision !== (historyMutationRevisionByThreadId.get(threadId) ?? 0) || isThreadDeleted(threadId)) return
         const message = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
         if (selectedThreadId.value === threadId) {
           setTurnErrorForThread(threadId, message, { transient: true })
@@ -6504,6 +6505,7 @@ export function useDesktopState() {
     })
 
     loadMessagePromiseByThreadId.set(threadId, loadPromise)
+    historyLoadRevisionByPromise.set(loadPromise, mutationRevision)
     if (options.force === true) {
       forcedMessageLoadPromiseByThreadId.set(threadId, loadPromise)
     }
@@ -6533,13 +6535,14 @@ export function useDesktopState() {
     }
 
     const loadGeneration = messageLoadGeneration
+    const mutationRevision = historyMutationRevisionByThreadId.get(threadId) ?? 0
     try {
       const page = await getOlderThreadHistoryPage(threadId, {
         historyMode,
         cursor,
         beforeTurnId,
       })
-      if (loadGeneration !== messageLoadGeneration || readThreadHistoryMode(threadId) !== page.historyMode) return
+      if (loadGeneration !== messageLoadGeneration || mutationRevision !== (historyMutationRevisionByThreadId.get(threadId) ?? 0) || readThreadHistoryMode(threadId) !== page.historyMode) return
       const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
       const mergedMessages = mergeMessages(page.messages, previousPersisted, { preserveMissing: true })
       setPersistedMessagesForThread(threadId, mergedMessages)
@@ -6566,7 +6569,7 @@ export function useDesktopState() {
       }
       touchThreadHistoryCache(threadId)
     } catch (loadError) {
-      if (loadGeneration !== messageLoadGeneration) return
+      if (loadGeneration !== messageLoadGeneration || mutationRevision !== (historyMutationRevisionByThreadId.get(threadId) ?? 0)) return
       error.value = loadError instanceof Error ? loadError.message : 'Failed to load earlier messages'
       throw loadError
     } finally {
@@ -6583,6 +6586,7 @@ export function useDesktopState() {
     if (!threadId || !turnId || readThreadHistoryMode(threadId) !== 'paginated') return false
 
     const loadGeneration = messageLoadGeneration
+    const mutationRevision = historyMutationRevisionByThreadId.get(threadId) ?? 0
     const collectedMessages: UiMessage[] = []
     const seenCursors = new Set<string>()
     let cursor: string | null = null
@@ -6590,7 +6594,7 @@ export function useDesktopState() {
 
     for (let pageIndex = 0; pageIndex < 4; pageIndex += 1) {
       const page = await getThreadTurnItemsPage(threadId, turnId, cursor)
-      if (loadGeneration !== messageLoadGeneration || readThreadHistoryMode(threadId) !== 'paginated') {
+      if (loadGeneration !== messageLoadGeneration || mutationRevision !== (historyMutationRevisionByThreadId.get(threadId) ?? 0) || readThreadHistoryMode(threadId) !== 'paginated') {
         return false
       }
       if (!page) return false
@@ -6925,135 +6929,85 @@ export function useDesktopState() {
     }
   }
 
-  async function forkThreadById(threadId: string): Promise<string> {
-    const sourceThreadId = threadId.trim()
-    if (!sourceThreadId) return ''
-    if (readThreadHistoryMode(sourceThreadId) === 'paginated') {
-      error.value = 'Codex does not support forking paginated threads yet.'
-      return ''
-    }
-
+  async function openThreadFork(
+    sourceThreadId: string,
+    boundary?: { lastTurnId: string; beforeTurnId?: never } | { beforeTurnId: string; lastTurnId?: never },
+    selectionAtStart = selectedThreadId.value,
+  ): Promise<string> {
     const sourceThread = flattenThreads(sourceGroups.value).find((row) => row.id === sourceThreadId)
     const sourceCwd = sourceThread?.cwd?.trim() ?? ''
     const sourceTitle = sourceThread?.title?.trim() ?? 'Forked chat'
     const selectedModel = readModelIdForThread(sourceThreadId)
     const selectedReasoningEffort = readReasoningEffortForThread(sourceThreadId) || runtimeDefaultReasoningEffort.value
-    error.value = ''
+    const forkedThread = await forkThread(sourceThreadId, sourceCwd || undefined, selectedModel || undefined, boundary)
+    const nextThreadId = forkedThread.threadId.trim()
+    if (!nextThreadId) return ''
 
+    const nextTitle = boundary ? toForkedThreadTitle(sourceTitle) : sourceTitle
+    const historyMode = forkedThread.historyMode ?? readThreadHistoryMode(sourceThreadId)
+    insertOptimisticThread(nextThreadId, forkedThread.cwd?.trim() || sourceCwd, nextTitle, historyMode)
+    rememberThreadHistoryMode(nextThreadId, historyMode)
+    setThreadModelId(nextThreadId, forkedThread.model)
+    const forkedModel = forkedThread.model.trim() || selectedModel
+    if (forkedModel && selectedReasoningEffort) {
+      cacheThreadModelPreference(nextThreadId, {
+        model: forkedModel,
+        reasoningEffort: selectedReasoningEffort,
+        speedMode: 'standard',
+      })
+      void queueThreadModelPreferenceWrite(nextThreadId)
+    }
+    resumedThreadById.value = { ...resumedThreadById.value, [nextThreadId]: true }
+    if (selectedThreadId.value === selectionAtStart) setSelectedThreadId(nextThreadId)
+    // excludeTurns keeps fork responses small. Load exactly one initial page for
+    // the returned mode instead of hydrating full history then truncating it.
     try {
-      const forkedThread = await forkThread(sourceThreadId, sourceCwd || undefined, selectedModel || undefined)
-      const nextThreadId = forkedThread.threadId.trim()
-      if (!nextThreadId) return ''
-
-      insertOptimisticThread(nextThreadId, sourceCwd, sourceTitle)
-      setThreadModelId(nextThreadId, forkedThread.model)
-      const forkedModel = forkedThread.model.trim() || selectedModel
-      if (forkedModel && selectedReasoningEffort) {
-        cacheThreadModelPreference(nextThreadId, {
-          model: forkedModel,
-          reasoningEffort: selectedReasoningEffort,
-          speedMode: 'standard',
-        })
-        void queueThreadModelPreferenceWrite(nextThreadId)
-      }
-      resumedThreadById.value = {
-        ...resumedThreadById.value,
-        [nextThreadId]: true,
-      }
-      setSelectedThreadId(nextThreadId)
-      await loadThreads()
       await loadMessages(nextThreadId)
-      return nextThreadId
+    } catch (loadError) {
+      // The fork already exists. Return its ID so routing and the restored draft
+      // remain attached to the created conversation even if hydration failed.
+      error.value = loadError instanceof Error ? loadError.message : 'Failed to load forked conversation'
+    }
+    if (boundary) await renameThreadById(nextThreadId, nextTitle)
+    void loadThreads().catch(() => {})
+    return nextThreadId
+  }
+
+  async function forkThreadById(threadId: string): Promise<string> {
+    const sourceThreadId = threadId.trim()
+    if (!sourceThreadId) return ''
+    const selectionAtStart = selectedThreadId.value
+    error.value = ''
+    try {
+      const capabilities = await getThreadHistoryMutationCapabilities()
+      if (!capabilities.fork) throw new Error('The active Codex runtime does not support thread forks.')
+      return await openThreadFork(sourceThreadId, undefined, selectionAtStart)
     } catch (unknownError) {
       error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
       return ''
     }
   }
 
-  async function forkThreadFromTurn(threadId: string, turnIndex: number): Promise<string> {
+  async function forkThreadFromTurn(threadId: string, turnIndex?: number, turnId?: string): Promise<string> {
     const normalizedThreadId = threadId.trim()
-    if (!normalizedThreadId || !Number.isInteger(turnIndex) || turnIndex < 0) return ''
-    if (readThreadHistoryMode(normalizedThreadId) === 'paginated') {
-      error.value = 'Codex does not support forking paginated threads yet.'
-      return ''
-    }
-
+    if (!normalizedThreadId) return ''
+    const selectionAtStart = selectedThreadId.value
     if (inProgressById.value[normalizedThreadId] === true) {
       error.value = 'Finish the current turn before forking from a response.'
       return ''
     }
-
-    if (loadedMessagesByThreadId.value[normalizedThreadId] !== true) {
-      try {
-        await loadMessages(normalizedThreadId)
-      } catch (unknownError) {
-        error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
-        return ''
-      }
-    }
-
-    const sourceMessages = persistedMessagesByThreadId.value[normalizedThreadId] ?? []
-    let lastTurnIndex = -1
-    for (const message of sourceMessages) {
-      if (typeof message.turnIndex === 'number' && Number.isFinite(message.turnIndex)) {
-        lastTurnIndex = Math.max(lastTurnIndex, message.turnIndex)
-      }
-    }
-
-    if (lastTurnIndex >= 0 && turnIndex > lastTurnIndex) return ''
-
-    const sourceThread = flattenThreads(sourceGroups.value).find((row) => row.id === normalizedThreadId) ?? null
-    const sourceReasoningEffort = readReasoningEffortForThread(normalizedThreadId) || runtimeDefaultReasoningEffort.value
-
     try {
       error.value = ''
-      const forked = await forkThread(normalizedThreadId)
-      const forkedThreadId = forked.threadId.trim()
-      if (!forkedThreadId) return ''
-
-      const forkedCwd = forked.cwd.trim() || sourceThread?.cwd?.trim() || ''
-      const forkedThreadTitle = toForkedThreadTitle(sourceThread?.title || sourceThread?.preview || 'Untitled thread')
-      insertOptimisticThread(forkedThreadId, forkedCwd, forkedThreadTitle)
-      setThreadModelId(forkedThreadId, forked.model)
-      const forkedModel = forked.model.trim() || readModelIdForThread(normalizedThreadId)
-      if (forkedModel && sourceReasoningEffort) {
-        cacheThreadModelPreference(forkedThreadId, {
-          model: forkedModel,
-          reasoningEffort: sourceReasoningEffort,
-          speedMode: 'standard',
-        })
-        void queueThreadModelPreferenceWrite(forkedThreadId)
-      }
-      setPersistedMessagesForThread(forkedThreadId, forked.messages)
-      loadedMessagesByThreadId.value = {
-        ...loadedMessagesByThreadId.value,
-        [forkedThreadId]: true,
-      }
-      resumedThreadById.value = {
-        ...resumedThreadById.value,
-        [forkedThreadId]: true,
-      }
-      clearLivePlansForThread(forkedThreadId)
-      setLiveAgentMessagesForThread(forkedThreadId, [])
-      clearLiveReasoningForThread(forkedThreadId)
-      if (liveCommandsByThreadId.value[forkedThreadId]) {
-        liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, forkedThreadId)
-      }
-      setTurnSummaryForThread(forkedThreadId, null)
-      setTurnActivityForThread(forkedThreadId, null)
-      setTurnErrorForThread(forkedThreadId, null)
-      setThreadInProgress(forkedThreadId, false)
-
-      const turnsToRollback = lastTurnIndex - turnIndex
-      if (turnsToRollback > 0) {
-        const rolledBackMessages = await rollbackThread(forkedThreadId, turnsToRollback)
-        setPersistedMessagesForThread(forkedThreadId, rolledBackMessages)
-      }
-
-      await renameThreadById(forkedThreadId, forkedThreadTitle)
-      setSelectedThreadId(forkedThreadId)
-      void loadThreads().catch(() => {})
-      return forkedThreadId
+      if (loadedMessagesByThreadId.value[normalizedThreadId] !== true) await loadMessages(normalizedThreadId)
+      const sourceMessages = persistedMessagesByThreadId.value[normalizedThreadId] ?? []
+      const targetTurnId = turnId?.trim() || sourceMessages.find((message) => (
+        typeof turnIndex === 'number' && message.turnIndex === turnIndex
+      ))?.turnId?.trim() || ''
+      // Native turn IDs work for both modes, including pages without absolute indexes.
+      if (!targetTurnId || !sourceMessages.some((message) => message.turnId === targetTurnId)) return ''
+      const capabilities = await getThreadHistoryMutationCapabilities()
+      if (!capabilities.fork) throw new Error('The active Codex runtime does not support thread forks.')
+      return await openThreadFork(normalizedThreadId, { lastTurnId: targetTurnId }, selectionAtStart)
     } catch (unknownError) {
       error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
       return ''
@@ -7669,46 +7623,77 @@ export function useDesktopState() {
     }
   }
 
-  async function rollbackSelectedThread(turnId: string): Promise<void> {
+  async function rollbackSelectedThread(turnId: string): Promise<{ threadId: string } | false> {
     const threadId = selectedThreadId.value
-    if (!threadId) return
-    if (isRollingBack.value) return
-    if (!turnId.trim()) return
-    if (readThreadHistoryMode(threadId) === 'paginated') {
-      error.value = 'Codex does not support editing or rolling back messages in paginated threads yet.'
-      return
+    const targetTurnId = turnId.trim()
+    if (!threadId || isRollingBack.value || !targetTurnId) return false
+    if (inProgressById.value[threadId] === true) {
+      error.value = 'Finish the current turn before editing a message.'
+      return false
     }
-
     const persisted = persistedMessagesByThreadId.value[threadId] ?? []
-    const matchedMessage = persisted.find((message) => message.turnId === turnId)
-    const turnIndex = typeof matchedMessage?.turnIndex === 'number' ? matchedMessage.turnIndex : -1
-    if (turnIndex < 0) return
-    const maxTurnIndex = persisted.reduce((max, m) => (typeof m.turnIndex === 'number' && m.turnIndex > max ? m.turnIndex : max), -1)
-    if (maxTurnIndex < 0 || turnIndex > maxTurnIndex) return
-    const numTurns = maxTurnIndex - turnIndex + 1
-    if (numTurns < 1) return
+    const matchedMessage = persisted.find((message) => message.turnId === targetTurnId)
+    if (!matchedMessage) return false
 
     isRollingBack.value = true
     error.value = ''
     try {
-      const threadCwd = selectedThread.value?.cwd?.trim() ?? ''
-      if (threadCwd) {
-        await revertThreadFileChanges(threadId, turnId, threadCwd)
+      const historyMode = readThreadHistoryMode(threadId)
+      const capabilities = await getThreadHistoryMutationCapabilities()
+      if (historyMode === 'legacy' && !capabilities.rollback) {
+        if (!capabilities.fork) throw new Error('The active Codex runtime cannot edit this conversation.')
+        // Modern Codex cannot revert legacy history. Fork before this turn, keeping
+        // the source conversation and workspace untouched, then edit in that fork.
+        const forkedThreadId = await openThreadFork(threadId, { beforeTurnId: targetTurnId }, threadId)
+        return forkedThreadId ? { threadId: forkedThreadId } : false
       }
-      const nextMessages = await rollbackThread(threadId, numTurns)
+      let nextMessages: UiMessage[]
+      if (historyMode === 'paginated') {
+        if (!capabilities.revert) throw new Error('The active Codex runtime does not support conversation history revert.')
+        await revertThread(threadId, targetTurnId)
+        nextMessages = []
+      } else {
+        const turnIndex = matchedMessage.turnIndex
+        const maxTurnIndex = persisted.reduce((max, message) => Math.max(max, message.turnIndex ?? -1), -1)
+        if (typeof turnIndex !== 'number' || turnIndex < 0 || maxTurnIndex < turnIndex) return false
+        nextMessages = await rollbackThread(threadId, maxTurnIndex - turnIndex + 1)
+      }
+      historyMutationRevisionByThreadId.set(threadId, (historyMutationRevisionByThreadId.get(threadId) ?? 0) + 1)
+      const reconciliationPrefix = `${threadId}\u0000`
+      for (const key of paginatedTurnReconcileByKey.keys()) {
+        if (key.startsWith(reconciliationPrefix)) paginatedTurnReconcileByKey.delete(key)
+      }
+      // History editing never mutates files. File changes have a separate Undo
+      // control, avoiding partially applied history/filesystem operations.
       setPersistedMessagesForThread(threadId, nextMessages)
       setLiveAgentMessagesForThread(threadId, [])
+      clearLivePlansForThread(threadId)
       clearLiveReasoningForThread(threadId)
-      if (liveCommandsByThreadId.value[threadId]) {
-        liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
-      }
+      if (liveCommandsByThreadId.value[threadId]) liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
       setTurnSummaryForThread(threadId, null)
       setTurnActivityForThread(threadId, null)
       setTurnErrorForThread(threadId, null)
+      // Drop obsolete cursor/turn IDs before fetching the new head. Do not merge
+      // removed turns back into the durable-history cache during the refresh.
+      threadHistoryStateById.value = omitKey(threadHistoryStateById.value, threadId)
+      loadedMessagesByThreadId.value = omitKey(loadedMessagesByThreadId.value, threadId)
+      loadedVersionByThreadId.value = omitKey(loadedVersionByThreadId.value, threadId)
+      hasMoreOlderMessagesByThreadId.value = omitKey(hasMoreOlderMessagesByThreadId.value, threadId)
+      loadingOlderMessagesByThreadId.value = omitKey(loadingOlderMessagesByThreadId.value, threadId)
+      turnIndexByTurnIdByThreadId.value = omitKey(turnIndexByTurnIdByThreadId.value, threadId)
+      lastMessageLoadAtByThreadId.delete(threadId)
+      try {
+        await loadMessages(threadId, { force: true })
+      } catch (loadError) {
+        // History mutation succeeded; preserve that result and allow the original
+        // prompt to be restored while reporting the separate refresh failure.
+        error.value = loadError instanceof Error ? loadError.message : 'Failed to reload conversation history'
+      }
       pendingThreadsRefresh = true
-      await syncFromNotifications()
+      return { threadId }
     } catch (unknownError) {
-      error.value = unknownError instanceof Error ? unknownError.message : 'Failed to rollback thread'
+      error.value = unknownError instanceof Error ? unknownError.message : 'Failed to edit conversation history'
+      return false
     } finally {
       isRollingBack.value = false
     }
@@ -8550,6 +8535,7 @@ export function useDesktopState() {
     forcedMessageLoadPromiseByThreadId.clear()
     threadHistoryModeProbeByThreadId.clear()
     paginatedTurnReconcileByKey.clear()
+    historyMutationRevisionByThreadId.clear()
     threadHistoryAccessOrderByThreadId.clear()
     threadHistoryAccessSequence = 0
     lastMessageLoadAtByThreadId.clear()

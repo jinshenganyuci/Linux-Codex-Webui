@@ -61,10 +61,12 @@ Thread-row three-dot menus remain touchable when the sidebar is open as a mobile
    - The chat, current selection, and pin state must remain unchanged, and the error must remain visible.
 4. After a successful permanent delete, query `thread/list` with both `archived:false` and `archived:true`.
    - The deleted chat id must be absent from both results.
-5. Open the paginated chat's sidebar menu and inspect per-message actions that would require `thread/fork` or `thread/rollback`.
-   - `Create chat fork`, response fork, rollback-backed edit/retry, and rollback controls are unavailable for paginated history and explain that the official protocol does not support the action.
-   - Clicking nearby supported actions never sends `thread/fork` or `thread/rollback` accidentally, and no disabled control can be activated by mouse, keyboard, or touch.
-   - The same fork/rollback-backed actions remain available for an eligible completed legacy chat.
+5. On Codex 0.154.0 and 0.159.3, open a disposable paginated chat's sidebar menu and per-message history actions.
+   - `Create chat fork` is available for both history modes. Forking from a response sends one `thread/fork(lastTurnId)` with `excludeTurns:true`, keeping the selected turn and excluding later turns.
+   - Editing a paginated user message sends `thread/revert(beforeTurnId)`, then loads one head page. It never calls `thread/rollback` or the file-undo endpoint.
+   - On 0.154.0 a legacy edit uses history rollback; on 0.159.3 it creates a prefix fork before the edited turn, preserving the source chat.
+   - The edit action visibly explains that it changes conversation history and preserves files; legacy chats may open a new branch. Reload retains the mutation and source/fork distinction.
+   - A delayed older-page response received after revert cannot restore removed messages or obsolete cursors.
 
 ## Rollback / cleanup
 

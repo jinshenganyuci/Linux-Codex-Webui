@@ -601,6 +601,8 @@ const LONG_RPC_METHODS = new Set([
   'thread/items/list',
   'thread/start',
   'thread/fork',
+  'thread/revert',
+  'thread/rollback',
   'turn/start',
   'review/start',
   'plugin/install',
@@ -2346,6 +2348,21 @@ export async function rollbackThread(threadId: string, numTurns: number): Promis
   return normalizeThreadMessagesV2(payload, readThreadTurnStartIndex(payload))
 }
 
+export async function getThreadHistoryMutationCapabilities(): Promise<{ rollback: boolean; revert: boolean; fork: boolean }> {
+  // Read the active binary's catalog when the user acts. Do not retain a capability
+  // across a runtime switch. History editing and file undo are independent actions.
+  const methods = await fetchRpcMethodCatalog()
+  return { rollback: methods.includes('thread/rollback'), revert: methods.includes('thread/revert'), fork: methods.includes('thread/fork') }
+}
+
+export async function revertThread(threadId: string, beforeTurnId: string): Promise<void> {
+  await callRpc('thread/revert', { threadId, beforeTurnId })
+  // The response intentionally omits history. The caller reloads one bounded page
+  // and invalidates its old cursor after the mutation has completed.
+  paginatedHistoryDetailByThreadId.delete(threadId)
+  recentResumeThreadById.delete(threadId)
+}
+
 export async function updateThreadFileChanges(
   threadId: string,
   turnId: string,
@@ -2452,12 +2469,14 @@ export type StartedThreadTurn = StartedThread & {
   turnId: string
 }
 
-export type ForkedThread = {
-  threadId: string
+export type ForkedThread = StartedThread & {
   cwd: string
-  model: string
+  historyMode: ThreadHistoryMode
   messages: UiMessage[]
 }
+
+export type ThreadForkBoundary = { lastTurnId: string; beforeTurnId?: never } | { beforeTurnId: string; lastTurnId?: never }
+
 
 function normalizeServiceTierParam(serviceTier: string | null | undefined): string | null | undefined {
   if (serviceTier === null) return null
@@ -2499,57 +2518,38 @@ export async function startThread(cwd?: string, model?: string, serviceTier?: st
   }
 }
 
-export async function forkThread(threadId: string): Promise<ForkedThread>
-export async function forkThread(threadId: string, cwd: string | undefined, model: string | undefined): Promise<StartedThread>
 export async function forkThread(
   threadId: string,
   cwd?: string,
   model?: string,
-): Promise<StartedThread | ForkedThread> {
-  if (arguments.length <= 1) {
-    try {
-      const payload = await callRpc<ThreadForkResponse & ThreadReadResponse & { thread?: { id?: string; cwd?: string } }>('thread/fork', {
-        threadId,
-        persistExtendedHistory: true,
-      })
-      const forkedThreadId = normalizeThreadIdFromPayload(payload)
-      if (!forkedThreadId) {
-        throw new Error('thread/fork did not return a thread id')
-      }
-      return {
-        threadId: forkedThreadId,
-        cwd: normalizeThreadCwdFromPayload(payload),
-        model: normalizeThreadModelFromPayload(payload),
-        messages: normalizeThreadMessagesV2(payload, readThreadTurnStartIndex(payload)),
-      }
-    } catch (error) {
-      throw normalizeCodexApiError(error, `Failed to fork thread ${threadId}`, 'thread/fork')
-    }
-  }
-
+  boundary?: ThreadForkBoundary,
+): Promise<ForkedThread> {
   try {
     const normalizedThreadId = threadId.trim()
-    if (!normalizedThreadId) {
-      throw new Error('thread/fork requires threadId')
+    if (!normalizedThreadId) throw new Error('thread/fork requires threadId')
+    if (boundary && !(boundary.lastTurnId || boundary.beforeTurnId)?.trim()) {
+      throw new Error('thread/fork requires a non-empty turn boundary')
     }
     const params: Record<string, unknown> = {
       threadId: normalizedThreadId,
+      // Both supported runtimes implement native boundaries. Never fork the full
+      // conversation and then trim it with the removed thread/rollback method.
+      excludeTurns: true,
+      persistExtendedHistory: true,
+      ...boundary,
     }
-    if (typeof cwd === 'string' && cwd.trim().length > 0) {
-      params.cwd = cwd.trim()
-    }
-    if (typeof model === 'string' && model.trim().length > 0) {
-      params.model = model.trim()
-    }
+    if (cwd?.trim()) params.cwd = cwd.trim()
+    if (model?.trim()) params.model = model.trim()
     const payload = await callRpc<ThreadForkResponse>('thread/fork', params)
     const nextThreadId = normalizeThreadIdFromPayload(payload)
-    if (!nextThreadId) {
-      throw new Error('thread/fork did not return a thread id')
-    }
+    if (!nextThreadId) throw new Error('thread/fork did not return a thread id')
     return {
       threadId: nextThreadId,
+      cwd: normalizeThreadCwdFromPayload(payload),
       model: normalizeThreadModelFromPayload(payload),
       modelProvider: normalizeThreadModelProviderFromPayload(payload),
+      historyMode: normalizeThreadHistoryMode(asRecord(payload.thread)?.historyMode),
+      messages: [],
     }
   } catch (error) {
     throw normalizeCodexApiError(error, `Failed to fork thread ${threadId}`, 'thread/fork')

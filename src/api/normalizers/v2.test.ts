@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeThreadMessagesV2, readThreadInProgressFromResponse } from './v2'
+import { normalizePaginatedThreadTurnsV2, normalizeThreadMessagesV2, readThreadInProgressFromResponse } from './v2'
 import type { ThreadReadResponse } from '../appServerDtos'
 
 function threadReadResponseWithContent(content: ThreadReadResponse['thread']['turns'][number]['items'][number][]): ThreadReadResponse {
@@ -184,6 +184,24 @@ Reply with &lt;/instructions&gt; and A &amp; B
       turnId: 'turn-1',
       turnIndex: 0,
     })
+  })
+
+  it.each(['legacy', 'paginated'])('renders interrupted errors in %s history without inventing errors for a normal stop', (mode) => {
+    const response = threadReadResponseWithContent([])
+    const interrupted = response.thread.turns[0]!
+    interrupted.status = 'interrupted'
+    interrupted.error = { message: 'Context window exceeded before interruption', codexErrorInfo: null, additionalDetails: null }
+    const normalize = () => mode === 'legacy'
+      ? normalizeThreadMessagesV2(response)
+      : normalizePaginatedThreadTurnsV2(response.thread.turns).messages
+
+    expect(normalize()).toEqual([expect.objectContaining({
+      id: 'turn-1-error', messageType: 'turnError', turnId: 'turn-1', text: interrupted.error.message,
+    })])
+    interrupted.error = null
+    expect(normalize()).toEqual([])
+    interrupted.error = { message: '  ', codexErrorInfo: null, additionalDetails: null }
+    expect(normalize()).toEqual([])
   })
 
   it('uses turn index fallback ids for failed turns with blank ids', () => {

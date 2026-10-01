@@ -1,30 +1,21 @@
-### Feature: Rollback undoes apply_patch file changes
+### Feature: 编辑对话与撤销文件分离（Codex 0.154.0 / 0.159.3）
 
-#### Prerequisites
-- App is running from this repository (`pnpm run dev`).
-- A thread exists with at least one completed turn that applied file changes via `apply_patch`.
-- The thread's `cwd` points to a git-tracked directory.
+#### 前置条件
+- 在隔离的 13511 验收环境准备两版 CLI 和可丢弃的 legacy / paginated 会话，各包含至少三个已完成回合。
+- 工作目录为可丢弃的 git 仓库，至少一个回合通过 `apply_patch` 修改文件；记录文件校验值。
 
-#### Steps
-1. Open a thread with file changes visible in the conversation (file change cards with diffs).
-2. Note the current state of a file that was modified by the agent in a recent turn.
-3. Click the rollback button on a turn that has file changes.
-4. After rollback completes, check the file on disk — it should be restored to the state before the agent modified it.
-5. Verify the thread conversation no longer shows the rolled-back turns.
-6. For turns that added new files: verify the added files are deleted from disk.
-7. For turns that deleted files: verify the deleted files are restored (if they were tracked in git).
+#### 操作与预期
+1. 点击第二回合用户消息下的“编辑对话”，确认按钮旁可见“仅调整对话，保留文件；旧会话可能另开分支”说明。
+2. 0.154.0 legacy 会话：调用 `thread/rollback` 移除目标及后续回合；工作区文件校验值不变。
+3. 两版 paginated 会话：调用 `thread/revert(beforeTurnId)`；重新加载最多 10 个回合的初始页，旧游标/已删除消息不再出现，刷新后保持回退结果。
+4. 0.159.3 legacy 会话：调用 `thread/fork(beforeTurnId)`，进入不含目标回合的新分支；原会话完整保留，工作区文件不变。
+5. 在任意模式下让能力目录或历史变更请求失败：原会话消息、工作区和输入框草稿不被提前修改；显示错误。
+6. 慢请求期间切到其他会话：完成时不抢占选择，不向其他会话草稿添加文本。
+7. 展开原会话文件变更卡并使用独立 `Undo` / `Redo`：仍按原测试撤销/恢复文件，不隐式变更聊天历史。
 
-#### Expected Results
-- Clicking rollback on a turn reverts both the thread history AND the file system changes from that turn and all subsequent turns.
-- Files modified by `apply_patch` in rolled-back turns are restored via `git checkout HEAD -- <path>`.
-- Files created by `apply_patch` in rolled-back turns are removed from disk.
-- Files deleted by `apply_patch` in rolled-back turns are restored from git HEAD.
-- File moves in rolled-back turns are reversed (moved file is renamed back to original path).
-- If file revert fails (e.g., not a git repo), the thread rollback still proceeds — file revert is best-effort.
-- The rollback-files endpoint (`POST /codex-api/thread/rollback-files`) can be called independently for testing.
-
-#### Rollback/Cleanup
-- No cleanup required — rolled-back files are already restored.
+#### 清理
+- 删除可丢弃的会话、分支和测试工作目录；清空测试草稿。
+- 仅验收环境切换 CLI。历史回退是实际数据变更，测试前保留原会话备份。
 
 ### Feature: Chat file-change undo and redo
 

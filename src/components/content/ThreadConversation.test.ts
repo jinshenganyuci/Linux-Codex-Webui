@@ -119,6 +119,23 @@ function countClass(html: string, className: string): number {
 }
 
 describe('ThreadConversation turn-scoped message identity', () => {
+  it('offers edit and fork for paginated messages that have canonical turn IDs but no indexes', async () => {
+    const html = await renderConversation([
+      { id: 'user', role: 'user', messageType: 'userMessage', text: 'edit me', turnId: 'native-turn' },
+      { id: 'answer', role: 'assistant', messageType: 'agentMessage', text: 'fork from here', turnId: 'native-turn' },
+    ])
+    expect(html).toContain('message-edit-button')
+    expect(html).toContain('message-edit-scope-note')
+    expect(html).toContain('message-fork-button')
+  })
+
+  it('does not offer a history edit for a user message without a durable turn ID', async () => {
+    const html = await renderConversation([
+      { id: 'optimistic-user', role: 'user', messageType: 'userMessage', text: 'still sending' },
+    ])
+    expect(html).not.toContain('message-edit-button')
+  })
+
   it('does not link auto-expanded command state or ARIA output ids across turns with the same item id', async () => {
     const html = await renderConversation([
       commandMessage('turn-a', 'echo a'),

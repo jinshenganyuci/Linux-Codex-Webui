@@ -745,8 +745,9 @@
                   @click="editMessage(messageIdentityKey(message))"
                 >
                   <IconTablerFilePencil class="icon-svg message-edit-icon" />
-                  <span class="message-edit-label">{{ t('Edit message') }}</span>
+                  <span class="message-edit-label">{{ t('Edit conversation') }}</span>
                 </button>
+                <span v-if="showEditMessageButton(message)" class="message-edit-scope-note">{{ t('History only; files stay unchanged. Older chats may open a new branch.') }}</span>
                 <button
                   v-if="showForkResponseButton(message)"
                   type="button"
@@ -1666,7 +1667,7 @@ const props = defineProps<{
 const { childHref } = useSubagentNavigation(() => props.activeThreadId)
 
 const emit = defineEmits<{
-  forkThread: [payload: { threadId: string; turnIndex: number }]
+  forkThread: [payload: { threadId: string; turnIndex?: number; turnId?: string }]
   rollback: [payload: { turnId: string }]
   implementPlan: [payload: { turnId: string }]
   respondServerRequest: [payload: { id: UiServerRequest['id']; result?: unknown; error?: { code?: number; message: string } }]
@@ -1953,31 +1954,17 @@ const copyableResponseContentByAnchorIdentity = computed<Record<string, string>>
   return next
 })
 
-const forkableTurnIndexByAnchorIdentity = computed<Record<string, number>>(() => {
-  const groupedTurns = new Map<string, { anchorMessageIdentity: string; turnIndex: number }>()
-
+const forkableTurnByAnchorIdentity = computed<Record<string, { turnId?: string; turnIndex?: number }>>(() => {
+  const groupedTurns = new Map<string, { anchor: string; turnId?: string; turnIndex?: number }>()
   for (const message of props.messages) {
-    if (!isCopyableAssistantMessage(message) || typeof message.turnIndex !== 'number') continue
-
-    const responseKey = messageTurnKey(message)
-    const existing = groupedTurns.get(responseKey)
-    if (existing) {
-      existing.anchorMessageIdentity = messageIdentityKey(message)
-      existing.turnIndex = message.turnIndex
-      continue
-    }
-
-    groupedTurns.set(responseKey, {
-      anchorMessageIdentity: messageIdentityKey(message),
+    if (!isCopyableAssistantMessage(message) || (!message.turnId && typeof message.turnIndex !== 'number')) continue
+    groupedTurns.set(messageTurnKey(message), {
+      anchor: messageIdentityKey(message),
+      turnId: message.turnId,
       turnIndex: message.turnIndex,
     })
   }
-
-  const next: Record<string, number> = {}
-  for (const groupedTurn of groupedTurns.values()) {
-    next[groupedTurn.anchorMessageIdentity] = groupedTurn.turnIndex
-  }
-  return next
+  return Object.fromEntries([...groupedTurns.values()].map(({ anchor, ...turn }) => [anchor, turn]))
 })
 
 function showCopyResponseButton(message: UiMessage): boolean {
@@ -1985,7 +1972,7 @@ function showCopyResponseButton(message: UiMessage): boolean {
 }
 
 function showForkResponseButton(message: UiMessage): boolean {
-  return typeof forkableTurnIndexByAnchorIdentity.value[messageIdentityKey(message)] === 'number'
+  return Boolean(forkableTurnByAnchorIdentity.value[messageIdentityKey(message)])
 }
 
 function messageIdentityKey(message: UiMessage): string {
@@ -2559,19 +2546,19 @@ async function copyCodeBlock(value: string, button: HTMLButtonElement): Promise<
 
 
 function forkResponse(anchorMessageIdentity: string): void {
-  const turnIndex = forkableTurnIndexByAnchorIdentity.value[anchorMessageIdentity]
-  if (typeof turnIndex !== 'number') return
+  const turn = forkableTurnByAnchorIdentity.value[anchorMessageIdentity]
+  if (!turn) return
   if (!props.activeThreadId) return
   emit('forkThread', {
     threadId: props.activeThreadId,
-    turnIndex,
+    ...turn,
   })
 }
 
 const editableTurnIdByMessageIdentity = computed<Record<string, string>>(() => {
   const next: Record<string, string> = {}
   for (const message of props.messages) {
-    if (message.role !== 'user' || typeof message.turnIndex !== 'number') continue
+    if (message.role !== 'user') continue
     const turnId = typeof message.turnId === 'string' && message.turnId.length > 0 ? message.turnId : ''
     if (!turnId || message.text.trim().length === 0) continue
     next[messageIdentityKey(message)] = turnId

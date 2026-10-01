@@ -3516,6 +3516,16 @@ html.dark .request-user-input-summary-answer-label {
 html.dark .model-reasoning-capability-note { color: #a1a1aa; }
 
 .runtime-info-panel { margin: 8px 0; font-size: 12px; }
+.message-edit-scope-note {
+  display: inline-block;
+  max-width: 100%;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+html.dark .message-edit-scope-note { color: #a1a1aa; }
 .runtime-info-panel summary,
 .runtime-item summary { cursor: pointer; font-weight: 600; }
 .runtime-info-panel dl { display: grid; gap: 4px 8px; grid-template-columns: auto minmax(0, 1fr); margin: 8px 0; }

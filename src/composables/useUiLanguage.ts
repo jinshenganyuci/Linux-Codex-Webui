@@ -926,6 +926,8 @@ const zhCN: Record<string, string> = {
   'The service rerouted this turn': '服务端已为本轮切换模型',
   'Moderation information received': '已收到审核状态信息',
   'Runtime information': '运行信息',
+  "Edit conversation": "编辑对话",
+  "History only; files stay unchanged. Older chats may open a new branch.": "仅调整对话，保留文件；旧会话可能另开分支。",
   "Runtime checks run only when this panel is opened or refreshed.": "仅在展开此面板或手动刷新时检查运行时。",
   "System Codex CLI": "系统 Codex CLI",
   "Resolved from server PATH": "来自服务端 PATH",

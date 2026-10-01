@@ -757,7 +757,7 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse, baseTurnI
       }
     }
     const errorText = readTurnErrorText(turn)
-    if (turn.status === 'failed' && errorText) {
+    if ((turn.status === 'failed' || turn.status === 'interrupted') && errorText) {
       const errorIdBase = turnId ?? `turn-${turnIndex}`
       messages.push({
         id: `${errorIdBase}-error`,
@@ -811,7 +811,7 @@ export function normalizePaginatedThreadTurnsV2(turnsValue: unknown): Normalized
     }
 
     const errorText = readTurnErrorText(turn)
-    if (turn.status === 'failed' && errorText) {
+    if ((turn.status === 'failed' || turn.status === 'interrupted') && errorText) {
       messages.push({
         id: `${rawTurnId}-error`,
         role: 'system',

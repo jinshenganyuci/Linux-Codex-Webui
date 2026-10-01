@@ -61,6 +61,8 @@ const gatewayMocks = vi.hoisted(() => ({
   resumeThread: vi.fn(),
   revertThreadFileChanges: vi.fn(),
   rollbackThread: vi.fn(),
+  revertThread: vi.fn(),
+  getThreadHistoryMutationCapabilities: vi.fn(),
   setCodexSpeedMode: vi.fn(),
   setThreadQueueState: vi.fn(),
   setWorkspaceRootsState: vi.fn(),
@@ -198,6 +200,9 @@ beforeEach(() => {
   nativeGatewayMocks.getNativeThreadState.mockResolvedValue({ mode: 'legacy', settings: null })
   gatewayMocks.getCodexRuntimeConfig.mockResolvedValue({ sandboxMode: 'danger-full-access', approvalPolicy: 'never' })
   gatewayMocks.setCodexRuntimeConfig.mockResolvedValue(undefined)
+  gatewayMocks.getThreadHistoryMutationCapabilities.mockResolvedValue({ rollback: true, revert: true, fork: true })
+  gatewayMocks.revertThread.mockResolvedValue(undefined)
+  gatewayMocks.rollbackThread.mockResolvedValue([])
   gatewayMocks.archiveThread.mockResolvedValue(undefined)
   gatewayMocks.permanentlyDeleteThread.mockResolvedValue(undefined)
   gatewayMocks.getThreadDetail.mockResolvedValue({
@@ -1511,26 +1516,27 @@ describe('thread history loading races', () => {
   })
 })
 
-describe('paginated thread history state', () => {
-  function paginatedDetail(overrides: Record<string, unknown> = {}) {
-    return {
-      historyMode: 'paginated' as const,
-      model: '',
-      modelProvider: '',
-      messages: [],
-      turnIds: [],
-      inProgress: false,
-      activeTurnId: '',
-      hasMoreOlder: false,
-      olderCursor: null,
-      startTurnIndex: null,
-      turnIndexByTurnId: {},
-      resumed: true,
-      materialized: true,
-      ...overrides,
-    }
+function paginatedDetail(overrides: Record<string, unknown> = {}) {
+  return {
+    historyMode: 'paginated' as const,
+    model: '',
+    modelProvider: '',
+    messages: [],
+    turnIds: [],
+    inProgress: false,
+    activeTurnId: '',
+    hasMoreOlder: false,
+    olderCursor: null,
+    startTurnIndex: null,
+    turnIndexByTurnId: {},
+    resumed: true,
+    materialized: true,
+    ...overrides,
   }
+}
 
+
+describe('paginated thread history state', () => {
   function paginatedPage(overrides: Record<string, unknown> = {}) {
     return {
       historyMode: 'paginated' as const,
@@ -1986,7 +1992,7 @@ describe('paginated thread history state', () => {
     }
   })
 
-  it('blocks unsafe history actions and preserves the original model error without fallback replay', async () => {
+  it('preserves the original paginated model error without fallback replay', async () => {
     installTestWindow()
     let notificationHandler: ((notification: { method: string; params?: unknown }) => void) | undefined
     gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
@@ -2007,8 +2013,6 @@ describe('paginated thread history state', () => {
     await state.loadThreads()
     state.primeSelectedThread('paginated-actions')
     await state.loadMessages('paginated-actions')
-    await expect(state.forkThreadById('paginated-actions')).resolves.toBe('')
-    await state.rollbackSelectedThread('turn-old')
     await state.sendMessageToSelectedThread('trigger fallback guard')
     state.startPolling()
     notificationHandler!({
@@ -2859,7 +2863,7 @@ describe('live error overlay', () => {
     expect(state.error.value).toBe('Provider connection failed')
   })
 
-  it('keeps a new live error visible when an older persisted turn error exists', async () => {
+  it.each(['failed', 'interrupted'])('keeps a new live %s error visible when an older persisted turn error exists', async (status) => {
     installTestWindow()
     let notificationHandler: (notification: { method: string; params?: unknown }) => void = () => {}
     gatewayMocks.subscribeCodexNotifications.mockImplementation((handler) => {
@@ -2887,6 +2891,10 @@ describe('live error overlay', () => {
     state.primeSelectedThread('thread-with-errors')
     await state.loadMessages('thread-with-errors')
     state.startPolling()
+    notificationHandler({
+      method: 'codex-ui/agent-progress',
+      params: { threadId: 'thread-with-errors', progress: progressSnapshot({ threadId: 'thread-with-errors', turnId: 'new-turn', status: 'running', updatedAtMs: 1000 }) },
+    })
 
     notificationHandler?.({
       method: 'turn/completed',
@@ -2895,13 +2903,14 @@ describe('live error overlay', () => {
         turnId: 'new-turn',
         turn: {
           id: 'new-turn',
-          status: 'failed',
+          status,
           error: { message: 'new live failure' },
         },
       },
     })
 
     expect(state.selectedLiveOverlay.value?.errorText).toBe('new live failure')
+    expect(state.selectedLiveOverlay.value?.turnProgress?.status).toBe(status)
   })
 
   it('suppresses a live error only after that same error has persisted', async () => {
@@ -2947,6 +2956,125 @@ describe('live error overlay', () => {
     })
 
     expect(state.selectedLiveOverlay.value).toBe(null)
+  })
+})
+
+describe('Codex history editing compatibility', () => {
+  async function setupHistory(mode: 'legacy' | 'paginated') {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [{ projectName: 'project', threads: [thread('history-source', '/tmp/project', { historyMode: mode })] }],
+      nextCursor: null,
+    })
+    const messages = [
+      { id: 'user-1', role: 'user', text: 'first', messageType: 'userMessage', turnId: 'turn-1', ...(mode === 'legacy' ? { turnIndex: 0 } : {}) },
+      { id: 'answer-1', role: 'assistant', text: 'answer', messageType: 'agentMessage', turnId: 'turn-1', ...(mode === 'legacy' ? { turnIndex: 0 } : {}) },
+      { id: 'user-2', role: 'user', text: 'second', messageType: 'userMessage', turnId: 'turn-2', ...(mode === 'legacy' ? { turnIndex: 1 } : {}) },
+    ]
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue({
+      ...paginatedDetail(), historyMode: mode, messages, turnIds: ['turn-1', 'turn-2'],
+      olderCursor: 'old-cursor', hasMoreOlder: true,
+    })
+    gatewayMocks.forkThread.mockResolvedValue({ threadId: 'history-fork', cwd: '/tmp/project', model: '', historyMode: mode, messages: [] })
+    const state = useDesktopState()
+    await state.loadThreads()
+    state.primeSelectedThread('history-source')
+    await state.loadMessages('history-source')
+    return state
+  }
+
+  it.each(['legacy', 'paginated'] as const)('forks a response in %s mode using its turn ID with no trailing rollback', async (mode) => {
+    const state = await setupHistory(mode)
+    expect(await state.forkThreadFromTurn('history-source', mode === 'legacy' ? 0 : undefined, 'turn-1')).toBe('history-fork')
+    expect(gatewayMocks.forkThread).toHaveBeenCalledWith('history-source', '/tmp/project', undefined, { lastTurnId: 'turn-1' })
+    expect(gatewayMocks.rollbackThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.revertThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenLastCalledWith('history-fork', mode)
+  })
+
+  it('edits modern-runtime legacy history in a new branch before the selected turn', async () => {
+    const state = await setupHistory('legacy')
+    gatewayMocks.getThreadHistoryMutationCapabilities.mockResolvedValue({ rollback: false, revert: true, fork: true })
+    await expect(state.rollbackSelectedThread('turn-2')).resolves.toEqual({ threadId: 'history-fork' })
+    expect(gatewayMocks.forkThread).toHaveBeenCalledWith('history-source', '/tmp/project', undefined, { beforeTurnId: 'turn-2' })
+    expect(gatewayMocks.rollbackThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.revertThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.revertThreadFileChanges).not.toHaveBeenCalled()
+    expect(state.selectedThreadId.value).toBe('history-fork')
+  })
+
+  it('keeps legacy rollback on old runtimes while leaving file undo independent', async () => {
+    const state = await setupHistory('legacy')
+    await expect(state.rollbackSelectedThread('turn-2')).resolves.toEqual({ threadId: 'history-source' })
+    expect(gatewayMocks.rollbackThread).toHaveBeenCalledWith('history-source', 1)
+    expect(gatewayMocks.getThreadHistoryMutationCapabilities.mock.invocationCallOrder[0]).toBeLessThan(gatewayMocks.rollbackThread.mock.invocationCallOrder[0]!)
+    expect(gatewayMocks.forkThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.revertThreadFileChanges).not.toHaveBeenCalled()
+  })
+
+  it('reloads one paginated head after revert and replaces obsolete messages and cursors', async () => {
+    const state = await setupHistory('paginated')
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue(paginatedDetail({
+      messages: [{ id: 'retained', role: 'user', text: 'retained', messageType: 'userMessage', turnId: 'turn-1' }],
+      turnIds: ['turn-1'], olderCursor: 'new-cursor', hasMoreOlder: true,
+    }))
+    await expect(state.rollbackSelectedThread('turn-2')).resolves.toEqual({ threadId: 'history-source' })
+    expect(gatewayMocks.revertThread).toHaveBeenCalledWith('history-source', 'turn-2')
+    expect(gatewayMocks.rollbackThread).not.toHaveBeenCalled()
+    expect(gatewayMocks.revertThreadFileChanges).not.toHaveBeenCalled()
+    expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledTimes(2)
+    expect(state.messages.value.map(message => message.text)).toEqual(['retained'])
+    gatewayMocks.getOlderThreadHistoryPage.mockResolvedValue(paginatedDetail())
+    await state.loadOlderMessages()
+    expect(gatewayMocks.getOlderThreadHistoryPage).toHaveBeenCalledWith('history-source', { historyMode: 'paginated', cursor: 'new-cursor', beforeTurnId: '' })
+  })
+
+  it('discards an older page that completes after history was reverted', async () => {
+    const state = await setupHistory('paginated')
+    const stalePage = deferred<ReturnType<typeof paginatedDetail>>()
+    gatewayMocks.getOlderThreadHistoryPage.mockReturnValue(stalePage.promise)
+    const loadingOlder = state.loadOlderMessages()
+    gatewayMocks.getThreadHistoryDetail.mockResolvedValue(paginatedDetail({
+      messages: [{ id: 'retained', role: 'user', text: 'retained', messageType: 'userMessage', turnId: 'turn-1' }], turnIds: ['turn-1'],
+    }))
+    await state.rollbackSelectedThread('turn-2')
+    stalePage.resolve(paginatedDetail({
+      messages: [{ id: 'removed', role: 'user', text: 'removed', messageType: 'userMessage', turnId: 'turn-2' }], turnIds: ['turn-2'],
+    }))
+    await loadingOlder
+    expect(state.messages.value.map(message => message.text)).toEqual(['retained'])
+  })
+
+  it.each(['capability', 'mutation'])('does not alter files or cached messages when the %s step fails', async (failure) => {
+    const state = await setupHistory('paginated')
+    const initialMessages = [...state.messages.value]
+    if (failure === 'capability') gatewayMocks.getThreadHistoryMutationCapabilities.mockRejectedValue(new Error('runtime unavailable'))
+    else gatewayMocks.revertThread.mockRejectedValue(new Error('thread is busy'))
+    await expect(state.rollbackSelectedThread('turn-2')).resolves.toBe(false)
+    expect(state.messages.value).toEqual(initialMessages)
+    expect(gatewayMocks.revertThreadFileChanges).not.toHaveBeenCalled()
+    expect(gatewayMocks.getThreadHistoryDetail).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not steal selection if a legacy edit fork finishes after the user switched chats', async () => {
+    const state = await setupHistory('legacy')
+    gatewayMocks.getThreadHistoryMutationCapabilities.mockResolvedValue({ rollback: false, revert: true, fork: true })
+    const pendingFork = deferred<{ threadId: string; cwd: string; model: string; historyMode: string; messages: never[] }>()
+    gatewayMocks.forkThread.mockReturnValue(pendingFork.promise)
+    const editing = state.rollbackSelectedThread('turn-2')
+    await vi.waitFor(() => expect(gatewayMocks.forkThread).toHaveBeenCalledTimes(1))
+    state.primeSelectedThread('another-thread')
+    pendingFork.resolve({ threadId: 'history-fork', cwd: '/tmp/project', model: '', historyMode: 'legacy', messages: [] })
+    await expect(editing).resolves.toEqual({ threadId: 'history-fork' })
+    expect(state.selectedThreadId.value).toBe('another-thread')
+  })
+
+  it.each(['legacy', 'paginated'] as const)('returns the successful %s edit target even if the later history refresh fails', async (mode) => {
+    const state = await setupHistory(mode)
+    gatewayMocks.getThreadHistoryMutationCapabilities.mockResolvedValue({ rollback: false, revert: true, fork: true })
+    gatewayMocks.getThreadHistoryDetail.mockRejectedValue(new Error('history read temporarily unavailable'))
+    await expect(state.rollbackSelectedThread('turn-2')).resolves.toEqual({ threadId: mode === 'legacy' ? 'history-fork' : 'history-source' })
+    expect(state.error.value).toContain('history read temporarily unavailable')
   })
 })
 
