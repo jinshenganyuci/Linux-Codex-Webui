@@ -66,6 +66,9 @@
               />
             </label>
 
+            <p v-if="hasSubmissionError" class="thread-pending-request-submission-error" role="alert" data-testid="pending-response-submit-error">
+              {{ t('Response failed to send. Please try again.') }}
+            </p>
             <button type="button" class="thread-pending-request-secondary" @click="onRespondApproval(request, 'cancel')">
               {{ t('Skip') }}
             </button>
@@ -169,6 +172,9 @@
           </p>
 
           <footer class="thread-pending-request-footer">
+            <p v-if="hasSubmissionError" class="thread-pending-request-submission-error" role="alert" data-testid="pending-response-submit-error">
+              {{ t('Response failed to send. Please try again.') }}
+            </p>
             <button type="button" class="thread-pending-request-secondary" @click="onRespondMcpElicitation(request, 'cancel')">
               {{ t('Cancel') }}
             </button>
@@ -229,6 +235,9 @@
             : draftStatus === 'saved' ? t('Draft saved in this browser for 7 days. Secret answers are not saved.')
             : t('Answers are saved in this browser for 7 days. Secret answers are not saved.') }}</p>
           <footer class="thread-pending-request-footer">
+            <p v-if="hasSubmissionError" class="thread-pending-request-submission-error" role="alert" data-testid="pending-response-submit-error">
+              {{ t('Response failed to send. Please try again.') }}
+            </p>
             <button type="button" class="thread-pending-request-primary" @click="onRespondToolRequestUserInput(request)">
               {{ t('Send') }}
             </button>
@@ -236,6 +245,9 @@
         </section>
 
         <section v-else-if="request.method === 'item/tool/call'" class="thread-pending-request-actions">
+            <p v-if="hasSubmissionError" class="thread-pending-request-submission-error" role="alert" data-testid="pending-response-submit-error">
+              {{ t('Response failed to send. Please try again.') }}
+            </p>
           <button type="button" class="thread-pending-request-primary" @click="onRespondToolCallFailure(request)">
             {{ t('Fail Tool Call') }}
           </button>
@@ -245,6 +257,9 @@
         </section>
 
         <section v-else class="thread-pending-request-actions">
+            <p v-if="hasSubmissionError" class="thread-pending-request-submission-error" role="alert" data-testid="pending-response-submit-error">
+              {{ t('Response failed to send. Please try again.') }}
+            </p>
           <button type="button" class="thread-pending-request-primary" @click="onRespondEmptyResult(request)">
             {{ t('Return Empty Result') }}
           </button>
@@ -253,9 +268,6 @@
           </button>
         </section>
       </template>
-      <p v-if="hasSubmissionError" class="thread-pending-request-submission-error" role="alert" data-testid="pending-response-submit-error">
-        {{ t('Response failed to send. Please try again.') }}
-      </p>
       </fieldset>
     </article>
   </section>
@@ -1152,7 +1164,10 @@ function onRejectUnknownRequest(request: UiServerRequest): void {
 }
 
 .thread-pending-request-submission-error {
-  margin: 0.75rem 0 0;
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
   color: #b42318;
   font-size: 0.8125rem;
   line-height: 1.5;
@@ -1214,7 +1229,7 @@ function onRejectUnknownRequest(request: UiServerRequest): void {
 
 .thread-pending-request-actions,
 .thread-pending-request-footer {
-  @apply mt-2.5 flex items-center justify-end gap-2;
+  @apply mt-2.5 flex flex-wrap items-center justify-end gap-2;
 }
 
 .thread-pending-request-footer--approval {

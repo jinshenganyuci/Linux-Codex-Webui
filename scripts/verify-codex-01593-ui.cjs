@@ -75,8 +75,9 @@ async function installFixtures(context, theme) {
   const state = {
     pending: createRequests(), replies: [], rpcCounts: {}, blockedWrites: [], diagnosticsCalls: [],
     diagnosticsMode: 'available', responseMode: 'failure', history: [],
+    sidebar: { version: 1, revision: 0, persisted: true, sections: { pinned: true, chats: true, projects: true }, collapsedProjects: {} },
   }
-  await context.addInitScript(({ theme, base, threadId }) => {
+  await context.addInitScript(({ theme, base, threadId, fixtureIds }) => {
     if (location.origin !== base) return
     localStorage.setItem('codex-web-local.dark-mode.v1', theme)
     localStorage.setItem('codex-web-local.ui-language.v1', 'zh-CN')
@@ -84,13 +85,28 @@ async function installFixtures(context, theme) {
     // Preserve real notification transport, but retain references for fixture events.
     const NativeSocket = window.WebSocket
     window.__codex01593Sockets = []
+    window.__codex01593FilteredNotifications = 0
     window.WebSocket = class extends NativeSocket {
       constructor(url, protocols) {
         super(url, protocols)
         if (String(url).includes('/codex-api/ws')) window.__codex01593Sockets.push(this)
       }
+      set onmessage(listener) {
+        super.onmessage = event => {
+          if (this.url.includes('/codex-api/ws')) {
+            try {
+              const frame = JSON.parse(event.data)
+              const params = frame.params || {}
+              const id = params.threadId || params.thread?.id || params.progress?.rootThreadId || params.params?.threadId
+              if (id && !fixtureIds.includes(id)) { window.__codex01593FilteredNotifications += 1; return }
+            } catch { /* Leave transport error handling to the application. */ }
+          }
+          listener?.call(this, event)
+        }
+      }
+      get onmessage() { return super.onmessage }
     }
-  }, { theme, base: BASE, threadId: THREAD_A })
+  }, { theme, base: BASE, threadId: THREAD_A, fixtureIds: [THREAD_A, THREAD_B] })
 
   await context.route(`${BASE}/codex-api/**`, async route => {
     const request = route.request()
@@ -122,6 +138,10 @@ async function installFixtures(context, theme) {
       return json({ data: { [THREAD_A]: state.history.filter(row => row.threadId === THREAD_A), [THREAD_B]: [] } })
     }
     if (url.pathname === '/codex-api/plan-summary-history') return json({ data: {} })
+    if (url.pathname === '/codex-api/preferences/sidebar-layout') {
+      if (method === 'PATCH') state.sidebar = { ...state.sidebar, ...body, revision: state.sidebar.revision + 1, persisted: true }
+      return json({ data: state.sidebar, applied: true })
+    }
     if (url.pathname === '/codex-api/accounts' || url.pathname === '/codex-api/accounts/refresh') return json({ data: { accounts: [], activeAccountId: null, activeStorageId: null } })
     if (url.pathname === '/codex-api/thread-runtime-state') return json({ data: (body.threadIds || []).map(threadId => ({ threadId, turnId: `fixture-turn-${threadId}`, state: 'running', isRunning: true, source: 'local', startedAtIso: new Date().toISOString(), completedAtIso: null, owner: null })) })
     if (url.pathname === '/codex-api/agent-progress') return json({ data: null })
@@ -176,6 +196,35 @@ async function assertNoHorizontalOverflow(page) {
   const size = await page.evaluate(() => ({ width: innerWidth, document: document.documentElement.scrollWidth, body: document.body.scrollWidth }))
   assert(size.document <= size.width + 1 && size.body <= size.width + 1, `Horizontal overflow: ${JSON.stringify(size)}`)
   return size
+}
+
+async function buttonContrast(button) {
+  const colors = await button.evaluate(element => ({ text: element.textContent.trim(), foreground: getComputedStyle(element).color, background: getComputedStyle(element).backgroundColor }))
+  const luminance = color => {
+    const rgb = color.match(/[\d.]+/g)?.slice(0, 3).map(Number)
+    assert(rgb?.length === 3, 'Button colors must be resolved RGB values')
+    const linear = rgb.map(value => { const srgb = value / 255; return srgb <= 0.04045 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4 })
+    return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722
+  }
+  const first = luminance(colors.foreground), second = luminance(colors.background)
+  const ratio = (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
+  assert(colors.text.length > 0, 'Submission button must have visible label text')
+  assert(ratio >= 4.5, `Submission button contrast must be at least 4.5:1; got ${ratio.toFixed(2)}:1`)
+  return { ...colors, contrastRatio: ratio }
+}
+
+async function visibleFraction(locator) {
+  return locator.evaluate(element => {
+    const rect = element.getBoundingClientRect()
+    let top = Math.max(0, rect.top), left = Math.max(0, rect.left)
+    let bottom = Math.min(innerHeight, rect.bottom), right = Math.min(innerWidth, rect.right)
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent), bounds = parent.getBoundingClientRect()
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, bounds.top); bottom = Math.min(bottom, bounds.bottom) }
+      if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, bounds.left); right = Math.min(right, bounds.right) }
+    }
+    return rect.width && rect.height ? Math.max(0, bottom - top) * Math.max(0, right - left) / (rect.width * rect.height) : 0
+  })
 }
 
 async function capture(page, scenario, surface, locator) {
@@ -250,6 +299,14 @@ async function verifyScenario(browser, theme, viewport) {
     assert.equal(state.replies.length, 0, 'Draft/switch interactions must never send an answer')
     scenario.assertions.push('blocking-first and explicit selection', 'optional task-continues state', 'per-question draft restoration', 'no automatic submission')
     await capture(page, scenario, 'questions', inbox)
+    const submitButton = inbox.locator('.thread-pending-request-primary')
+    scenario.submitButtonColors = { normal: await buttonContrast(submitButton) }
+    await submitButton.hover()
+    await pause(250)
+    scenario.submitButtonColors.hover = await buttonContrast(submitButton)
+    await capture(page, scenario, 'questions-hover', inbox)
+    await page.mouse.move(0, 0)
+    scenario.assertions.push('submission button normal and hover contrast at least 4.5:1')
 
     await gotoThread(THREAD_B)
     await waitValue(input(), '')
@@ -280,11 +337,27 @@ async function verifyScenario(browser, theme, viewport) {
 
     await select(REQUEST_IDS.optional)
     await waitValue(input(), 'OPTIONAL_DRAFT_01593')
+    const failedResponse = page.waitForResponse(response => response.url() === `${BASE}/codex-api/server-requests/respond` && response.status() === 503)
     await inbox.locator('.thread-pending-request-primary').click()
-    await page.getByText('CODEX_01593_EXPECTED_SUBMIT_FAILURE', { exact: false }).first().waitFor()
+    await failedResponse
+    await page.waitForFunction(() => document.querySelector('.thread-pending-request-inbox')?.getAttribute('aria-busy') === 'false')
+    const failureFeedback = page.getByText('CODEX_01593_EXPECTED_SUBMIT_FAILURE', { exact: false }).first()
+    const submissionError = inbox.getByTestId('pending-response-submit-error')
+    await submissionError.waitFor({ state: 'visible' })
+    assert.match(await submissionError.innerText(), /回复发送失败，请重试|Reply could not be sent/i)
+    await pause(150)
+    const feedbackVisibleFraction = await visibleFraction(submissionError)
+    assert(feedbackVisibleFraction > 0.95, `Submission failure feedback is clipped by its scroll container (${Math.round(feedbackVisibleFraction * 100)}% visible)`)
+    scenario.submissionFailureFeedback = {
+      attached: await failureFeedback.count() > 0, visible: await failureFeedback.isVisible(),
+      localFeedbackVisible: await submissionError.isVisible(), localFeedbackText: await submissionError.innerText(), feedbackVisibleFraction,
+      feedbackText: await page.locator('[role="alert"], .visible-error-with-feedback, .sidebar-history-status, .pending-input-submit-error').allTextContents(),
+    }
     await waitValue(input(), 'OPTIONAL_DRAFT_01593')
     assert((await storage()).includes('OPTIONAL_DRAFT_01593'), 'Failed submission must retain its draft')
     assert.equal(state.replies.length, 1)
+    assert.equal(await inbox.locator('.thread-pending-request-primary').isDisabled(), false)
+    await capture(page, scenario, 'questions-submit-failure', inbox)
     state.responseMode = 'success'
     await inbox.locator('.thread-pending-request-primary').click()
     await inbox.locator(`[data-request-id="${REQUEST_IDS.optional}"]`).waitFor({ state: 'hidden' })
@@ -294,7 +367,8 @@ async function verifyScenario(browser, theme, viewport) {
     assert(afterSuccess.includes('BLOCKING_DRAFT_01593') && afterSuccess.includes('THREAD_B_DRAFT_01593'))
     assert.equal(state.replies.length, 2)
     assert.equal(state.replies[1].id, REQUEST_IDS.optional)
-    scenario.assertions.push('failed submit retains draft', 'successful explicit submit clears only the submitted question')
+    assert.equal(await inbox.getByTestId('pending-response-submit-error').count(), 0)
+    scenario.assertions.push('failed submit displays a local retry message and retains draft', 'successful explicit submit clears only the submitted question and failure message')
 
     assert.equal(state.diagnosticsCalls.length, 0, 'Ordinary thread flow must not fetch extra runtime diagnostics')
     await openSettings(page)
@@ -323,8 +397,9 @@ async function verifyScenario(browser, theme, viewport) {
     const whenClosed = state.diagnosticsCalls.length
     await pause(600)
     assert.equal(state.diagnosticsCalls.length, whenClosed, 'Closing diagnostics must not fetch again')
+    const reopenResponse = page.waitForResponse(response => response.url() === `${BASE}/codex-api/runtime-diagnostics` && response.status() === 200)
     await panel.locator('summary').click()
-    await panel.getByTestId('runtime-diagnostics').waitFor()
+    await reopenResponse
     await page.waitForFunction(() => document.querySelector('[data-testid="runtime-info-panel"] button')?.disabled === false)
 
     state.diagnosticsMode = 'unsupported'
@@ -361,6 +436,8 @@ async function verifyScenario(browser, theme, viewport) {
     scenario.diagnosticsCalls = state.diagnosticsCalls
     scenario.rpcCounts = state.rpcCounts
     scenario.blockedWrites = state.blockedWrites
+    scenario.replyAttempts = state.replies.map(row => ({ id: row.id, outcome: row.outcome }))
+    scenario.filteredForeignNotifications = await page.evaluate(() => window.__codex01593FilteredNotifications || 0)
     saveReport()
     console.log(`PASS ${theme} ${viewport.width}x${viewport.height}`)
   } catch (error) {
@@ -368,6 +445,7 @@ async function verifyScenario(browser, theme, viewport) {
     scenario.error = error.message
     scenario.rpcCounts = state.rpcCounts
     scenario.blockedWrites = state.blockedWrites
+    scenario.replyAttempts = state.replies.map(row => ({ id: row.id, outcome: row.outcome }))
     scenario.diagnosticsCalls = state.diagnosticsCalls
     const path = resolve(OUTPUT, `codex-01593-ui-failed-${theme}-${viewport.width}.png`)
     await page.screenshot({ path }).catch(() => {})
