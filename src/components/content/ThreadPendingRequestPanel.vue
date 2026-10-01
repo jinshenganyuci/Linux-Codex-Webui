@@ -1,9 +1,28 @@
 <template>
-  <section v-if="request" class="thread-pending-request">
+  <section v-if="request" class="thread-pending-request thread-pending-request-inbox" :aria-busy="isSubmitting">
     <article
       class="thread-pending-request-shell"
       :class="{ 'thread-pending-request-shell--no-top-radius': hasQueueAbove }"
     >
+      <fieldset class="thread-pending-request-body" :disabled="isSubmitting">
+        <header class="pending-input-inbox-header">
+          <span class="pending-input-inbox-count">{{ t('Pending responses ({count})', { count: requestCount ?? requests?.length ?? 1 }) }}</span>
+          <span class="pending-input-inbox-state" :class="{ 'is-blocking': isBlockingServerRequest(request) }">
+            {{ isBlockingServerRequest(request) ? t('Response needed to continue') : t('Can answer later') }}
+          </span>
+        </header>
+        <nav v-if="(requests?.length ?? 0) > 1" class="pending-input-inbox-list" :aria-label="t('Choose a pending response')">
+          <button v-for="(entry, index) in requestEntries" :key="entry.key"
+            type="button" class="pending-input-inbox-item"
+            :class="{ 'is-selected': entry.key === selectedRequestIdentity }"
+            :aria-pressed="entry.key === selectedRequestIdentity"
+            :data-request-id="String(entry.id)" :title="entry.label"
+            @click="emit('selectRequest', entry.key)">
+            <span class="pending-input-inbox-index">{{ index + 1 }}</span>
+            <span class="pending-input-inbox-label">{{ entry.label }}</span>
+            <span class="pending-input-inbox-kind">{{ entry.blocking ? t('Blocking response') : t('Can answer later') }}</span>
+          </button>
+        </nav>
       <template v-if="isApprovalRequest(request)">
         <p class="thread-pending-request-title">{{ requestPanelPrompt(request) }}</p>
         <p
@@ -63,7 +82,6 @@
             <p class="thread-pending-request-eyebrow">{{ requestPanelTitle(request) }}</p>
             <p class="thread-pending-request-title">{{ requestPanelPrompt(request) }}</p>
           </div>
-          <span v-if="(requestCount ?? 0) > 1" class="thread-pending-request-counter">{{ t('{count} pending', { count: requestCount ?? 0 }) }}</span>
         </header>
 
         <div v-if="requestPreview(request)" class="thread-pending-request-preview">
@@ -163,7 +181,7 @@
           </footer>
         </section>
 
-        <section v-else-if="request.method === 'item/tool/requestUserInput'" class="thread-pending-request-user-input">
+        <section v-else-if="isUserInputRequest(request)" class="thread-pending-request-user-input">
           <div
             v-for="question in readToolQuestions(request)"
             :key="`${request.id}:${question.id}`"
@@ -192,18 +210,24 @@
               </p>
             </div>
 
-            <label v-if="question.isOther" class="thread-pending-request-input-wrap">
-              <span class="thread-pending-request-select-label">{{ t('Other answer') }}</span>
+            <label v-if="question.isOther || question.options.length === 0" class="thread-pending-request-input-wrap">
+              <span class="thread-pending-request-select-label">{{ question.options.length > 0 ? t('Other answer') : t('Answer') }}</span>
               <input
                 class="thread-pending-request-input"
-                type="text"
+                :type="question.isSecret ? 'password' : 'text'"
+                :autocomplete="question.isSecret ? 'off' : undefined"
+                :data-question-id="question.id"
                 :value="readQuestionOtherAnswer(request.id, question.id)"
-                :placeholder="t('Other answer')"
+                :placeholder="question.options.length > 0 ? t('Other answer') : t('Answer')"
                 @input="onQuestionOtherAnswerInput(request.id, question.id, $event)"
               />
             </label>
           </div>
 
+          <p class="pending-input-draft-note" role="status">{{ draftStatus === 'unavailable'
+            ? t('Draft could not be saved in this browser.')
+            : draftStatus === 'saved' ? t('Draft saved in this browser for 7 days. Secret answers are not saved.')
+            : t('Answers are saved in this browser for 7 days. Secret answers are not saved.') }}</p>
           <footer class="thread-pending-request-footer">
             <button type="button" class="thread-pending-request-primary" @click="onRespondToolRequestUserInput(request)">
               {{ t('Send') }}
@@ -229,13 +253,16 @@
           </button>
         </section>
       </template>
+      </fieldset>
     </article>
   </section>
 </template>
 
 <script setup lang="ts">
 import { isBlockingServerRequest } from '../../serverRequests'
-import { computed, ref, watch } from 'vue'
+import { computed, ref, toRef, watch } from 'vue'
+import { isSecretInputQuestion, isUserInputRequest, pendingRequestDraftIdentity } from '../../pendingRequestDrafts'
+import { usePendingRequestDraft } from '../../composables/usePendingRequestDraft'
 import type { UiServerRequest, UiServerRequestReply } from '../../types/codex'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import ComposerDropdown from './ComposerDropdown.vue'
@@ -252,6 +279,7 @@ type ParsedToolQuestion = {
   header: string
   question: string
   isOther: boolean
+  isSecret: boolean
   options: Array<{ label: string; description: string }>
 }
 
@@ -275,20 +303,53 @@ type McpElicitationField = {
 const props = defineProps<{
   request: UiServerRequest | null
   requestCount?: number
+  requests?: UiServerRequest[]
+  submitRequest?: (payload: UiServerRequestReply) => Promise<boolean>
   hasQueueAbove?: boolean
 }>()
 
 const emit = defineEmits<{
   respondServerRequest: [payload: UiServerRequestReply]
+  selectRequest: [key: string]
 }>()
 
 const selectedApprovalDecision = ref<ApprovalDecision>('accept')
 const approvalFreeformText = ref('')
-const toolQuestionAnswers = ref<Record<string, string>>({})
-const toolQuestionOtherAnswers = ref<Record<string, string>>({})
+const { answers: toolQuestionAnswers, otherAnswers: toolQuestionOtherAnswers, status: draftStatus, flush: flushDraft, clearSubmitted } = usePendingRequestDraft(toRef(props, 'request'))
+const isSubmitting = ref(false)
 const mcpElicitationAnswers = ref<Record<string, string | number | boolean | string[] | null>>({})
 const mcpElicitationValidationError = ref('')
 const { t } = useUiLanguage()
+const selectedRequestIdentity = computed(() => props.request ? pendingRequestDraftIdentity(props.request) : '')
+const requestEntries = computed(() => (props.requests ?? []).map((request) => ({
+  id: request.id, key: pendingRequestDraftIdentity(request), label: requestListLabel(request),
+  blocking: isBlockingServerRequest(request),
+})))
+
+function requestListLabel(request: UiServerRequest): string {
+  const firstQuestion = readToolQuestions(request)[0]
+  return firstQuestion?.header || firstQuestion?.question || requestPanelTitle(request)
+}
+
+async function submitResponse(payload: UiServerRequestReply): Promise<void> {
+  if (isSubmitting.value) return
+  const current = props.request
+  if (!current) return
+  flushDraft()
+  if (!props.submitRequest) {
+    emit('respondServerRequest', payload)
+    return
+  }
+  const key = pendingRequestDraftIdentity(current)
+  isSubmitting.value = true
+  try {
+    if (await props.submitRequest(payload)) clearSubmitted(key)
+  } catch {
+    // The parent surfaces request errors; retain the draft for a retry.
+  } finally {
+    isSubmitting.value = false
+  }
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -358,7 +419,7 @@ function requestPanelTitle(request: UiServerRequest): string {
   if (!isBlockingServerRequest(request)) return t('Optional input · task continues')
   if (isApprovalRequest(request)) return t('Awaiting approval')
   if (isMcpElicitationRequest(request)) return t('MCP server input required')
-  if (request.method === 'item/tool/requestUserInput') return t('Awaiting response')
+  if (isUserInputRequest(request)) return t('Awaiting response')
   if (request.method === 'item/tool/call') return t('Tool call waiting for response')
   return request.method
 }
@@ -371,7 +432,7 @@ function requestPanelPrompt(request: UiServerRequest): string {
   if (isPermissionsApprovalRequest(request)) return t('Do you want to grant these permissions?')
   if (isMcpElicitationRequest(request)) return t('An MCP server needs your input before Codex can continue.')
   if (!isBlockingServerRequest(request)) return t('You can answer here later; normal messages will not answer this question.')
-  if (request.method === 'item/tool/requestUserInput') return t('Codex needs your answer before it can continue.')
+  if (isUserInputRequest(request)) return t('Codex needs your answer before it can continue.')
   return t('Codex is waiting for a response before it can continue.')
 }
 
@@ -451,11 +512,9 @@ function approvalOptionsForRequest(request: UiServerRequest | null): ApprovalOpt
 const approvalOptions = computed(() => approvalOptionsForRequest(props.request))
 
 watch(
-  () => props.request?.id ?? 0,
+  () => props.request ? pendingRequestDraftIdentity(props.request) : '',
   () => {
     approvalFreeformText.value = ''
-    toolQuestionAnswers.value = {}
-    toolQuestionOtherAnswers.value = {}
     mcpElicitationAnswers.value = {}
     mcpElicitationValidationError.value = ''
     selectedApprovalDecision.value = approvalOptions.value[0]?.id ?? 'accept'
@@ -505,6 +564,7 @@ function readToolQuestions(request: UiServerRequest): ParsedToolQuestion[] {
       header: readString(question.header),
       question: readString(question.question),
       isOther: question.isOther === true,
+      isSecret: isSecretInputQuestion(question),
       options,
     })
   }
@@ -860,7 +920,7 @@ function onApprovalOtherInput(event: Event): void {
 function onRespondApproval(request: UiServerRequest, decision: ApprovalDecision): void {
   if (isPermissionsApprovalRequest(request)) {
     if (decision === 'decline' || decision === 'cancel') {
-      emit('respondServerRequest', {
+      void submitResponse({
         id: request.id,
         generation: request.generation,
         error: {
@@ -872,7 +932,7 @@ function onRespondApproval(request: UiServerRequest, decision: ApprovalDecision)
     }
 
     const permissions = asRecord(asRecord(request.params)?.permissions) ?? {}
-    emit('respondServerRequest', {
+    void submitResponse({
       id: request.id,
         generation: request.generation,
       result: {
@@ -883,7 +943,7 @@ function onRespondApproval(request: UiServerRequest, decision: ApprovalDecision)
     return
   }
 
-  emit('respondServerRequest', {
+  void submitResponse({
     id: request.id,
         generation: request.generation,
     result: { decision },
@@ -899,7 +959,7 @@ function onSubmitApproval(request: UiServerRequest): void {
     return
   }
 
-  emit('respondServerRequest', {
+  void submitResponse({
     id: request.id,
         generation: request.generation,
     result: {
@@ -922,7 +982,7 @@ function onRespondMcpElicitation(request: UiServerRequest, action: 'accept' | 'd
     result.content = buildMcpElicitationContent(request)
   }
 
-  emit('respondServerRequest', {
+  void submitResponse({
     id: request.id,
         generation: request.generation,
     result,
@@ -940,7 +1000,7 @@ function onRespondToolRequestUserInput(request: UiServerRequest): void {
     answers[question.id] = { answers: values }
   }
 
-  emit('respondServerRequest', {
+  void submitResponse({
     id: request.id,
         generation: request.generation,
     result: { answers },
@@ -948,7 +1008,7 @@ function onRespondToolRequestUserInput(request: UiServerRequest): void {
 }
 
 function onRespondToolCallFailure(request: UiServerRequest): void {
-  emit('respondServerRequest', {
+  void submitResponse({
     id: request.id,
         generation: request.generation,
     result: {
@@ -964,7 +1024,7 @@ function onRespondToolCallFailure(request: UiServerRequest): void {
 }
 
 function onRespondToolCallSuccess(request: UiServerRequest): void {
-  emit('respondServerRequest', {
+  void submitResponse({
     id: request.id,
         generation: request.generation,
     result: {
@@ -975,7 +1035,7 @@ function onRespondToolCallSuccess(request: UiServerRequest): void {
 }
 
 function onRespondEmptyResult(request: UiServerRequest): void {
-  emit('respondServerRequest', {
+  void submitResponse({
     id: request.id,
         generation: request.generation,
     result: {},
@@ -983,7 +1043,7 @@ function onRespondEmptyResult(request: UiServerRequest): void {
 }
 
 function onRejectUnknownRequest(request: UiServerRequest): void {
-  emit('respondServerRequest', {
+  void submitResponse({
     id: request.id,
         generation: request.generation,
     error: {

@@ -4285,6 +4285,87 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
   outline-color: #80b7ff;
 }
 
+/* Pending responses inbox: local answer drafts and question navigation. */
+.thread-pending-request-inbox {
+  --pending-surface: #fff;
+  --pending-raised: #f5f6f8;
+  --pending-field: #fff;
+  --pending-border: #dce0e6;
+  --pending-text: #202832;
+  --pending-muted: #626d7b;
+  --pending-active: #eaf2ff;
+  --pending-accent: #225caa;
+}
+:root.dark .thread-pending-request-inbox {
+  --pending-surface: #202226;
+  --pending-raised: #292c31;
+  --pending-field: #191b1f;
+  --pending-border: #3d424b;
+  --pending-text: #f0f2f5;
+  --pending-muted: #b1bac7;
+  --pending-active: #293d58;
+  --pending-accent: #9bc6ff;
+}
+.thread-pending-request-inbox .thread-pending-request-shell {
+  max-height: min(56dvh, 36rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-color: var(--pending-border);
+  background: var(--pending-surface);
+  color: var(--pending-text);
+  box-shadow: 0 4px 18px #0000000d;
+}
+.thread-pending-request-inbox .thread-pending-request-body {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.pending-input-inbox-header { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0.7rem; margin-bottom: 0.75rem; }
+.pending-input-inbox-count { font-size: 0.8rem; font-weight: 600; }
+.pending-input-inbox-state { margin-left: auto; color: var(--pending-muted); font-size: 0.68rem; border-radius: 2rem; padding: 0.18rem 0.5rem; background: var(--pending-raised); }
+.pending-input-inbox-state.is-blocking { color: var(--pending-accent); background: var(--pending-active); }
+.pending-input-inbox-list { display: flex; flex-direction: column; gap: 0.3rem; max-height: 8.25rem; overflow-y: auto; margin-bottom: 0.8rem; }
+.pending-input-inbox-item { display: flex; align-items: center; gap: 0.45rem; width: 100%; min-height: 2.5rem; flex-shrink: 0; padding: 0.45rem 0.6rem; text-align: left; border: 1px solid var(--pending-border); border-radius: 0.65rem; background: var(--pending-raised); color: var(--pending-text); cursor: pointer; }
+.pending-input-inbox-item:hover { border-color: var(--pending-accent); }
+.pending-input-inbox-item.is-selected { background: var(--pending-active); border-color: var(--pending-accent); }
+.pending-input-inbox-item:focus-visible { outline: 2px solid var(--pending-accent); outline-offset: -2px; }
+.pending-input-inbox-index { color: var(--pending-muted); font-size: 0.7rem; }
+.pending-input-inbox-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.76rem; }
+.pending-input-inbox-kind { flex-shrink: 0; color: var(--pending-muted); font-size: 0.65rem; }
+.pending-input-draft-note { margin: 0.35rem 0 0; color: var(--pending-muted); font-size: 0.68rem; line-height: 1.5; }
+.thread-pending-request-inbox .thread-pending-request-question,
+.thread-pending-request-inbox .thread-pending-request-preview,
+.thread-pending-request-inbox .thread-pending-request-command-line,
+.thread-pending-request-inbox .thread-pending-request-option,
+.thread-pending-request-inbox .thread-pending-request-inline-input {
+  background: var(--pending-raised);
+  border-color: var(--pending-border);
+  color: var(--pending-text);
+}
+.thread-pending-request-inbox .thread-pending-request-input,
+.thread-pending-request-inbox .thread-pending-request-dropdown .composer-dropdown-trigger {
+  background: var(--pending-field);
+  border-color: var(--pending-border);
+  color: var(--pending-text);
+}
+.thread-pending-request-inbox .thread-pending-request-title,
+.thread-pending-request-inbox .thread-pending-request-question-title,
+.thread-pending-request-inbox .thread-pending-request-option-label,
+.thread-pending-request-inbox .thread-pending-request-inline-control,
+.thread-pending-request-inbox .thread-pending-request-checkbox-label,
+.thread-pending-request-inbox .thread-pending-request-link { color: var(--pending-text); }
+.thread-pending-request-inbox .thread-pending-request-eyebrow,
+.thread-pending-request-inbox .thread-pending-request-question-text,
+.thread-pending-request-inbox .thread-pending-request-question-description,
+.thread-pending-request-inbox .thread-pending-request-select-label,
+.thread-pending-request-inbox .thread-pending-request-option-index { color: var(--pending-muted); }
+.thread-pending-request-inbox .thread-pending-request-option.is-selected { background: var(--pending-active); border-color: var(--pending-accent); box-shadow: none; }
+.thread-pending-request-inbox .thread-pending-request-primary { background: var(--pending-text); color: var(--pending-surface); border-color: var(--pending-text); }
+.thread-pending-request-inbox .thread-pending-request-secondary { color: var(--pending-text); border-color: var(--pending-border); }
+.thread-pending-request-inbox .thread-pending-request-secondary:hover { background: var(--pending-raised); }
+.thread-pending-request-inbox :disabled { cursor: wait; opacity: 0.65; }
+
 /* Runtime diagnostics: opened on demand from settings. */
 .runtime-diagnostics { margin-top: 12px; }
 .runtime-diagnostics-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }

@@ -969,6 +969,9 @@
                     v-if="selectedThreadPendingRequest"
                     :request="selectedThreadPendingRequest"
                     :request-count="selectedThreadServerRequests.length"
+                    :requests="orderedThreadPendingRequests"
+                    :submit-request="handleServerRequestResponse"
+                    @select-request="selectedPendingRequestKey = $event"
                     :has-queue-above="selectedThreadQueuedMessages.length > 0"
                     @respond-server-request="onRespondServerRequest"
                   />
@@ -1058,7 +1061,7 @@
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { isBlockingServerRequest } from './serverRequests'
+import { orderPendingRequests, selectPendingRequest } from './pendingRequestDrafts'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useSubagentNavigation } from './router/subagentNavigation'
 import IconTablerChevronLeft from './components/icons/IconTablerChevronLeft.vue'
@@ -1655,11 +1658,11 @@ const newChatDefaultReasoningSelection = computed(() => {
 const isComposerFastModeSupported = computed(() => (
   isFastModeSupportedForModel(composerSelectedModelId.value)
 ))
-const selectedThreadPendingRequest = computed<UiServerRequest | null>(() => {
-  const rows = selectedThreadServerRequests.value
-  const blocking = rows.filter(isBlockingServerRequest)
-  return blocking.at(-1) ?? rows.at(-1) ?? null
-})
+const selectedPendingRequestKey = ref('')
+const orderedThreadPendingRequests = computed(() => orderPendingRequests(selectedThreadServerRequests.value))
+const selectedThreadPendingRequest = computed<UiServerRequest | null>(() => (
+  selectPendingRequest(orderedThreadPendingRequests.value, selectedPendingRequestKey.value)
+))
 const composerCwd = computed(() => {
   if (isHomeRoute.value) return newThreadCwd.value.trim()
   return selectedThread.value?.cwd?.trim() ?? ''
@@ -2862,16 +2865,17 @@ function onRespondServerRequest(payload: UiServerRequestReply): void {
   void handleServerRequestResponse(payload)
 }
 
-async function handleServerRequestResponse(payload: UiServerRequestReply): Promise<void> {
+async function handleServerRequestResponse(payload: UiServerRequestReply): Promise<boolean> {
   const responded = await respondToPendingServerRequest(payload)
   const followUpMessageText = payload.followUpMessageText?.trim() ?? ''
-  if (!responded || !followUpMessageText || isHomeRoute.value) return
+  if (!responded || !followUpMessageText || isHomeRoute.value) return responded
 
   try {
     await sendMessageToSelectedThread(followUpMessageText, [], [], 'steer', [])
   } catch {
     // sendMessageToSelectedThread already surfaces the error through shared state.
   }
+  return responded
 }
 
 async function onForkThreadFromMessage(payload: { threadId: string; turnIndex?: number; turnId?: string }): Promise<void> {
