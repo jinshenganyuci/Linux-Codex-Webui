@@ -33,7 +33,7 @@
             </section>
             <section v-else-if="tab === 'features'" class="native-extension-section" data-testid="native-feature-panel">
               <h3>插件与实验能力</h3>
-              <p>只给当前 CLI 版本中已核对支持运行时切换的稳定能力提供临时开关。0.153.4 不支持 apps/plugins 的运行时修改；开发中或未核对的能力只读，不写 TOML、不重启 CLI。</p>
+              <p>仅在已核实的 CLI 0.153.4 / 0.159.3 中，为已验证的稳定能力提供临时开关，并遵守托管策略。apps/plugins、开发中或未核实的能力保持只读；不写配置、不重启 CLI。</p>
               <label>搜索能力<input v-model="search" type="search" placeholder="默认显示本批相关能力" /></label>
               <button type="button" :disabled="busy || loading" @click="loadInfo">刷新状态</button>
               <ul class="native-extension-list">
@@ -79,7 +79,7 @@ import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, 
 import { fetchRpcMethodCatalog, rpcCall } from '../../api/codexRpcClient'
 import { getExtensionInfo, listNativeChildren, setRuntimeFeature } from '../../api/nativeExtensionsGateway'
 import { observeNativeExtensions } from '../../composables/desktop/nativeExtensionEvents'
-import { contextCapabilityLabel, extensionRecord, extensionText, NATIVE_EXTENSION_METHODS, RUNTIME_FEATURE_KEYS, RUNTIME_FEATURE_VERSION, type NativeChildThread, type NativeExtensionInfo, type NativeFeature } from '../../nativeExtensions'
+import { canToggleRuntimeFeature, contextCapabilityLabel, extensionRecord, extensionText, NATIVE_EXTENSION_METHODS, RUNTIME_FEATURE_KEYS, type NativeChildThread, type NativeExtensionInfo, type NativeFeature } from '../../nativeExtensions'
 import type { UiThreadTokenUsage } from '../../types/codex'
 
 const NativeRealtimePanel = defineAsyncComponent(() => import('./NativeRealtimePanel.vue'))
@@ -119,7 +119,7 @@ const featureEnabled = (name: string) => info.value?.features.find(feature => fe
 const stageLabel = (stage: string) => ({ stable: '稳定', beta: '测试阶段', underDevelopment: '开发中', removed: '已移除', deprecated: '已弃用' }[stage] || stage)
 const childStatus = (status: string) => ({ notLoaded: '未加载（不代表完成）', idle: '空闲', active: '活动中', systemError: '系统错误' }[status] || status)
 const hasRequirement = (name: string) => Object.prototype.hasOwnProperty.call(info.value?.featureRequirements ?? {}, name)
-const canToggle = (feature: NativeFeature) => info.value?.cliVersion === RUNTIME_FEATURE_VERSION && info.value.requirementsKnown === true && RUNTIME_FEATURE_KEYS.some(name => name === feature.name) && feature.stage === 'stable' && !hasRequirement(feature.name) && methods.value.includes('experimentalFeature/enablement/set')
+const canToggle = (feature: NativeFeature) => Boolean(info.value && canToggleRuntimeFeature(info.value, feature) && methods.value.includes('experimentalFeature/enablement/set'))
 
 async function loadPlugins() {
   pluginError.value = ''

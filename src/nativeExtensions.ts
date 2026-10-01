@@ -18,7 +18,18 @@ export type NativeRealtimeSnapshot = { active: boolean; owned: boolean; phase: s
 export type NativeRealtimeOptions = { outputModality: 'audio'; model?: string; voice?: string; transport: { type: 'webrtc'; sdp: string }; version: 'v1' }
 
 export const RUNTIME_FEATURE_KEYS = ['auth_elicitation', 'memories', 'mentions_v2', 'remote_plugin', 'tool_suggest'] as const
-export const RUNTIME_FEATURE_VERSION = '0.153.4'
+// Exact versions only: 0.159.3 was checked against its experimental schema,
+// feature list, mutation acknowledgement, read-back, and restored values.
+export const RUNTIME_FEATURE_VERSIONS = ['0.153.4', '0.159.3'] as const
+export function getVerifiedRuntimeFeatureKeys(version: string | null): readonly string[] {
+  return RUNTIME_FEATURE_VERSIONS.some(verified => verified === version) ? RUNTIME_FEATURE_KEYS : []
+}
+export function canToggleRuntimeFeature(info: NativeExtensionInfo, feature: NativeFeature): boolean {
+  return getVerifiedRuntimeFeatureKeys(info.cliVersion).includes(feature.name)
+    && info.requirementsKnown === true
+    && feature.stage === 'stable'
+    && !Object.prototype.hasOwnProperty.call(info.featureRequirements, feature.name)
+}
 export const NATIVE_EXTENSION_METHODS = {
   realtime: ['thread/realtime/start', 'thread/realtime/stop', 'thread/realtime/appendText', 'thread/realtime/listVoices'],
   remote: ['remoteControl/status/read', 'remoteControl/enable', 'remoteControl/disable', 'remoteControl/pairing/start', 'remoteControl/pairing/status', 'remoteControl/client/list', 'remoteControl/client/revoke'],

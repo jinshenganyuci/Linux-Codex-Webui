@@ -18,7 +18,7 @@ describe('native extension gateway', () => {
   it('does not treat an ignored runtime switch as success or write to config', async () => {
     const requests: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (input: string, options?: RequestInit) => {
-      if (input.endsWith('native-extension-info')) return new Response(JSON.stringify({ data: { cliVersion: '0.153.4', requirementsKnown: true, featureRequirements: {}, features: [{ name: 'tool_suggest', enabled: true }] } }))
+      if (input.endsWith('native-extension-info')) return new Response(JSON.stringify({ data: { cliVersion: '0.153.4', requirementsKnown: true, featureRequirements: {}, features: [{ name: 'tool_suggest', enabled: true, stage: 'stable' }] } }))
       requests.push(JSON.parse(String(options?.body)).method)
       return new Response(JSON.stringify({ result: { enablement: {} } }))
     }))
@@ -34,6 +34,28 @@ describe('native extension gateway', () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify({ data: { cliVersion: '0.154.0', requirementsKnown: true, featureRequirements: {} } })))
     vi.stubGlobal('fetch', fetch)
     await expect(setRuntimeFeature('tool_suggest', false)).rejects.toThrow('版本')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('verifies both acknowledgement and live read-back on Codex 0.159.3', async () => {
+    let enabled = true
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string, options?: RequestInit) => {
+      if (input.includes('native-extension-info')) return new Response(JSON.stringify({ data: { cliVersion: '0.159.3', requirementsKnown: true, featureRequirements: {}, features: [{ name: 'tool_suggest', enabled, stage: 'stable' }] } }))
+      if (input.includes('/meta/methods')) return new Response(JSON.stringify({ data: [] }))
+      const body = JSON.parse(String(options?.body))
+      requests.push(body.method)
+      enabled = body.params.enablement.tool_suggest
+      return new Response(JSON.stringify({ result: { enablement: { tool_suggest: enabled } } }))
+    }))
+    expect((await setRuntimeFeature('tool_suggest', false)).features[0]?.enabled).toBe(false)
+    expect(requests).toEqual(['experimentalFeature/enablement/set'])
+  })
+
+  it('rejects changed feature stage before issuing a mutation', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ data: { cliVersion: '0.159.3', requirementsKnown: true, featureRequirements: {}, features: [{ name: 'memories', enabled: false, stage: 'underDevelopment' }] } })))
+    vi.stubGlobal('fetch', fetch)
+    await expect(setRuntimeFeature('memories', true)).rejects.toThrow('稳定状态')
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 })

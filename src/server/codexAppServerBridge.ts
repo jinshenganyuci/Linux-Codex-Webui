@@ -7,6 +7,7 @@ import { createThreadSearchService } from './threadSearch.js'
 import { isVolatileRealtimeNotification } from '../nativeExtensions.js'
 import { createThreadDeletion } from './threadDeletion.js'
 import { createExtensionInfoReader, NativeRealtimeSessions, RealtimeSessionConflict } from './nativeExtensionRuntime.js'
+import { createRuntimeDiagnosticsReader } from './runtimeDiagnostics.js'
 import { NATIVE_QUEUE_METHODS, normalizeNativeSettings, type NativeThreadSettings } from '../nativeThreadControls.js'
 import { WEBUI_BUILD_INFO } from './runtimeIdentity.js'
 import { RuntimeNoticeStore } from '../runtimeNotices.js'
@@ -8198,6 +8199,10 @@ function getSharedBridgeState(): SharedBridgeState {
 export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: boolean } = {}): CodexBridgeMiddleware {
   const { appServer, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor, threadRuntimeState } = getSharedBridgeState()
   const extensionInfo = createExtensionInfoReader((method, params) => appServer.rpc(method, params), () => appServer.getRuntimeInfo())
+  const runtimeDiagnostics = createRuntimeDiagnosticsReader({
+    runtimeInfo: () => appServer.getRuntimeInfo(),
+    rpc: (method, params) => appServer.rpc(method, params),
+  })
   const realtimeSessions = new NativeRealtimeSessions((method, params) => appServer.rpc(method, params))
   const realtimeLeaseTimer = setInterval(() => { void realtimeSessions.sweep() }, 5000)
   realtimeLeaseTimer.unref()
@@ -9374,6 +9379,11 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
 
       if (req.method === 'GET' && url.pathname === '/codex-api/runtime-info') {
         setJson(res, 200, { data: appServer.getRuntimeInfo() })
+        return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/runtime-diagnostics') {
+        setJson(res, 200, { data: await runtimeDiagnostics.read(url.searchParams.get('refresh') === '1') })
         return
       }
 

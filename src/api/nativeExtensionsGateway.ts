@@ -1,7 +1,7 @@
 import { rpcCall } from './codexRpcClient'
 import { fetchWithTimeout } from './requestClient'
 import { getNativeCapabilities, invalidateNativeCapabilities } from './nativeThreadGateway'
-import { normalizeChildThread, RUNTIME_FEATURE_KEYS, RUNTIME_FEATURE_VERSION, type NativeChildThread, type NativeExtensionInfo, type NativeRealtimeSnapshot, type NativeRealtimeOptions } from '../nativeExtensions'
+import { canToggleRuntimeFeature, normalizeChildThread, RUNTIME_FEATURE_KEYS, type NativeChildThread, type NativeExtensionInfo, type NativeRealtimeSnapshot, type NativeRealtimeOptions } from '../nativeExtensions'
 
 async function api<T>(endpoint: string, body?: unknown): Promise<T> {
   const response = await fetchWithTimeout(endpoint, body === undefined ? undefined : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -16,7 +16,8 @@ export const controlRealtime = (action: string, threadId: string, ownerId: strin
 export async function setRuntimeFeature(name: string, enabled: boolean, threadId = ''): Promise<NativeExtensionInfo> {
   if (!RUNTIME_FEATURE_KEYS.some(key => key === name)) throw new Error('此开关没有已核对的运行时切换接口；不会写入配置。')
   const before = await getExtensionInfo(threadId)
-  if (before.cliVersion !== RUNTIME_FEATURE_VERSION || !before.requirementsKnown || Object.prototype.hasOwnProperty.call(before.featureRequirements, name)) throw new Error('CLI 版本或托管策略未确认允许此开关；不会写入配置。')
+  const feature = before.features?.find(row => row.name === name)
+  if (!feature || !canToggleRuntimeFeature(before, feature)) throw new Error('CLI 版本、稳定状态或托管策略未确认允许此开关；不会写入配置。')
   const result = await rpcCall<{ enablement: Record<string, boolean> }>('experimentalFeature/enablement/set', { enablement: { [name]: enabled } })
   const info = await getExtensionInfo(threadId)
   if (result.enablement?.[name] !== enabled || info.features.find(row => row.name === name)?.enabled !== enabled) throw new Error('CLI 未确认开关生效；没有自动重试或写入配置。')
