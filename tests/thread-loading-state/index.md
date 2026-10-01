@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [不支持条目分页时的有界历史读取](unsupported-items-bounded-history-fallback.md) |
 | [子代理摘要与主聊天列表隔离](subagent-summary-sidebar-isolation.md) |
 | [无缓存访问、历史发现与独立聊天启动](fast-startup-complete.md) |
 | [子任务对话左上角返回入口](subagent-return-navigation.md) |
