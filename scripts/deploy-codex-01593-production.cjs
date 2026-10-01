@@ -30,6 +30,15 @@ const run = async (program, args, timeout = 30000, options = {}) => (await execu
 const pid = service => run('/usr/bin/systemctl', ['show', service, '-p', 'MainPID', '--value'])
 const exists = filename => fs.access(filename).then(() => true, () => false)
 
+function stableUnitSettings(value) {
+  // daemon-reload resets ExecStart's runtime timestamps/PID without changing
+  // the command. MainPID/boot identity are guarded separately.
+  return value.split('\n').map(line => line.startsWith('ExecStart=') ? line.replace(/ ; start_time=.*$/, ' }') : line).sort().join('\n')
+}
+async function readStableUnitSettings() {
+  return stableUnitSettings(await run('/usr/bin/systemctl', ['show', unit, '-p', 'ExecStart', '-p', 'WorkingDirectory', '-p', 'Environment']))
+}
+
 async function hash(filename, bytes) {
   const digest = createHash('sha256')
   if (bytes !== 0) for await (const chunk of createReadStream(filename, bytes === undefined ? {} : { start: 0, end: bytes - 1 })) digest.update(chunk)
@@ -317,7 +326,7 @@ async function prepare() {
     oldPid: await pid(unit), testPid: await pid('codex-webui-13511.service'),
     oldCommit: current.webui.commit, targetCommit, frontend, backend,
     runnerHash: await hash(path.join(release, 'runner-13510.mjs')),
-    unitFingerprint: await run('/usr/bin/systemctl', ['show', unit, '-p', 'ExecStart', '-p', 'WorkingDirectory', '-p', 'Environment']),
+    unitFingerprint: await readStableUnitSettings(),
     testEntryHash: await hash(path.join(acceptedRelease, 'dist-cli/index.js')),
     verifierHash: await hash(path.join(directory, 'verify-codex-01593-production.cjs')),
     deployScriptHash: await hash(path.join(directory, 'deploy-codex-01593-production.cjs')),
@@ -507,7 +516,7 @@ async function deploy() {
     return switchAndVerify(snapshot, mode)
   }
   assert.equal(currentCommit, snapshot.oldCommit)
-  const settings = await run('/usr/bin/systemctl', ['show', unit, '-p', 'ExecStart', '-p', 'WorkingDirectory', '-p', 'Environment'])
+  const settings = await readStableUnitSettings()
   assert.equal(createHash('sha256').update(settings).digest('hex'), snapshot.unitFingerprint)
   const bootId = (await fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()
   if (snapshot.bootId !== bootId) {
@@ -538,13 +547,18 @@ async function deploy() {
     await sleep(2000)
   }
   assert(!(await exists(dropIn)), 'Another deployment installed the target override')
-  const latestSettings = await run('/usr/bin/systemctl', ['show', unit, '-p', 'ExecStart', '-p', 'WorkingDirectory', '-p', 'Environment'])
+  const latestSettings = await readStableUnitSettings()
   assert.equal(createHash('sha256').update(latestSettings).digest('hex'), snapshot.unitFingerprint)
   await save('preflight.json', snapshot)
   await switchAndVerify(snapshot, 'switch')
 }
 async function main() {
   if (process.argv.includes('--self-test')) {
+    const settingsA = 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node old.mjs ; ignore_errors=no ; start_time=[today] ; pid=666 ; code=(null) }\nEnvironment=CODEX_HOME=/test\nWorkingDirectory=/work'
+    const settingsB = settingsA.replace('[today]', '[n/a]').replace('pid=666', 'pid=0')
+    assert.equal(stableUnitSettings(settingsA), stableUnitSettings(settingsB))
+    assert.notEqual(stableUnitSettings(settingsA), stableUnitSettings(settingsA.replace('old.mjs', 'other.mjs')))
+    assert.notEqual(stableUnitSettings(settingsA), stableUnitSettings(settingsA.replace('CODEX_HOME=/test', 'CODEX_HOME=/other')))
     const clean = { busy: false, activeThreadIds: [], pendingCount: 0, queuedCount: 0 }
     assert(idle(clean))
     for (const patch of [{ busy: true }, { activeThreadIds: ['active'] }, { pendingCount: 1 }, { queuedCount: 1 }]) assert(!idle({ ...clean, ...patch }))
