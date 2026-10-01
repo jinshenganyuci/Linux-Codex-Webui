@@ -248,16 +248,18 @@ async function readTurns(threadId, historyMode = 'paginated') {
 
 async function waitTurn(threadId, turnId, historyMode) {
   const deadline = Date.now() + 60000
+  let lastReadError
   while (Date.now() < deadline) {
     try {
       const turn = (await readTurns(threadId, historyMode)).find(candidate => candidate.id === turnId)
       if (turn && ['failed', 'completed', 'interrupted'].includes(turn.status)) return turn
     } catch (error) {
-      if (!/not materialized|no rollout found|not found/i.test(error.message)) throw error
+      if (!/not materialized|no rollout found|not found|list_turns is not supported yet/i.test(error.message)) throw error
+      lastReadError = error.message
     }
     await wait(250)
   }
-  throw new Error(`Turn ${turnId} did not finish`)
+  throw new Error(`Turn ${turnId} did not finish within 60s${lastReadError ? `; last transient history error: ${lastReadError}` : ''}`)
 }
 
 async function startThread(model) {
