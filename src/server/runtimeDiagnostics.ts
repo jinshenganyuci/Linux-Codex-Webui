@@ -72,7 +72,7 @@ function isUnsupported(error: unknown): boolean {
 
 export function createRuntimeDiagnosticsReader(options: {
   runtimeInfo: () => RuntimeSnapshot
-  rpc: (method: string, params: unknown) => Promise<unknown>
+  readMemoryStatus: (signal: AbortSignal) => Promise<unknown>
   systemCli?: { read: (refresh?: boolean) => Promise<SystemCliStatus> }
   explicitRuntime?: () => boolean
   now?: () => number
@@ -81,9 +81,10 @@ export function createRuntimeDiagnosticsReader(options: {
   const now = options.now ?? Date.now
   const systemCli = options.systemCli ?? createSystemCliReader({ now })
   const timeoutMs = options.timeoutMs ?? TIMEOUT_MS
-  let memoryCache: { generation: number; expiresAt: number; value: MemoryStatus } | null = null
-  // Retain the pending raw RPC after a response deadline. Repeated refreshes
-  // cannot pile up RPCs if this app-server never resolves memory/status.
+  let memoryCache: { generation: number; expiresAt: number; timedOut: boolean; value: MemoryStatus } | null = null
+  // The dedicated bridge read removes its pending entry when aborted. Keep a
+  // short cooldown after timeouts so repeated manual refreshes cannot pile up
+  // diagnostic work in the child process, where cancellation is not supported.
   let memoryPending: { generation: number; response: Promise<MemoryStatus> } | null = null
   const unknownMemory = (reason: MemoryStatus['reason']): MemoryStatus => ({ status: 'unknown', reason, v2Ready: null, v2ConsolidatedThreads: null, checkedAt: new Date(now()).toISOString() })
 
@@ -91,10 +92,12 @@ export function createRuntimeDiagnosticsReader(options: {
     const { generation, running, version } = runtime.codex
     if (!running || !version || !generation) return unknownMemory('runtime-inactive')
     if (memoryPending?.generation === generation) return memoryPending.response
-    if (!refresh && memoryCache?.generation === generation && now() < memoryCache.expiresAt) return memoryCache.value
+    if (memoryCache?.generation === generation && now() < memoryCache.expiresAt && (!refresh || memoryCache.timedOut)) return memoryCache.value
     const entry = { generation, response: Promise.resolve(unknownMemory('unavailable')) }
+    const controller = new AbortController()
+    let timedOut = false
     let timer: ReturnType<typeof setTimeout> | undefined
-    const raw = Promise.resolve().then(() => options.rpc('memory/status', {})).then((value): MemoryStatus => {
+    const raw = Promise.resolve().then(() => options.readMemoryStatus(controller.signal)).then((value): MemoryStatus => {
       const row = value !== null && typeof value === 'object' ? value as Record<string, unknown> : {}
       if (typeof row.v2Ready !== 'boolean' || typeof row.v2ConsolidatedThreads !== 'number' || !Number.isSafeInteger(row.v2ConsolidatedThreads) || row.v2ConsolidatedThreads < 0) return unknownMemory('unavailable')
       return { status: 'available', reason: 'confirmed', v2Ready: row.v2Ready, v2ConsolidatedThreads: row.v2ConsolidatedThreads, checkedAt: new Date(now()).toISOString() }
@@ -103,10 +106,10 @@ export function createRuntimeDiagnosticsReader(options: {
       : unknownMemory('unavailable'))
     entry.response = Promise.race([
       raw,
-      new Promise<MemoryStatus>(resolve => { timer = setTimeout(() => resolve(unknownMemory('unavailable')), timeoutMs) }),
+      new Promise<MemoryStatus>(resolve => { timer = setTimeout(() => { timedOut = true; controller.abort(); resolve(unknownMemory('unavailable')) }, timeoutMs) }),
     ]).then(value => {
       if (options.runtimeInfo().codex.generation !== generation) return unknownMemory('runtime-changed')
-      memoryCache = { generation, expiresAt: now() + CACHE_MS, value }
+      memoryCache = { generation, expiresAt: now() + CACHE_MS, timedOut, value }
       return value
     }).finally(() => { if (timer) clearTimeout(timer) })
     memoryPending = entry

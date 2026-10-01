@@ -7440,6 +7440,38 @@ export class AppServerProcess {
     })
   }
 
+  /** Optional diagnostics must not start a runtime or hold idle/drain forever. */
+  async readRuntimeMemoryStatus(signal: AbortSignal): Promise<unknown> {
+    if (!this.initialized || !this.transport.running) throw new Error('Codex runtime is not ready for memory diagnostics')
+    if (signal.aborted) throw new Error('Memory diagnostics canceled')
+    const generation = this.transport.activeGeneration
+    const id = this.nextId++
+    return new Promise((resolve, reject) => {
+      const cleanup = () => signal.removeEventListener('abort', cancel)
+      const entry = {
+        generation,
+        resolve: (value: unknown) => { cleanup(); resolve(value) },
+        reject: (reason?: unknown) => { cleanup(); reject(reason) },
+      }
+      const cancel = () => {
+        if (this.pending.get(id) !== entry) return
+        this.pending.delete(id)
+        entry.reject(new Error('Memory diagnostics canceled'))
+        this.settleIdleState()
+      }
+      this.pending.set(id, entry)
+      signal.addEventListener('abort', cancel, { once: true })
+      if (signal.aborted) { cancel(); return }
+      try {
+        this.sendLine({ jsonrpc: '2.0', id, method: 'memory/status', params: {} } satisfies JsonRpcCall, generation)
+      } catch (error) {
+        this.pending.delete(id)
+        entry.reject(error)
+        this.settleIdleState()
+      }
+    })
+  }
+
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return
     if (this.initializePromise) {
@@ -8201,7 +8233,7 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
   const extensionInfo = createExtensionInfoReader((method, params) => appServer.rpc(method, params), () => appServer.getRuntimeInfo())
   const runtimeDiagnostics = createRuntimeDiagnosticsReader({
     runtimeInfo: () => appServer.getRuntimeInfo(),
-    rpc: (method, params) => appServer.rpc(method, params),
+    readMemoryStatus: signal => appServer.readRuntimeMemoryStatus(signal),
   })
   const realtimeSessions = new NativeRealtimeSessions((method, params) => appServer.rpc(method, params))
   const realtimeLeaseTimer = setInterval(() => { void realtimeSessions.sweep() }, 5000)

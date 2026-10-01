@@ -932,7 +932,7 @@ const zhCN: Record<string, string> = {
   "System Codex CLI": "系统 Codex CLI",
   "Resolved from server PATH": "来自服务端 PATH",
   "WebUI app-server": "WebUI 实际运行时",
-  "Explicit runtime command": "使用独立指定的运行时",
+  "Configured runtime command": "使用配置的运行时命令",
   "Default runtime command": "使用默认运行时命令",
   "Upgrading the system CLI does not restart or replace the running WebUI runtime.": "升级系统 CLI 不会重启或替换 WebUI 正在使用的运行时。",
   "Memory status": "记忆状态",

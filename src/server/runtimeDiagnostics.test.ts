@@ -58,10 +58,10 @@ describe('runtime memory diagnostics', () => {
   it('does no work until read, coalesces concurrent reads, and refreshes by generation', async () => {
     let runtime = snapshot()
     const rpc = vi.fn(async () => ({ v2Ready: false, v2ConsolidatedThreads: 0, secret: 'SECRET_SENTINEL' }))
-    const reader = createRuntimeDiagnosticsReader({ runtimeInfo: () => runtime, rpc, systemCli })
+    const reader = createRuntimeDiagnosticsReader({ runtimeInfo: () => runtime, readMemoryStatus: rpc, systemCli })
     expect(rpc).not.toHaveBeenCalled()
     const values = await Promise.all(Array.from({ length: 30 }, () => reader.read()))
-    expect(rpc).toHaveBeenCalledExactlyOnceWith('memory/status', {})
+    expect(rpc).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal))
     expect(values[0].memory).toMatchObject({ status: 'available', v2Ready: false, v2ConsolidatedThreads: 0 })
     expect(JSON.stringify(values)).not.toContain('SECRET_SENTINEL')
     expect(values[0].temporaryFeatures.verifiedKeys).toHaveLength(5)
@@ -73,10 +73,10 @@ describe('runtime memory diagnostics', () => {
   })
 
   it('distinguishes unsupported methods from unknown failures and malformed replies', async () => {
-    const unsupported = createRuntimeDiagnosticsReader({ runtimeInfo: snapshot, rpc: async () => { throw new Error('unknown variant `memory/status`') }, systemCli })
+    const unsupported = createRuntimeDiagnosticsReader({ runtimeInfo: snapshot, readMemoryStatus: async () => { throw new Error('unknown variant `memory/status`') }, systemCli })
     expect((await unsupported.read()).memory).toMatchObject({ status: 'unsupported', v2Ready: null, v2ConsolidatedThreads: null })
     for (const rpc of [async () => { throw new Error('temporarily unavailable') }, async () => ({ v2Ready: true, v2ConsolidatedThreads: -1 })]) {
-      const reader = createRuntimeDiagnosticsReader({ runtimeInfo: snapshot, rpc, systemCli })
+      const reader = createRuntimeDiagnosticsReader({ runtimeInfo: snapshot, readMemoryStatus: rpc, systemCli })
       expect((await reader.read()).memory).toMatchObject({ status: 'unknown', v2Ready: null, v2ConsolidatedThreads: null })
     }
   })
@@ -84,7 +84,7 @@ describe('runtime memory diagnostics', () => {
   it('bounds a hung RPC and does not accumulate new RPCs on repeated refresh', async () => {
     vi.useFakeTimers()
     const rpc = vi.fn(() => new Promise(() => {}))
-    const reader = createRuntimeDiagnosticsReader({ runtimeInfo: snapshot, rpc, systemCli, timeoutMs: 100 })
+    const reader = createRuntimeDiagnosticsReader({ runtimeInfo: snapshot, readMemoryStatus: rpc, systemCli, timeoutMs: 100 })
     const request = reader.read()
     await vi.advanceTimersByTimeAsync(100)
     expect((await request).memory.status).toBe('unknown')
@@ -96,7 +96,7 @@ describe('runtime memory diagnostics', () => {
     let runtime = snapshot()
     let finish!: (value: unknown) => void
     const rpc = vi.fn(() => new Promise(resolve => { finish = resolve }))
-    const reader = createRuntimeDiagnosticsReader({ runtimeInfo: () => runtime, rpc, systemCli })
+    const reader = createRuntimeDiagnosticsReader({ runtimeInfo: () => runtime, readMemoryStatus: rpc, systemCli })
     const request = reader.read()
     await Promise.resolve()
     runtime = snapshot(2)
@@ -109,7 +109,7 @@ describe('runtime memory diagnostics', () => {
     const runtime = snapshot()
     runtime.codex.running = false
     runtime.codex.version = null
-    const reader = createRuntimeDiagnosticsReader({ runtimeInfo: () => runtime, rpc, systemCli })
+    const reader = createRuntimeDiagnosticsReader({ runtimeInfo: () => runtime, readMemoryStatus: rpc, systemCli })
     expect((await reader.read()).memory.reason).toBe('runtime-inactive')
     expect(rpc).not.toHaveBeenCalled()
   })

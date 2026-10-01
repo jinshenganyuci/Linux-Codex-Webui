@@ -39,11 +39,12 @@ describe('runtime information panel', () => {
     expect(html).not.toMatch(/<details[^>]*\sopen(?:\s|>)/)
   })
 
-  it('separates installed and running versions and explains the explicit runtime', async () => {
+  it('separates installed and running versions without implying the command was explicitly pinned', async () => {
     const html = await renderCard()
     expect(html).toMatch(/data-testid="system-cli-version"[^]*?0\.159\.3/)
     expect(html).toMatch(/data-testid="running-cli-version"[^]*?0\.154\.0/)
-    expect(html).toContain('Explicit runtime command')
+    expect(html).toContain('Configured runtime command')
+    expect(html).not.toContain('Explicit runtime command')
     expect(html).toContain('does not restart or replace')
     expect(html).toContain('Memory is not ready yet')
     expect(html).toContain('Consolidated threads: 0')

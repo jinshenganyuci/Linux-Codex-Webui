@@ -9,7 +9,7 @@
       <section class="runtime-diagnostics-version" data-testid="running-cli-version">
         <span>{{ t('WebUI app-server') }}</span>
         <strong>{{ runtime.codex.version || t('Not initialized') }}</strong>
-        <small>{{ runtime.explicitRuntime ? t('Explicit runtime command') : t('Default runtime command') }}</small>
+        <small>{{ runtime.explicitRuntime ? t('Configured runtime command') : t('Default runtime command') }}</small>
       </section>
     </div>
     <p v-if="runtime.systemCli.version && runtime.codex.version && runtime.systemCli.version !== runtime.codex.version" class="runtime-diagnostics-note">{{ t('Upgrading the system CLI does not restart or replace the running WebUI runtime.') }}</p>

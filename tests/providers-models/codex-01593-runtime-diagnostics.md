@@ -12,7 +12,7 @@
 1. 打开设置，保持“运行时信息”折叠。
 2. 等待 3 秒，确认没有 `/codex-api/runtime-diagnostics` 请求；展开一次。
 3. 核对“系统 Codex CLI”来自服务进程 PATH 中 `codex --version`，而“WebUI 实际运行时”来自当前 app-server 握手。
-4. 如果配置了独立运行时，检查标记“使用独立指定的运行时”；如果两版本不同，应提示升级系统 CLI 不会重启或替换运行时。
+4. 如果配置了运行时命令，检查标记“使用配置的运行时命令”（该命令也可能由默认启动器配置，不暗示用户手工固定）；如果两版本不同，应提示升级系统 CLI 不会重启或替换运行时。
 5. 点击刷新，确认出现单次 `?refresh=1` 请求；快速重复点击不会并发追加请求。折叠后等待 30 秒，确认没有轮询。
 6. 在明、暗主题，以及 375×812 和 768×1024 视口核对实际卡片，文字、版本和长路径不得越界，暗色卡片不应出现浅色背景。
 
@@ -23,7 +23,7 @@
 1. 在新版隔离实例展开诊断卡。有效的 `{v2Ready:false,v2ConsolidatedThreads:0}` 应显示“已核实”“记忆尚未就绪”“已整合会话: 0”。
 2. 在旧版实例，或者拦截诊断接口模拟 `memory.status=unsupported`，应显示“不支持读取记忆状态”，不显示 0 个已整合会话。
 3. 模拟 RPC 超时、不可用、非法计数或读取途中 app-server 代次改变。应显示“未确认”，不显示已就绪或虚构计数。
-4. 对挂起的 `memory/status` 连续刷新，后端在 2.5 秒返回未确认；同一代次最多保留一个未结束的 memory RPC。
+4. 对挂起的 `memory/status` 连续刷新，后端在 2.5 秒返回未确认；必须从 WebUI 的 pending Map 移除该诊断 RPC，确保配置重启和优雅关闭可以继续；同代次的后续刷新在 30 秒冷却期内不重复发起诊断。
 5. 重启测试运行时后重新展开，确认旧代次的就绪状态和不支持缓存失效。
 
 预期：卡片明确区分有效状态、接口不支持和暂未确认；就绪说明不声称某条回答实际使用了记忆。诊断不会启动一个已停止的 app-server。
@@ -41,13 +41,13 @@
 ## 性能与自动检查
 
 ```sh
-pnpm exec vitest run src/server/runtimeDiagnostics.test.ts src/nativeExtensions.test.ts src/api/nativeExtensionsGateway.test.ts src/components/settings/RuntimeInfoPanel.test.ts
+pnpm exec vitest run src/server/runtimeDiagnostics.test.ts src/server/codexAppServerBridge.runtimeDiagnostics.test.ts src/nativeExtensions.test.ts src/api/nativeExtensionsGateway.test.ts src/components/settings/RuntimeInfoPanel.test.ts
 ```
 
 - 卡片不参与首屏或设置初始挂载请求，无后台轮询；每次展开最多一个诊断 HTTP 请求。
 - 后端每次有效刷新最多一个 `memory/status` RPC，最多一个异步 `--version` 子进程；子进程限制 2.5 秒、输出 4 KiB。
 - 系统版本缓存 30 秒，并在 PATH 解析目标、文件 inode/大小/mtime/ctime 变化时失效；手动刷新重新核对版本。并发版本读取合并为一个子进程。
-- 记忆状态缓存 30 秒，按运行时 generation 隔离；同代次挂起 RPC 不因刷新而累积。
+- 记忆状态缓存 30 秒，按运行时 generation 隔离；超时主动取消 WebUI 侧 pending 等待，不阻塞运行时 drain；30 秒超时冷却期内的强刷不重复发起 RPC。
 - 自动测试覆盖 30 个并发记忆读取只触发一个 RPC，20 个并发系统版本读取只触发一个探测，以及挂起后的 25 次刷新不重复发送 RPC。
 - 0.159.3 隔离实测五个键均完成修改、回读及恢复；无模型回合、未写配置。测试仅证明协议与即时状态，不证明模型实际使用某项能力。
 
