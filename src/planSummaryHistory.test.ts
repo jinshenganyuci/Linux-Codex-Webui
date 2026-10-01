@@ -4,6 +4,7 @@ import {
   MAX_PLAN_SUMMARIES_PER_THREAD,
   MAX_PLAN_SUMMARY_TEXT_LENGTH,
   mergePlanSummaryMessages,
+  planIdentity,
   normalizePlanSummary,
   normalizePlanSummaryHistoryState,
   upsertPlanSummary,
@@ -12,6 +13,7 @@ import {
 function summary(turnId: string, overrides: Partial<UiPlanSummary> = {}): UiPlanSummary {
   return {
     id: `plan-summary:${turnId}`,
+    kind: 'checklist',
     threadId: 'thread-a',
     turnId,
     messageId: `${turnId}:plan`,
@@ -47,6 +49,37 @@ describe('plan summary history normalization', () => {
     expect(rows[0]?.turnId).toBe('turn-1')
     expect(rows.at(-1)).toMatchObject({ turnId: 'turn-128', lifecycle: 'failed', revision: 3 })
     expect(normalizePlanSummaryHistoryState({ threads: { 'thread-a': rows } })).toEqual({ 'thread-a': rows })
+  })
+
+  it('retains multiple plan identities in one turn and rejects stale revisions', () => {
+    const checklist = summary('same-turn')
+    const firstProposal = summary('same-turn', { kind: 'proposal', itemId: 'proposal-a', messageId: 'proposal-a', text: 'Draft A', steps: [] })
+    const secondProposal = summary('same-turn', { kind: 'proposal', itemId: 'proposal-b', messageId: 'proposal-b', text: 'Draft B', steps: [] })
+    let rows = upsertPlanSummary([], checklist)
+    rows = upsertPlanSummary(rows, firstProposal)
+    rows = upsertPlanSummary(rows, secondProposal)
+    expect(rows).toHaveLength(3)
+    expect(new Set(rows.map(planIdentity)).size).toBe(3)
+    expect(upsertPlanSummary(rows, { ...firstProposal, revision: 1, text: 'stale' })).toBe(rows)
+    expect(normalizePlanSummaryHistoryState({ 'thread-a': rows })['thread-a']).toHaveLength(3)
+  })
+
+  it('does not declare a partial checklist completed just because its turn ended', () => {
+    expect(normalizePlanSummary(summary('partial', { steps: [{ step: 'unfinished', status: 'inProgress' }] }))?.lifecycle).toBe('incomplete')
+    expect(normalizePlanSummary(summary('done'))?.lifecycle).toBe('completed')
+    expect(normalizePlanSummary(summary('draft', { kind: 'proposal', steps: [], text: 'Draft only' }))?.lifecycle).toBe('completed')
+    expect(normalizePlanSummary({ ...summary('unconfirmed'), lifecycle: 'unconfirmed' })).toBeNull()
+  })
+
+  it('marks a truncated checklist incomplete when omitted steps may still be pending', () => {
+    const normalized = normalizePlanSummary(summary('too-many', { steps: [
+      ...Array.from({ length: 64 }, () => ({ step: 'Known done', status: 'completed' as const })),
+      { step: 'Omitted pending work', status: 'pending' },
+    ] }))
+    expect(normalized).toMatchObject({ lifecycle: 'incomplete', truncated: true })
+    expect(normalized?.steps).toHaveLength(64)
+    expect(normalizePlanSummary(summary('already-cut', { truncated: true }))?.lifecycle).toBe('incomplete')
+    expect(normalizePlanSummary(summary('cut-text', { steps: [{ step: 'x'.repeat(5_000), status: 'completed' }] }))).toMatchObject({ truncated: true, lifecycle: 'incomplete' })
   })
 
   it('bounds aggregate structured plan text instead of multiplying the per-step limit', () => {
@@ -105,7 +138,7 @@ describe('mergePlanSummaryMessages', () => {
     })
   })
 
-  it('does not append summaries for unloaded turns and lets a native plan win', () => {
+  it('does not append unloaded summaries or confuse a native proposal with a checklist', () => {
     expect(mergePlanSummaryMessages(messages, [summary('turn-missing')])).toEqual(messages)
     const nativePlan: UiMessage = {
       id: 'native-plan',
@@ -115,9 +148,18 @@ describe('mergePlanSummaryMessages', () => {
       turnId: 'turn-a',
     }
     const merged = mergePlanSummaryMessages([...messages, nativePlan], [summary('turn-a')])
-    expect(merged).not.toContainEqual(expect.objectContaining({ messageType: 'plan.summary' }))
-    expect(merged.find((message) => message.id === 'native-plan')).toMatchObject({
-      plan: { lifecycle: 'completed', isStreaming: false },
-    })
+    expect(merged).toContainEqual(expect.objectContaining({ messageType: 'plan.summary', plan: expect.objectContaining({ kind: 'checklist' }) }))
+    expect(merged.find((message) => message.id === 'native-plan')).toEqual(nativePlan)
   })
+
+  it('merges proposal metadata only into the native item with the same identity', () => {
+    const native = (id: string): UiMessage => ({ id, role: 'assistant', text: 'Historical draft', messageType: 'plan', turnId: 'turn-a', plan: { kind: 'proposal', itemId: id, steps: [] } })
+    const proposal = summary('turn-a', { kind: 'proposal', itemId: 'draft-a', messageId: 'draft-a', text: 'Authoritative completed draft', steps: [] })
+    const merged = mergePlanSummaryMessages([...messages, native('draft-a'), native('draft-b')], [summary('turn-a'), proposal])
+    expect(merged.filter(row => row.plan?.kind === 'proposal')).toHaveLength(2)
+    expect(merged.find(row => row.id === 'draft-a')?.text).toBe('Authoritative completed draft')
+    expect(merged.find(row => row.id === 'draft-b')?.text).toBe('Historical draft')
+    expect(merged.filter(row => row.plan?.kind === 'checklist')).toHaveLength(1)
+  })
+
 })

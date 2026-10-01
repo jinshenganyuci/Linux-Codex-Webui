@@ -1,220 +1,155 @@
 import { createServer } from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCodexBridgeMiddleware } from './codexAppServerBridge'
+import { getActivePlanPersistencePath } from './activePlanPersistence'
+import { readPlanSummaryHistory } from './planSummaryHistory'
+import * as summaryHistory from './planSummaryHistory'
 
 const sharedBridgeKey = '__codexRemoteSharedBridge__'
-const globalScope = globalThis as typeof globalThis & Record<string, unknown>
-let previousSharedBridge: unknown
-
-afterEach(() => {
-  if (previousSharedBridge === undefined) delete globalScope[sharedBridgeKey]
-  else globalScope[sharedBridgeKey] = previousSharedBridge
+const scope = globalThis as typeof globalThis & Record<string, unknown>
+let previousBridge: unknown, previousHome: string | undefined, codexHome = ''
+const middlewares: ReturnType<typeof createCodexBridgeMiddleware>[] = []
+const closers: Array<() => Promise<void>> = []
+beforeEach(async () => {
+  previousBridge = scope[sharedBridgeKey]; previousHome = process.env.CODEX_HOME
+  codexHome = await mkdtemp(join(tmpdir(), 'codex-plan-bridge-')); process.env.CODEX_HOME = codexHome
 })
-
-async function readReadyPayload(url: string): Promise<Record<string, unknown>> {
-  const controller = new AbortController()
-  const response = await fetch(url, { signal: controller.signal })
-  expect(response.status).toBe(200)
-  const reader = response.body?.getReader()
-  if (!reader) throw new Error('event stream response body is unavailable')
-  const decoder = new TextDecoder()
-  let text = ''
-  try {
-    while (!text.includes('event: ready\n')) {
-      const chunk = await reader.read()
-      if (chunk.done) break
-      text += decoder.decode(chunk.value, { stream: true })
-    }
-  } finally {
-    controller.abort()
+afterEach(async () => {
+  for (const close of closers.splice(0)) await close()
+  for (const middleware of middlewares.splice(0)) await middleware.disposeGracefully()
+  if (previousBridge === undefined) delete scope[sharedBridgeKey]; else scope[sharedBridgeKey] = previousBridge
+  if (previousHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previousHome
+  await rm(codexHome, { recursive: true, force: true })
+  vi.restoreAllMocks()
+})
+function harness() {
+  let listener: (value: { method: string; params: unknown; generation?: number }) => void = () => {}
+  const noOp = () => undefined, rpc = vi.fn(async () => ({}))
+  scope[sharedBridgeKey] = {
+    version: 'experimental-api-v6-native-extensions',
+    appServer: { rpc, onNotification: (next: typeof listener) => { listener = next; return noOp }, dispose: noOp, disposeWhenIdle: async () => undefined },
+    terminalManager: { subscribe: () => noOp, dispose: noOp }, methodCatalog: {},
+    telegramBridge: { configureAllowedUserIds: noOp, configureToken: noOp, start: noOp, stop: noOp },
+    backendQueueProcessor: { dispose: noOp }, threadRuntimeState: { dispose: async () => undefined },
   }
-  const dataLine = text.split('\n').find((line) => line.startsWith('data: '))
-  if (!dataLine) throw new Error(`ready payload missing from event stream: ${text}`)
-  return JSON.parse(dataLine.slice('data: '.length)) as Record<string, unknown>
+  const middleware = createCodexBridgeMiddleware({ backgroundMaintenance: false, planPersistence: true }); middlewares.push(middleware)
+  const frames: Array<{ method: string; params: unknown }> = []; middleware.subscribeNotifications(frame => frames.push(frame))
+  return { middleware, rpc, frames, appServer: (scope[sharedBridgeKey] as { appServer: { disposeWhenIdle: () => Promise<void> } }).appServer, emit: (method: string, params: unknown) => listener({ method, params, generation: 7 }) }
 }
+async function serverFor(middleware: ReturnType<typeof createCodexBridgeMiddleware>) {
+  const server = createServer((req, res) => { void middleware(req, res, () => { res.statusCode = 404; res.end() }) })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  closers.push(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())))
+  const address = server.address(); if (!address || typeof address === 'string') throw new Error('no test address')
+  return `http://127.0.0.1:${address.port}`
+}
+async function ready(url: string) {
+  const abort = new AbortController(), response = await fetch(url + '/codex-api/events', { signal: abort.signal })
+  const reader = response.body!.getReader(), decoder = new TextDecoder(); let text = ''
+  try { while (!text.includes('event: ready\n')) { const chunk = await reader.read(); if (chunk.done) break; text += decoder.decode(chunk.value, { stream: true }) } }
+  finally { abort.abort() }
+  const event = text.slice(text.indexOf('event: ready\n')).split('\n').find(line => line.startsWith('data: '))
+  return JSON.parse(event!.slice(6))
+}
+const checklist = (status = 'inProgress') => ({ threadId: 'thread-a', turnId: 'turn-a', explanation: 'Ship safely', plan: [{ step: 'Inspect', status: 'completed' }, { step: 'Ship', status }] })
 
-describe('active plan snapshot bridge recovery', () => {
-  it('includes the latest bounded plan snapshot in SSE ready', async () => {
-    let notificationListener: ((value: { method: string; params: unknown; generation?: number }) => void) | null = null
-    const noOp = () => undefined
-    previousSharedBridge = globalScope[sharedBridgeKey]
-    globalScope[sharedBridgeKey] = {
-      version: 'experimental-api-v6-native-extensions',
-      appServer: {
-        rpc: async () => ({}),
-        onNotification: (listener: typeof notificationListener) => {
-          notificationListener = listener
-          return noOp
-        },
-        dispose: noOp,
-        disposeWhenIdle: async () => undefined,
-      },
-      terminalManager: { subscribe: () => noOp, dispose: noOp },
-      methodCatalog: {},
-      telegramBridge: {
-        configureAllowedUserIds: noOp,
-        configureToken: noOp,
-        start: noOp,
-        stop: noOp,
-      },
-      backendQueueProcessor: { dispose: noOp },
-      threadRuntimeState: { dispose: async () => undefined },
-    }
-
-    const middleware = createCodexBridgeMiddleware()
-    const server = createServer((req, res) => {
-      void middleware(req, res, () => {
-        res.statusCode = 404
-        res.end()
-      })
-    })
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once('error', reject)
-        server.listen(0, '127.0.0.1', () => {
-          server.off('error', reject)
-          resolve()
-        })
-      })
-      expect(notificationListener).not.toBeNull()
-      notificationListener!({ method: 'thread/realtime/sdp', params: { threadId: 'voice', sdp: 'PRIVATE_SDP' } })
-      notificationListener!({ method: 'thread/realtime/outputAudio/delta', params: { threadId: 'voice', audio: { data: 'PRIVATE_AUDIO' } } })
-      const replayed: unknown[] = []
-      const stopReplay = middleware.subscribeNotifications(value => replayed.push(value), { streamId: middleware.getNotificationStreamState().streamId, sequence: 0 })
-      stopReplay()
-      expect(JSON.stringify(replayed)).not.toContain('PRIVATE_')
-      notificationListener!({
-        method: 'turn/plan/updated',
-        generation: 7,
-        params: {
-          threadId: 'thread-a',
-          turnId: 'turn-a',
-          explanation: 'Recover immediately',
-          plan: [
-            { step: 'Inspect', status: 'completed' },
-            { step: 'Ship', status: 'inProgress' },
-          ],
-        },
-      })
-
-      const address = server.address()
-      if (!address || typeof address === 'string') throw new Error('test server did not expose a TCP port')
-      const ready = await readReadyPayload(`http://127.0.0.1:${address.port}/codex-api/events`)
-      expect(ready).toMatchObject({
-        ok: true,
-        activePlans: [{
-          threadId: 'thread-a',
-          turnId: 'turn-a',
-          messageId: 'turn-a:plan',
-          explanation: 'Recover immediately',
-          steps: [
-            { step: 'Inspect', status: 'completed' },
-            { step: 'Ship', status: 'inProgress' },
-          ],
-          lifecycle: 'live',
-          generation: 7,
-        }],
-      })
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => error ? reject(error) : resolve())
-      })
-      middleware.dispose()
-    }
+describe('authoritative plan bridge recovery', () => {
+  it('sends independent authoritative updates and advertises bounded snapshots in SSE ready', async () => {
+    const { middleware, emit, frames } = harness()
+    emit('turn/plan/updated', checklist())
+    emit('item/plan/delta', { threadId: 'thread-a', turnId: 'turn-a', itemId: 'draft-a', delta: 'Proposed document' })
+    const updates = frames.filter(frame => frame.method === 'codex-ui/plan-updated')
+    expect(updates).toHaveLength(2)
+    expect(updates.map(frame => (frame.params as { snapshot: { kind: string } }).snapshot.kind)).toEqual(['checklist', 'proposal'])
+    const payload = await ready(await serverFor(middleware))
+    expect(payload.planSnapshotsVersion).toBe(1)
+    expect(payload.activePlans).toHaveLength(2)
+    expect(payload.activePlans[0]).toMatchObject({ kind: 'checklist', messageId: 'turn-a:plan', generation: 7 })
+    expect(payload.activePlans[1]).toMatchObject({ kind: 'proposal', itemId: 'draft-a', text: 'Proposed document' })
   })
 
-  it('persists a terminal snapshot and exposes it through the summary history API', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'codex-plan-summary-bridge-'))
-    const previousCodexHome = process.env.CODEX_HOME
-    process.env.CODEX_HOME = codexHome
-    let notificationListener: ((value: { method: string; params: unknown; generation?: number }) => void) | null = null
-    const noOp = () => undefined
-    previousSharedBridge = globalScope[sharedBridgeKey]
-    globalScope[sharedBridgeKey] = {
-      version: 'experimental-api-v6-native-extensions',
-      appServer: {
-        rpc: async () => ({}),
-        onNotification: (listener: typeof notificationListener) => {
-          notificationListener = listener
-          return noOp
-        },
-        dispose: noOp,
-        disposeWhenIdle: async () => undefined,
-      },
-      terminalManager: { subscribe: () => noOp, dispose: noOp },
-      methodCatalog: {},
-      telegramBridge: {
-        configureAllowedUserIds: noOp,
-        configureToken: noOp,
-        start: noOp,
-        stop: noOp,
-      },
-      backendQueueProcessor: { dispose: noOp },
-      threadRuntimeState: { dispose: async () => undefined },
-    }
+  it('persists both terminal identities without a browser and never marks an unfinished checklist completed', async () => {
+    const { middleware, emit } = harness()
+    emit('turn/plan/updated', checklist())
+    emit('item/completed', { threadId: 'thread-a', turnId: 'turn-a', item: { id: 'draft-a', type: 'plan', text: 'Final proposed plan' } })
+    emit('turn/completed', { threadId: 'thread-a', turn: { id: 'turn-a', status: 'completed' } })
+    await middleware.disposeGracefully(); middlewares.splice(middlewares.indexOf(middleware), 1)
+    const summaries = (await readPlanSummaryHistory('thread-a'))['thread-a']
+    expect(summaries).toHaveLength(2)
+    expect(summaries.find(row => row.kind === 'checklist')).toMatchObject({ lifecycle: 'incomplete' })
+    expect(summaries.find(row => row.kind === 'proposal')).toMatchObject({ lifecycle: 'completed', itemId: 'draft-a' })
+    const stored = JSON.parse(await readFile(getActivePlanPersistencePath(), 'utf8'))
+    expect(JSON.stringify(stored)).toContain('Final proposed plan')
+    expect(JSON.stringify(stored)).toContain('incomplete')
+  })
 
-    const middleware = createCodexBridgeMiddleware()
-    const server = createServer((req, res) => {
-      void middleware(req, res, () => {
-        res.statusCode = 404
-        res.end()
-      })
-    })
+  it('restores a running plan as unconfirmed after server restart and continues its persisted revision', async () => {
+    const first = harness(); first.emit('turn/plan/updated', checklist())
+    await first.middleware.disposeGracefully(); middlewares.splice(middlewares.indexOf(first.middleware), 1)
+    const second = harness()
+    await vi.waitFor(() => expect(second.middleware.getActivePlanSnapshots()[0]).toMatchObject({ lifecycle: 'unconfirmed', revision: 2, generation: 7 }))
+    second.emit('turn/plan/updated', checklist('completed'))
+    expect(second.middleware.getActivePlanSnapshots()[0]).toMatchObject({ lifecycle: 'live', revision: 3 })
+    second.emit('turn/completed', { threadId: 'thread-a', turn: { id: 'turn-a', status: 'completed' } })
+    expect(second.middleware.getActivePlanSnapshots()[0]).toMatchObject({ lifecycle: 'completed', revision: 4 })
+  })
 
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once('error', reject)
-        server.listen(0, '127.0.0.1', () => {
-          server.off('error', reject)
-          resolve()
-        })
-      })
-      notificationListener!({
-        method: 'turn/plan/updated',
-        generation: 7,
-        params: {
-          threadId: 'thread-a',
-          turnId: 'turn-a',
-          explanation: 'Persist at completion',
-          plan: [{ step: 'Ship', status: 'completed' }],
-        },
-      })
-      notificationListener!({
-        method: 'turn/completed',
-        generation: 7,
-        params: {
-          threadId: 'thread-a',
-          turn: { id: 'turn-a', status: 'completed' },
-        },
-      })
+  it('clears saved plans before a successful delete response and ignores late updates', async () => {
+    const { middleware, emit } = harness(); emit('turn/plan/updated', checklist())
+    const url = await serverFor(middleware)
+    const response = await fetch(url + '/codex-api/rpc', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method: 'thread/delete', params: { threadId: 'thread-a' } }) })
+    expect(response.status).toBe(200)
+    expect(middleware.getActivePlanSnapshots()).toEqual([])
+    emit('turn/plan/updated', { ...checklist(), turnId: 'late-turn' })
+    expect(middleware.getActivePlanSnapshots()).toEqual([])
+    expect(await readPlanSummaryHistory('thread-a')).toEqual({})
+    expect(JSON.parse(await readFile(getActivePlanPersistencePath(), 'utf8')).snapshots).toEqual([])
+  })
 
-      const address = server.address()
-      if (!address || typeof address === 'string') throw new Error('test server did not expose a TCP port')
-      const response = await fetch(`http://127.0.0.1:${address.port}/codex-api/plan-summary-history?threadId=thread-a`)
-      expect(response.status).toBe(200)
-      await expect(response.json()).resolves.toMatchObject({
-        data: {
-          'thread-a': [{
-            id: 'plan-summary:turn-a',
-            turnId: 'turn-a',
-            lifecycle: 'completed',
-            explanation: 'Persist at completion',
-            steps: [{ step: 'Ship', status: 'completed' }],
-          }],
-        },
-      })
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => error ? reject(error) : resolve())
-      })
-      middleware.dispose()
-      if (previousCodexHome === undefined) delete process.env.CODEX_HOME
-      else process.env.CODEX_HOME = previousCodexHome
-      await rm(codexHome, { recursive: true, force: true })
-    }
+  it('keeps terminal notification persistence alive while graceful shutdown waits for a running turn', async () => {
+    const { middleware, emit, appServer } = harness()
+    emit('turn/plan/updated', checklist())
+    let finish!: () => void
+    const idle = new Promise<void>(resolve => { finish = resolve })
+    appServer.disposeWhenIdle = () => idle
+    const closing = middleware.disposeGracefully()
+    await new Promise(resolve => setTimeout(resolve, 10))
+    emit('turn/plan/updated', checklist('completed'))
+    emit('turn/completed', { threadId: 'thread-a', turn: { id: 'turn-a', status: 'completed' } })
+    finish(); await closing; middlewares.splice(middlewares.indexOf(middleware), 1)
+    expect((await readPlanSummaryHistory('thread-a'))['thread-a'][0]).toMatchObject({ lifecycle: 'completed', revision: 3 })
+    const persisted = await readFile(getActivePlanPersistencePath(), 'utf8')
+    expect(persisted).toContain('"lifecycle":"completed"')
+  })
+
+  it('keeps the warning after summary failure even when the active file saves, then clears only after summary recovery', async () => {
+    const originalWrite = summaryHistory.writePlanSummary
+    let fail = true
+    const writes = vi.spyOn(summaryHistory, 'writePlanSummary').mockImplementation(input => fail ? Promise.reject(new Error('fixture summary failure')) : originalWrite(input))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { middleware, emit, frames } = harness()
+    emit('turn/plan/updated', checklist('completed'))
+    emit('turn/completed', { threadId: 'thread-a', turn: { id: 'turn-a', status: 'completed' } })
+    await vi.waitFor(() => expect(middleware.getPlanPersistenceWarning()).toBe(true))
+    await vi.waitFor(async () => expect(JSON.parse(await readFile(getActivePlanPersistencePath(), 'utf8')).snapshots[0]).toMatchObject({ lifecycle: 'completed' }))
+    expect(middleware.getPlanPersistenceWarning()).toBe(true)
+    expect(frames.filter(frame => frame.method === 'codex-ui/plan-persistence-warning').at(-1)?.params).toMatchObject({ active: true })
+    fail = false
+    emit('turn/plan/updated', { ...checklist(), turnId: 'later-turn' })
+    await vi.waitFor(() => expect(middleware.getPlanPersistenceWarning()).toBe(false))
+    expect(writes.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect((await readPlanSummaryHistory('thread-a'))['thread-a'][0]).toMatchObject({ lifecycle: 'completed', turnId: 'turn-a' })
+    expect(frames.filter(frame => frame.method === 'codex-ui/plan-persistence-warning').at(-1)?.params).toEqual({ active: false, message: '' })
+  })
+
+  it('marks a live plan unconfirmed after native runtime loss without inventing completion', () => {
+    const { middleware, emit } = harness(); emit('turn/plan/updated', checklist())
+    emit('codex-ui/runtime-stopped', {})
+    expect(middleware.getActivePlanSnapshots()[0]).toMatchObject({ lifecycle: 'unconfirmed', revision: 2 })
+    emit('codex-ui/runtime-stopped', {})
+    expect(middleware.getActivePlanSnapshots()[0]?.revision).toBe(2)
   })
 })

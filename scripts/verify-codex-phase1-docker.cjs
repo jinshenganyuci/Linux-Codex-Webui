@@ -6,10 +6,14 @@ const { chromium } = require('playwright')
 const root = mkdtempSync(resolve(require('node:os').tmpdir(), 'codexui-phase1-docker-'))
 const output = resolve('output/playwright')
 const image = process.env.PHASE1_DOCKER_IMAGE || 'linux-codex-webui-phase1:20260905'
+const expectedCodexVersion = process.env.CODEX_EXPECTED_VERSION || '0.153.4'
+assert.match(expectedCodexVersion, /^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$/)
 const reportPrefix = process.env.CODEX_ACCEPTANCE_REPORT_PREFIX || 'phase1'
 assert.match(reportPrefix, /^[a-z0-9-]+$/)
 const containers = []
 const reports = []
+const network = `codex-webui-phase1-${process.pid}`
+let networkCreated = false
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 const wait = duration => new Promise(resolve => setTimeout(resolve, duration))
 async function fetchJson(port, path, body) {
@@ -40,10 +44,18 @@ async function start(name, port, config, auth) {
   if (auth !== undefined) writeFileSync(resolve(home, 'auth.json'), auth, { mode: 0o600 })
   const container = `codex-webui-phase1-${process.pid}-${name}`
   containers.push(container)
-  docker('run', '-d', '--name', container, '-p', `127.0.0.1:${port}:4190`, '-v', `${home}:/codex-home`, '-v', `${resolve(__dirname, 'fixtures/codex-phase1-provider.cjs')}:/mock/provider.cjs:ro`, image)
+  docker('run', '-d', '--name', container, '--network', network, '-p', `127.0.0.1:${port}:4190`, '-v', `${home}:/codex-home`, '-v', `${resolve(__dirname, 'fixtures/codex-phase1-provider.cjs')}:/mock/provider.cjs:ro`, image)
   docker('exec', '-d', container, 'node', '/mock/provider.cjs')
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    try { await fetchJson(port, '/codex-api/runtime-info'); return } catch { await wait(500) }
+    let runtime
+    try {
+      runtime = (await fetchJson(port, '/codex-api/runtime-info')).data
+    } catch {
+      await wait(500)
+      continue
+    }
+    assert.equal(runtime.codex.version, expectedCodexVersion, 'The packaged image must run the requested Codex CLI version')
+    return
   }
   throw new Error(`${container} failed readiness`)
 }
@@ -65,6 +77,11 @@ async function checkUi(browser, name, port) {
   mkdirSync(output, { recursive: true })
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] })
   try {
+    // Every submitted turn uses an in-container mock. Keep localhost port
+    // publication working on Docker engines that suppress ports on --internal
+    // networks; no real credentials or provider turn endpoints are used here.
+    docker('network', 'create', network)
+    networkCreated = true
     const baseConfig = 'model = "gpt-6-astra"\nmodel_reasoning_effort = "low"\n'
     for (const [name, port, auth] of [['no-auth', 4191, undefined], ['malformed-auth', 4192, '{invalid-json']]) {
       await start(name, port, baseConfig, auth)
@@ -72,7 +89,7 @@ async function checkUi(browser, name, port) {
       try { await rpc(port, 'config/read', { includeLayers: false }) } catch (error) { configRead = error.message }
       const screenshot = await checkUi(browser, name, port)
       const runtime = (await fetchJson(port, '/codex-api/runtime-info')).data
-      assert.equal(runtime.codex.version, '0.153.4')
+      assert.equal(runtime.codex.version, expectedCodexVersion)
       reports.push({ name, port, configRead, cli: runtime.codex.version, home: runtime.codex.home, screenshot, noLegacyFallback: true })
       console.log(`${name}: passed`)
     }
@@ -93,6 +110,8 @@ async function checkUi(browser, name, port) {
     const screenshots = []
     for (const theme of ['light', 'dark']) {
       const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+      const errors = []
+      page.on('pageerror', error => errors.push(error.message))
       await page.addInitScript(theme => localStorage.setItem('codex-web-local.dark-mode.v1', theme), theme)
       await page.goto(`http://127.0.0.1:4193/#/thread/${threadId}`, { waitUntil: 'domcontentloaded' })
       await page.locator('.conversation-item').filter({ hasText: 'PHASE1_INVALID_AUTH' }).waitFor({ timeout: 30000 })
@@ -100,7 +119,10 @@ async function checkUi(browser, name, port) {
       await page.locator('.conversation-item').filter({ hasText: 'PHASE1_INVALID_AUTH' }).waitFor({ timeout: 30000 })
       assert.equal(await page.locator('.conversation-item').filter({ hasText: 'PHASE1_INVALID_AUTH' }).count(), 1)
       assert.equal(await page.locator('.turn-progress-card').filter({ hasText: 'PHASE1_INVALID_AUTH' }).count(), 0)
+      assert.equal(await page.locator('.conversation-item-overlay').count(), 0, 'A persisted failed turn must not leave a duplicate live overlay after reload')
       await page.waitForTimeout(2300)
+      assert.equal(await page.evaluate(() => document.documentElement.classList.contains('dark')), theme === 'dark')
+      assert.deepEqual(errors, [], 'Invalid-auth rendering and reload must not introduce JavaScript errors')
       const screenshot = resolve(output, `${reportPrefix}-docker-invalid-auth-${theme}.png`)
       await page.screenshot({ path: screenshot })
       screenshots.push(screenshot)
@@ -143,13 +165,17 @@ async function checkUi(browser, name, port) {
     }
 
     writeFileSync(resolve(output, `${reportPrefix}-docker-report.json`), JSON.stringify(reports, null, 2))
+    writeFileSync(resolve(output, `${reportPrefix}-docker-runtime.json`), JSON.stringify({ image, expectedCodexVersion, networkIsolation: 'dedicated Docker bridge; host ports bind to loopback; all submitted turns use container loopback mock providers', legacyFallback: 'No automatic Zen fallback; custom mock provider switch is alpha to beta', passed: true }, null, 2))
     console.log(JSON.stringify(reports, null, 2))
   } catch (error) {
+    writeFileSync(resolve(output, `${reportPrefix}-docker-report.json`), JSON.stringify(reports, null, 2))
+    writeFileSync(resolve(output, `${reportPrefix}-docker-runtime.json`), JSON.stringify({ image, expectedCodexVersion, networkIsolation: 'dedicated Docker bridge with host loopback ports', passed: false, error: error.stack }, null, 2))
     for (const container of containers) console.error(container, docker('logs', '--tail', '30', container))
     throw error
   } finally {
     await browser.close()
     for (const container of containers) docker('rm', '-f', container)
+    if (networkCreated) docker('network', 'rm', network)
     rmSync(root, { recursive: true, force: true })
   }
 })().catch(error => { console.error(error.stack); process.exitCode = 1 })

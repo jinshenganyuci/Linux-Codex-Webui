@@ -26,6 +26,25 @@ function threadReadResponseWithContent(content: ThreadReadResponse['thread']['tu
 }
 
 describe('normalizeThreadMessagesV2', () => {
+  it('marks native plan items as independent proposals even when their text contains checkboxes', () => {
+    const messages = normalizeThreadMessagesV2(threadReadResponseWithContent([
+      { type: 'plan', id: 'proposal-a', text: '- [x] Written suggestion' },
+      { type: 'plan', id: 'proposal-b', text: 'A plain proposal without executable steps' },
+    ]))
+    expect(messages).toHaveLength(2)
+    expect(messages[0]?.plan).toMatchObject({ kind: 'proposal', itemId: 'proposal-a', lifecycle: 'completed', isStreaming: false })
+    expect(messages[1]?.plan).toMatchObject({ kind: 'proposal', itemId: 'proposal-b', steps: [] })
+    expect(messages.map(row => row.turnId)).toEqual(['turn-1', 'turn-1'])
+  })
+
+  it.each(['inProgress', 'failed', 'interrupted'] as const)('uses native turn %s for proposal lifecycle instead of checkbox completion', (status) => {
+    const payload = threadReadResponseWithContent([{ type: 'plan', id: 'draft', text: '- [x] Documented idea' }])
+    payload.thread.turns[0]!.status = status
+    const plan = normalizeThreadMessagesV2(payload)[0]?.plan
+    expect(plan?.lifecycle).toBe(status === 'inProgress' ? 'live' : status)
+    expect(plan?.isStreaming).toBe(status === 'inProgress')
+  })
+
   it('preserves selected skill inputs on the rendered user message', () => {
     const messages = normalizeThreadMessagesV2(threadReadResponseWithContent([{
       type: 'userMessage',

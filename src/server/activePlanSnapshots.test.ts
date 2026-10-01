@@ -6,39 +6,14 @@ import {
 } from './activePlanSnapshots'
 
 describe('ActivePlanSnapshotStore', () => {
-  it('keeps a structured plan current across full and delta updates', () => {
-    let nowMs = Date.parse('2026-08-20T00:00:00.000Z')
-    const store = new ActivePlanSnapshotStore({ now: () => nowMs })
-    store.applyNotification('turn/started', { threadId: 'thread-a', turn: { id: 'turn-a' } }, 1)
-    store.applyNotification('turn/plan/updated', {
-      threadId: 'thread-a',
-      turnId: 'turn-a',
-      explanation: 'Ship safely',
-      plan: [
-        { step: 'Build', status: 'completed' },
-        { step: 'Publish', status: 'in_progress' },
-      ],
-    }, 1)
-    nowMs += 10
-    store.applyNotification('item/plan/delta', {
-      threadId: 'thread-a',
-      turnId: 'turn-a',
-      delta: '\nchecking registry',
-    }, 1)
-
-    expect(store.getSnapshots()).toEqual([expect.objectContaining({
-      threadId: 'thread-a',
-      turnId: 'turn-a',
-      messageId: 'turn-a:plan',
-      explanation: 'Ship safely',
-      steps: [
-        { step: 'Build', status: 'completed' },
-        { step: 'Publish', status: 'inProgress' },
-      ],
-      revision: 2,
-      lifecycle: 'live',
-      text: expect.stringMatching(/Publish\nchecking registry$/u),
-    })])
+  it('keeps checklist and proposal identities independent in the same turn', () => {
+    const store = new ActivePlanSnapshotStore()
+    store.applyNotification('turn/plan/updated', { threadId: 'thread-a', turnId: 'turn-a', explanation: 'Ship safely', plan: [{ step: 'Build', status: 'completed' }, { step: 'Publish', status: 'in_progress' }] }, 1)
+    store.applyNotification('item/plan/delta', { threadId: 'thread-a', turnId: 'turn-a', itemId: 'draft-a', delta: 'Draft proposal' }, 1)
+    const rows = store.getSnapshots()
+    expect(rows).toHaveLength(2)
+    expect(store.getSnapshot('turn-a')).toMatchObject({ kind: 'checklist', messageId: 'turn-a:plan', revision: 1, steps: [{ step: 'Build', status: 'completed' }, { step: 'Publish', status: 'inProgress' }] })
+    expect(rows.find(row => row.kind === 'proposal')).toMatchObject({ itemId: 'draft-a', messageId: 'draft-a', steps: [], text: 'Draft proposal', revision: 1 })
   })
 
   it('retains terminal plans briefly and expires them without affecting another turn', () => {
@@ -134,4 +109,108 @@ describe('ActivePlanSnapshotStore', () => {
     store.applyNotification('other/event', { threadId: 'thread-a', turnId: 'turn-a' })
     expect(store.getSnapshots()).toEqual([])
   })
+})
+
+describe('authoritative plan lifecycle', () => {
+  const update = (status = 'inProgress') => ({ threadId: 'thread', turnId: 'turn', plan: [{ step: 'Do the task', status }] })
+  it('marks a completed turn with unfinished checklist incomplete; duplicated and late notifications cannot revive it', () => {
+    const store = new ActivePlanSnapshotStore()
+    store.applyNotification('turn/plan/updated', update())
+    expect(store.applyNotification('turn/plan/updated', update())).toEqual([])
+    store.applyNotification('turn/completed', { threadId: 'thread', turn: { id: 'turn', status: 'completed' } })
+    const completed = store.getSnapshot('turn')
+    expect(completed).toMatchObject({ lifecycle: 'incomplete', revision: 2 })
+    expect(store.applyNotification('turn/completed', { threadId: 'thread', turn: { id: 'turn', status: 'completed' } })).toEqual([])
+    expect(store.applyNotification('turn/plan/updated', update('completed'))).toEqual([])
+    expect(store.applyNotification('item/plan/delta', { threadId: 'thread', turnId: 'turn', itemId: 'late', delta: 'late' })).toEqual([])
+    expect(store.getSnapshot('turn')).toEqual(completed)
+  })
+  it('completes only fully done checklists and preserves full proposal item content', () => {
+    const store = new ActivePlanSnapshotStore()
+    store.applyNotification('turn/plan/updated', update('completed'))
+    store.applyNotification('item/plan/delta', { threadId: 'thread', turnId: 'turn', itemId: 'item', delta: 'par' })
+    store.applyNotification('item/completed', { threadId: 'thread', turnId: 'turn', item: { id: 'item', type: 'plan', text: 'Full proposed plan' } })
+    expect(store.getSnapshots().find(row => row.kind === 'proposal')).toMatchObject({ text: 'Full proposed plan', lifecycle: 'completed', revision: 2 })
+    store.applyNotification('turn/completed', { threadId: 'thread', turn: { id: 'turn', status: 'completed' } })
+    expect(store.getSnapshot('turn')?.lifecycle).toBe('completed')
+  })
+  it('restores live plans as unconfirmed with monotonic revision and only trusts explicit native state', () => {
+    const original = new ActivePlanSnapshotStore()
+    original.applyNotification('turn/plan/updated', update())
+    const store = new ActivePlanSnapshotStore()
+    store.restore(original.getPersistedSnapshots())
+    expect(store.getSnapshot('turn')).toMatchObject({ lifecycle: 'unconfirmed', revision: 2 })
+    expect(store.reconcileTurn('thread', 'turn', '')).toEqual([])
+    store.reconcileTurn('thread', 'turn', 'inProgress')
+    expect(store.getSnapshot('turn')).toMatchObject({ lifecycle: 'live', revision: 3 })
+    store.reconcileTurn('thread', 'turn', 'completed')
+    expect(store.getSnapshot('turn')).toMatchObject({ lifecycle: 'incomplete', revision: 4 })
+  })
+  it('merges a notification received during disk load without losing persisted revision', () => {
+    const old = new ActivePlanSnapshotStore()
+    old.applyNotification('turn/plan/updated', update())
+    const saved = { ...old.getSnapshot('turn')!, revision: 25 }
+    const store = new ActivePlanSnapshotStore()
+    store.applyNotification('turn/plan/updated', update('completed'), 1)
+    store.restore([saved])
+    expect(store.getSnapshot('turn')).toMatchObject({ lifecycle: 'live', revision: 26, steps: [{ step: 'Do the task', status: 'completed' }] })
+  })
+  it('deduplicates identified delta events without suppressing legitimate repeated words', () => {
+    const store = new ActivePlanSnapshotStore()
+    const delta = { threadId: 'thread', turnId: 'turn', itemId: 'item', delta: 'ha', eventId: 'event-1' }
+    store.applyNotification('item/plan/delta', delta)
+    expect(store.applyNotification('item/plan/delta', delta)).toEqual([])
+    store.applyNotification('item/plan/delta', { ...delta, eventId: 'event-2' })
+    expect(store.getSnapshots()[0]).toMatchObject({ text: 'haha', revision: 2 })
+  })
+  it('does not allow one thread turn identifier to overwrite another and deletes all kinds', () => {
+    const store = new ActivePlanSnapshotStore()
+    store.applyNotification('turn/plan/updated', update())
+    store.applyNotification('turn/plan/updated', { ...update(), threadId: 'other' })
+    store.applyNotification('item/plan/delta', { threadId: 'thread', turnId: 'turn', itemId: 'item', delta: 'proposal' })
+    store.deleteThread('thread')
+    expect(store.getPersistedSnapshots()).toHaveLength(1)
+    expect(store.getSnapshots()[0]?.threadId).toBe('other')
+  })
+})
+
+
+it('retains older active work before newer terminal snapshots when capacity is full', () => {
+  let now = 1000
+  const store = new ActivePlanSnapshotStore({ maxCount: 2, now: () => now++ })
+  for (const turnId of ['active', 'done-one', 'done-two']) {
+    store.applyNotification('turn/plan/updated', { threadId: turnId, turnId, plan: [{ step: 'task', status: 'completed' }] })
+    if (turnId !== 'active') store.applyNotification('turn/completed', { threadId: turnId, turn: { id: turnId, status: 'completed' } })
+  }
+  expect(store.getPersistedSnapshots().map(row => row.turnId)).toContain('active')
+  expect(store.getSnapshot('active')?.lifecycle).toBe('live')
+})
+
+it('merges delta-only notifications received before disk load onto the saved proposal prefix', () => {
+  const original = new ActivePlanSnapshotStore()
+  original.applyNotification('item/plan/delta', { threadId: 'thread', turnId: 'turn', itemId: 'item', delta: 'saved prefix ' })
+  const restored = new ActivePlanSnapshotStore()
+  restored.applyNotification('item/plan/delta', { threadId: 'thread', turnId: 'turn', itemId: 'item', delta: 'new suffix' })
+  restored.restore(original.getPersistedSnapshots())
+  expect(restored.getSnapshot('turn')).toMatchObject({ text: 'saved prefix new suffix', revision: 2 })
+})
+
+it('preserves completion received before disk load and never revives it as unconfirmed', () => {
+  const original = new ActivePlanSnapshotStore()
+  original.applyNotification('turn/plan/updated', { threadId: 'thread', turnId: 'turn', plan: [{ step: 'task', status: 'inProgress' }] })
+  const restored = new ActivePlanSnapshotStore()
+  restored.applyNotification('turn/completed', { threadId: 'thread', turn: { id: 'turn', status: 'failed' } })
+  restored.restore(original.getPersistedSnapshots())
+  expect(restored.getSnapshot('turn')).toMatchObject({ lifecycle: 'failed', revision: 2 })
+})
+
+it('never declares a truncated checklist completed when a dropped step may still be pending', () => {
+  const store = new ActivePlanSnapshotStore()
+  store.applyNotification('turn/plan/updated', { threadId: 'thread', turnId: 'turn', plan: [...Array.from({ length: 64 }, () => ({ step: 'done', status: 'completed' })), { step: 'not done', status: 'pending' }] })
+  store.applyNotification('turn/completed', { threadId: 'thread', turn: { id: 'turn', status: 'completed' } })
+  expect(store.getSnapshot('turn')).toMatchObject({ lifecycle: 'incomplete', truncated: true })
+  const tiny = new ActivePlanSnapshotStore({ maxTextBytes: 256 })
+  tiny.applyNotification('turn/plan/updated', { threadId: 'thread', turnId: 'turn', plan: [{ step: 'x'.repeat(500), status: 'completed' }, { step: 'not done', status: 'pending' }] })
+  tiny.applyNotification('turn/completed', { threadId: 'thread', turn: { id: 'turn', status: 'completed' } })
+  expect(tiny.getSnapshot('turn')).toMatchObject({ lifecycle: 'incomplete', truncated: true })
 })

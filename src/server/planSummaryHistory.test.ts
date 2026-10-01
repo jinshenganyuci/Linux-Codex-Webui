@@ -16,6 +16,9 @@ let previousCodexHome: string | undefined
 
 function summary(threadId: string, turnId: string): UiPlanSummary {
   return {
+    kind: 'checklist',
+    itemId: undefined,
+    explanation: undefined,
     id: `plan-summary:${turnId}`,
     threadId,
     turnId,
@@ -60,6 +63,22 @@ describe('plan summary history persistence', () => {
       'thread-a': [{ turnId: 'turn-a', lifecycle: 'failed', revision: 3 }],
       'thread-b': [{ turnId: 'turn-b' }],
     })
+  })
+
+  it('retains checklist and multiple proposal summaries for the same turn', async () => {
+    const checklist = summary('thread-a', 'turn-a')
+    await writePlanSummary(checklist)
+    for (const itemId of ['draft-a', 'draft-b']) await writePlanSummary({ ...checklist, kind: 'proposal', itemId, messageId: itemId, steps: [], text: `Proposal ${itemId}` })
+    const rows = (await readPlanSummaryHistory('thread-a'))['thread-a']
+    expect(rows).toHaveLength(3)
+    expect(new Set(rows.map(row => row.id)).size).toBe(3)
+    expect(rows.filter(row => row.kind === 'proposal').map(row => row.itemId)).toEqual(['draft-a', 'draft-b'])
+  })
+
+  it('does not replace a newer persisted summary with a late old revision', async () => {
+    await writePlanSummary({ ...summary('thread-a', 'turn-a'), revision: 9 })
+    await writePlanSummary({ ...summary('thread-a', 'turn-a'), revision: 2, lifecycle: 'failed' })
+    expect((await readPlanSummaryHistory('thread-a'))['thread-a'][0]).toMatchObject({ revision: 9, lifecycle: 'completed' })
   })
 
   it('backs up malformed state before the next write', async () => {

@@ -303,6 +303,8 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
             ...streamState,
             replayAvailable,
             activePlans: bridge.getActivePlanSnapshots(),
+            planSnapshotsVersion: 1,
+            planPersistenceWarning: bridge.getPlanPersistenceWarning(),
           },
           atIso: new Date().toISOString(),
         }))

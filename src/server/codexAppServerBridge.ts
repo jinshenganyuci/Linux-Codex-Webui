@@ -2,6 +2,7 @@ import { isServerRequestId, serverRequestIdentity, isBlockingServerRequest } fro
 import { spawn, spawnSync } from 'node:child_process'
 import { RuntimeCatalog, codexVersionFromUserAgent } from './runtimeCatalog.js'
 import { MethodCatalog } from './rpcMethodCatalog.js'
+import { PlanToolRuntimePolicy } from './planToolRuntime.js'
 import { ThreadIndexRecovery } from './threadIndexRecovery.js'
 import { createThreadSearchService } from './threadSearch.js'
 import { isVolatileRealtimeNotification } from '../nativeExtensions.js'
@@ -43,7 +44,9 @@ import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoute
 import { TelegramThreadBridge } from './telegramThreadBridge.js'
 import { ThreadTerminalManager } from './terminalManager.js'
 import { ThreadRuntimeState } from './threadRuntimeState.js'
-import { ActivePlanSnapshotStore } from './activePlanSnapshots.js'
+import { ActivePlanSnapshotStore, activePlanIdentity } from './activePlanSnapshots.js'
+import { createActivePlanPersistence } from './activePlanPersistence.js'
+import { verifyRestoredPlans } from './activePlanRecovery.js'
 import {
   AgentProgressTracker,
   type AgentProgressSnapshot,
@@ -6595,6 +6598,10 @@ export class AppServerProcess {
   private activeConfigSignature = ''
   private readonly runtimeCatalog = new RuntimeCatalog()
   private readonly runtimeNotices = new RuntimeNoticeStore()
+  private readonly planToolRuntime = new PlanToolRuntimePolicy((summary) => {
+    console.warn(`[linux-codex-webui] ${summary}`)
+    this.emitLocalNotification('configWarning', { summary })
+  })
   private runtimeCommand = ''
   private runtimeUserAgent = ''
   private runtimeStartedAt = ''
@@ -6707,6 +6714,7 @@ export class AppServerProcess {
     this.activeConfigSignature = this.getAppServerConfigSignature(config)
     this.runtimeCommand = this.getCodexCommand()
     this.fastThreadListSupportPromise = null
+    this.planToolRuntime.reset()
     this.runtimeUserAgent = ''
     this.runtimeStartedAt = new Date().toISOString()
     this.runtimeHome = process.env.CODEX_HOME || join(homedir(), '.codex')
@@ -6730,6 +6738,7 @@ export class AppServerProcess {
   }
 
   private handleUnexpectedExit(generation: number): void {
+    this.emitNotification({ method: 'codex-ui/runtime-stopped', params: {} }, generation)
     this.lifecycleEpoch++
     this.nativeThreadSettings.clear()
     this.runtimeNotices.clear()
@@ -7536,7 +7545,12 @@ export class AppServerProcess {
     const threadId = method === 'turn/start' || method === 'thread/queue/start' ? this.extractThreadIdFromParams(params) : ''
     const pendingRuntimeTurnId = threadId ? this.threadRuntimeState?.beginTurn(threadId) ?? '' : ''
     try {
-      const result = await this.call(method, rpcParams)
+      const result = method === 'thread/start' || method === 'thread/resume'
+        ? await this.planToolRuntime.call(method, rpcParams, codexVersionFromUserAgent(this.runtimeUserAgent), (nativeMethod, nativeParams) => {
+          if (epoch !== this.lifecycleEpoch || !this.transport.running) throw new Error('Codex runtime changed during request initialization')
+          return this.call(nativeMethod, nativeParams)
+        })
+        : await this.call(method, rpcParams)
       this.threadRuntimeState?.observeRpcResult(method, params, result, pendingRuntimeTurnId)
       if (method === 'thread/start' || method === 'thread/resume') {
         const row = asRecord(result)
@@ -7633,6 +7647,7 @@ export class AppServerProcess {
         activeThreadIds: [...this.activeTurnThreadIds],
         pendingRequestCount: this.pendingServerRequests.size,
         catalogStatus: this.runtimeCatalog.status,
+        planToolCompatibilityNotice: this.planToolRuntime.compatibilityNotice,
       },
     }
   }
@@ -7651,6 +7666,7 @@ export class AppServerProcess {
     this.fastThreadListSupportPromise = null
     if (!this.transport.running) return
 
+    this.emitNotification({ method: 'codex-ui/runtime-stopped', params: {} })
     this.nativeThreadSettings.clear()
     const generation = this.transport.stop()
     this.initialized = false
@@ -8176,6 +8192,7 @@ type CodexBridgeMiddleware = ((req: IncomingMessage, res: ServerResponse, next: 
   subscribeNotifications: (listener: (value: BridgeNotification) => void, cursor?: { streamId?: string; sequence?: number }) => () => void
   getNotificationStreamState: () => { streamId: string; latestSequence: number; oldestSequence: number }
   getActivePlanSnapshots: () => ActivePlanSnapshot[]
+  getPlanPersistenceWarning: () => boolean
 }
 
 type SharedBridgeState = {
@@ -8228,7 +8245,7 @@ function getSharedBridgeState(): SharedBridgeState {
   return created
 }
 
-export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: boolean } = {}): CodexBridgeMiddleware {
+export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: boolean; planPersistence?: boolean } = {}): CodexBridgeMiddleware {
   const { appServer, terminalManager, methodCatalog, telegramBridge, backendQueueProcessor, threadRuntimeState } = getSharedBridgeState()
   const extensionInfo = createExtensionInfoReader((method, params) => appServer.rpc(method, params), () => appServer.getRuntimeInfo())
   const runtimeDiagnostics = createRuntimeDiagnosticsReader({
@@ -8240,17 +8257,45 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
   realtimeLeaseTimer.unref()
   const threadTitleGenerator = new ThreadTitleGenerator()
   const activePlanSnapshots = new ActivePlanSnapshotStore()
+  let planPersistenceWarning = false
+  let activePlanPersistenceFailed = false
+  const failedPlanSummaryIdentities = new Set<string>()
+  const planSummaryRetryCounts = new Map<string, number>()
+  const refreshPlanPersistenceWarning = () => {
+    const active = activePlanPersistenceFailed || failedPlanSummaryIdentities.size > 0
+    if (planPersistenceWarning === active) return
+    planPersistenceWarning = active
+    publishNotification({ method: 'codex-ui/plan-persistence-warning', params: { active, message: active ? '计划进度暂时无法保存；请保持页面打开，稍后重试。' : '' } })
+  }
+  const planPersistence = createActivePlanPersistence({
+    onError: error => {
+      console.warn('[active-plans]', getErrorMessage(error, 'Persistence failed'))
+      activePlanPersistenceFailed = true
+      refreshPlanPersistenceWarning()
+    },
+    onSaved: () => {
+      activePlanPersistenceFailed = false
+      refreshPlanPersistenceWarning()
+    },
+  })
+  const plansPersistenceEnabled = options.planPersistence ?? process.env.NODE_ENV !== 'test'
+  let plansLoaded = false
+  let plansDisposed = false
+  let planRecoveryTimer: ReturnType<typeof setTimeout> | null = null
+  const deletedPlanThreadIds = new Set<string>()
   const scheduledPlanSummaryRevisionByTurnId = new Map<string, number>()
+  const planSummaryWrites = new Set<Promise<unknown>>()
   const notificationStreamId = randomUUID()
   let notificationSequence = 0
   const notificationReplayBuffer: BridgeNotification[] = []
   const notificationSubscribers = new Set<(value: BridgeNotification) => void>()
   const scheduleTerminalPlanPersistence = (snapshot: ActivePlanSnapshot | null) => {
-    if (!snapshot || snapshot.lifecycle === 'live') return
-    const previousRevision = scheduledPlanSummaryRevisionByTurnId.get(snapshot.turnId) ?? -1
+    if (!plansPersistenceEnabled || !snapshot || snapshot.lifecycle === 'live' || snapshot.lifecycle === 'unconfirmed') return
+    const identity = activePlanIdentity(snapshot)
+    const previousRevision = scheduledPlanSummaryRevisionByTurnId.get(identity) ?? -1
     if (previousRevision >= snapshot.revision) return
-    scheduledPlanSummaryRevisionByTurnId.delete(snapshot.turnId)
-    scheduledPlanSummaryRevisionByTurnId.set(snapshot.turnId, snapshot.revision)
+    scheduledPlanSummaryRevisionByTurnId.delete(identity)
+    scheduledPlanSummaryRevisionByTurnId.set(identity, snapshot.revision)
     while (scheduledPlanSummaryRevisionByTurnId.size > 2_048) {
       const oldestTurnId = scheduledPlanSummaryRevisionByTurnId.keys().next().value
       if (typeof oldestTurnId !== 'string') break
@@ -8258,12 +8303,25 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
     }
     const summary = planSummaryFromSnapshot(snapshot)
     if (!summary) return
-    void writePlanSummary(summary).catch((error) => {
-      if (scheduledPlanSummaryRevisionByTurnId.get(snapshot.turnId) === snapshot.revision) {
-        scheduledPlanSummaryRevisionByTurnId.delete(snapshot.turnId)
+    const write = writePlanSummary(summary).then(() => {
+      failedPlanSummaryIdentities.delete(identity)
+      planSummaryRetryCounts.delete(identity)
+      refreshPlanPersistenceWarning()
+    }).catch((error) => {
+      if (deletedPlanThreadIds.has(snapshot.threadId)) return
+      failedPlanSummaryIdentities.add(identity)
+      while (failedPlanSummaryIdentities.size > 2048) {
+        const oldest = failedPlanSummaryIdentities.values().next().value!
+        failedPlanSummaryIdentities.delete(oldest)
+        planSummaryRetryCounts.delete(oldest)
+      }
+      refreshPlanPersistenceWarning()
+      if (scheduledPlanSummaryRevisionByTurnId.get(identity) === snapshot.revision) {
+        scheduledPlanSummaryRevisionByTurnId.delete(identity)
       }
       console.warn('[plan-summary-history] Failed to persist a terminal plan:', getErrorMessage(error, 'Unknown error'))
-    })
+    }).finally(() => planSummaryWrites.delete(write))
+    planSummaryWrites.add(write)
   }
   const threadSearch = createThreadSearchService({
     rpc: (method, params) => appServer.rpc(method, params),
@@ -8275,27 +8333,10 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
     }
     realtimeSessions.observe(notification.method, notification.params, notification.generation)
     const atIso = new Date().toISOString()
-    activePlanSnapshots.applyNotification(
-      notification.method,
-      notification.params,
-      notification.generation ?? 0,
-      atIso,
-    )
-    if (notification.method === 'turn/completed') {
-      const params = asRecord(notification.params)
-      const turnId = params ? readStreamTurnId(params) : ''
-      if (turnId) scheduleTerminalPlanPersistence(activePlanSnapshots.getSnapshot(turnId))
-    } else if (notification.method === 'turn/started') {
-      const threadId = readNonEmptyString(asRecord(notification.params)?.threadId)
-        || readNonEmptyString(asRecord(asRecord(notification.params)?.turn)?.threadId)
-      if (threadId) {
-        for (const snapshot of activePlanSnapshots.getSnapshots()) {
-          if (snapshot.threadId === threadId && snapshot.lifecycle !== 'live') {
-            scheduleTerminalPlanPersistence(snapshot)
-          }
-        }
-      }
-    }
+    const planThreadId = extractThreadIdFromNotificationParams(notification.params)
+    const changedPlans = deletedPlanThreadIds.has(planThreadId) ? [] : activePlanSnapshots.applyNotification(
+      notification.method, notification.params, notification.generation ?? 0, atIso,
+    ).filter(snapshot => !deletedPlanThreadIds.has(snapshot.threadId))
     const frame: BridgeNotification = {
       ...notification,
       atIso,
@@ -8307,11 +8348,89 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
       notificationReplayBuffer.splice(0, notificationReplayBuffer.length - NOTIFICATION_REPLAY_BUFFER_LIMIT)
     }
     for (const listener of notificationSubscribers) listener(frame)
+    if (changedPlans.length) publishPlanChanges(changedPlans)
+  }
+  const publishPlanChanges = (snapshots: ActivePlanSnapshot[]) => {
+    for (const snapshot of snapshots) {
+      if (deletedPlanThreadIds.has(snapshot.threadId)) continue
+      scheduleTerminalPlanPersistence(snapshot)
+      publishNotification({ method: 'codex-ui/plan-updated', params: { snapshot }, generation: snapshot.generation })
+    }
+    // Retry only on a later plan update, at most two retries per failed identity
+    // and four jobs per update. No timer or unbounded failure loop is created.
+    let retryCount = 0
+    for (const snapshot of failedPlanSummaryIdentities.size ? activePlanSnapshots.getPersistedSnapshots() : []) {
+      const identity = activePlanIdentity(snapshot)
+      if (retryCount >= 4) break
+      if (!failedPlanSummaryIdentities.has(identity) || deletedPlanThreadIds.has(snapshot.threadId)) continue
+      if ((scheduledPlanSummaryRevisionByTurnId.get(identity) ?? -1) >= snapshot.revision) continue
+      const attempts = planSummaryRetryCounts.get(identity) ?? 0
+      if (attempts >= 2) continue
+      planSummaryRetryCounts.set(identity, attempts + 1)
+      scheduleTerminalPlanPersistence(snapshot)
+      retryCount++
+    }
+    if (plansLoaded && plansPersistenceEnabled) planPersistence.schedule(activePlanSnapshots.getPersistedSnapshots(), snapshots.some(snapshot => snapshot.lifecycle !== 'live' && snapshot.lifecycle !== 'unconfirmed'))
+  }
+  const planRestorePromise = (plansPersistenceEnabled ? planPersistence.load() : Promise.resolve([])).then(saved => {
+    const restored = activePlanSnapshots.restore(saved.filter(snapshot => !deletedPlanThreadIds.has(snapshot.threadId)))
+    plansLoaded = true
+    publishPlanChanges(restored)
+    if (plansPersistenceEnabled) planPersistence.schedule(activePlanSnapshots.getPersistedSnapshots(), true)
+    if (plansDisposed) return
+    const schedulePlanVerification = (remainingAttempts: number) => {
+      if (plansDisposed) return
+      planRecoveryTimer = setTimeout(() => {
+        planRecoveryTimer = null
+        void verifyRestoredPlans({
+          snapshots: activePlanSnapshots.getSnapshots(),
+          rpc: (method, params) => appServer.rpc(method, params),
+          reconcile: (threadId, turnId, status) => {
+            if (!plansDisposed && !deletedPlanThreadIds.has(threadId)) publishPlanChanges(activePlanSnapshots.reconcileTurn(threadId, turnId, status))
+          },
+          isDisposed: () => plansDisposed,
+          isBusy: () => typeof appServer.hasPendingRpc === 'function' && appServer.hasPendingRpc(),
+        }).then(result => {
+          if (result === 'deferred' && remainingAttempts > 1) schedulePlanVerification(remainingAttempts - 1)
+        })
+      }, 1500)
+      planRecoveryTimer.unref()
+    }
+    schedulePlanVerification(3)
+  }).catch(error => {
+    plansLoaded = true
+    activePlanPersistenceFailed = true
+    console.warn('[active-plans] Recovery failed:', getErrorMessage(error, 'Unknown error'))
+    refreshPlanPersistenceWarning()
+  })
+  const deleteActivePlans = async (threadId: string) => {
+    deletedPlanThreadIds.add(threadId)
+    activePlanSnapshots.deleteThread(threadId)
+    for (const identity of failedPlanSummaryIdentities) {
+      if (JSON.parse(identity)[0] !== threadId) continue
+      failedPlanSummaryIdentities.delete(identity)
+      planSummaryRetryCounts.delete(identity)
+    }
+    refreshPlanPersistenceWarning()
+    await planRestorePromise
+    if (plansPersistenceEnabled) await planPersistence.removeThread(threadId)
+  }
+  const disposePlans = async () => {
+    plansDisposed = true
+    if (planRecoveryTimer) clearTimeout(planRecoveryTimer)
+    await planRestorePromise
+    await Promise.allSettled([...planSummaryWrites])
+    if (plansPersistenceEnabled) await planPersistence.dispose()
   }
   const unsubscribeAppServerNotifications = appServer.onNotification(publishNotification)
   const threadDeletion = createThreadDeletion({
-    remove: threadId => appServer.rpc('thread/delete', { threadId }),
-    cleanups: [deleteRequestUserInputHistory, deletePlanSummaryHistory, deleteThreadCollaborationPreference, deleteThreadModelPreference],
+    remove: async threadId => {
+      const result = await appServer.rpc('thread/delete', { threadId })
+      await deleteActivePlans(threadId)
+      if (plansPersistenceEnabled) await deletePlanSummaryHistory(threadId)
+      return result
+    },
+    cleanups: [deleteRequestUserInputHistory, deleteThreadCollaborationPreference, deleteThreadModelPreference],
     notify: threadId => publishNotification({ method: 'codex-ui/thread-deleted', params: { threadId } }),
     onError: (threadId, error) => console.warn('[thread-delete-cleanup]', threadId, getErrorMessage(error, 'Cleanup failed')),
   })
@@ -10599,6 +10718,8 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
           ...streamState,
           replayAvailable,
           activePlans: middleware.getActivePlanSnapshots(),
+          planSnapshotsVersion: 1,
+          planPersistenceWarning,
         })}\n\n`)
         const keepAlive = setInterval(() => {
           res.write(': ping\n\n')
@@ -10635,10 +10756,12 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
     telegramBridge.stop()
     terminalManager.dispose()
     backendQueueProcessor.dispose()
+    appServer.dispose()
+    publishPlanChanges(activePlanSnapshots.markUnconfirmed())
     unsubscribeAppServerNotifications()
     unsubscribeTerminalNotifications()
     notificationSubscribers.clear()
-    appServer.dispose()
+    void disposePlans()
   }
   middleware.disposeGracefully = async () => {
     threadDeletion.dispose()
@@ -10651,11 +10774,15 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
     threadTitleGenerator.dispose()
     telegramBridge.stop()
     backendQueueProcessor.dispose()
+    terminalManager.dispose()
+    // Keep notifications and persistence alive until an active turn finishes.
+    // Unsubscribing first loses the final checklist update/completion on shutdown.
+    await appServer.disposeWhenIdle()
+    publishPlanChanges(activePlanSnapshots.markUnconfirmed())
     unsubscribeAppServerNotifications()
     unsubscribeTerminalNotifications()
     notificationSubscribers.clear()
-    terminalManager.dispose()
-    await appServer.disposeWhenIdle()
+    await disposePlans()
   }
   middleware.subscribeNotifications = (
     listener: (value: BridgeNotification) => void,
@@ -10679,6 +10806,7 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
     oldestSequence: notificationReplayBuffer[0]?.sequence ?? notificationSequence,
   })
   middleware.getActivePlanSnapshots = () => activePlanSnapshots.getSnapshots()
+  middleware.getPlanPersistenceWarning = () => planPersistenceWarning
 
   return middleware
 }
