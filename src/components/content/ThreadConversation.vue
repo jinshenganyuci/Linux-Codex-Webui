@@ -1365,7 +1365,7 @@ function planLifecycleBadge(message: UiMessage): string {
   }
   if (lifecycle === 'completed') return readPlanKind(message) === 'proposal' ? t('Plan ready') : t('Completed')
   if (lifecycle === 'failed') return t('Failed')
-  if (lifecycle === 'interrupted') return t('Stopped by user')
+  if (lifecycle === 'interrupted') return t('Interrupted')
   if (lifecycle === 'incomplete') return t('Turn ended; remaining steps unconfirmed')
   return t('Status unconfirmed')
 }

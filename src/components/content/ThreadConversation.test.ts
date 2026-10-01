@@ -304,8 +304,24 @@ describe('ThreadConversation plan lifecycle presentation', () => {
     const html = await renderConversation([incomplete])
     expect(html).toContain('data-lifecycle="incomplete"')
     expect(html).toContain('本轮结束，剩余步骤未确认')
-    expect(await renderConversation([planMessage('stop', 'interrupted')])).toContain('用户已停止')
+    expect(await renderConversation([planMessage('stop', 'interrupted')])).toContain('已中断')
     expect(await renderConversation([planMessage('failure', 'failed')])).toContain('失败')
+  })
+
+  it('keeps an interrupted plan neutral when the turn includes a runtime error', async () => {
+    const html = await renderConversation([
+      planMessage('runtime-interruption', 'interrupted'),
+      {
+        id: 'runtime-interruption-error', role: 'system', messageType: 'turnError',
+        turnId: 'runtime-interruption', text: 'Context window exceeded before interruption',
+      },
+    ])
+    expect(html).toContain('data-lifecycle="interrupted"')
+    expect(html).toContain('已中断')
+    expect(html).toContain('Context window exceeded before interruption')
+    expect(html).not.toContain('用户已停止')
+    expect(html).not.toContain('Stopped by user')
+    expect(html).not.toContain('data-lifecycle="failed"')
   })
 
   it('never treats a truncated fully checked subset as the whole plan being complete', async () => {
