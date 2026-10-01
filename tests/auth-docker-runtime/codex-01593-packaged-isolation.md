@@ -90,3 +90,30 @@ PROFILE_BASE_URL=http://127.0.0.1:13511 PROFILE_ROUTE='#/thread/01a0f5fb-15de-7a
 - 回滚时先等待测试回合、审批与队列清空，停测试服务，保留本轮测试 home，再移除上述单个新增覆盖、执行 daemon-reload 并启动 13511，核对回到原测试 release/home。不要复制新聊天到旧数据库，不要移除其他覆盖，不要操作正式服务。
 - 测试保留两个专属 TestChat 和 proof/report 供用户检查；临时浏览器配置关闭，Docker 容器清理，不残留新增 WebUI 监听。不得清空用户 localStorage 或删除真实聊天。
 - 正式 PID、原生子进程、保护文件哈希与原有 1563 个会话路径另记 `output/codex-01593/preservation.json`，本轮不以测试成功代替正式升级完成。
+
+## 后续正式升级：已授权，等待本回合结束
+
+以下记录是用户随后要求“升级 13510”的独立发布操作，不改变上文测试阶段的历史结论。
+
+### 准备与操作
+
+1. 重新核对正式服务和预览：正式为 `47e2280` / CLI 0.154.0，预览为 `51df375` / CLI 0.159.3；正式 home `/root/.codex`。本次对话在正式 app-server 活动列表内，不在当前回合直接重启。
+2. 将预览已验收的 `dist`、`dist-cli` 与包元数据复制到 `/root/.local/share/linux-codex-webui/releases/codex-01593-13510-20261001`，保留正式工作目录与密码来源，不复制测试 home。新入口的公共 CJS `help` 检查通过，日志位于部署目录 `cli-help.log`。
+3. 执行 `node scripts/deploy-codex-01593-production.cjs --self-test` 与 `--prepare`。后者比较验收产物、真实 runtime-info、全局 CLI 可执行版本、有效数据库目录及稳定 unit 配置；不停止服务。
+4. 独立作业 `codex-webui-deploy-codex-01593-20261001.service` 使用共享正式部署锁，运行私有部署目录中的 `--deploy`。不得在正式服务 cgroup 中直接运行该命令。连续三次空闲才进入切换；旧原生子进程未退出时持续等待，不发送第二个强停信号、不启动并行原生版本。
+5. 后台切换后自动读取 `model/list`、核对历史、会话前缀、保护配置和未过期登录，并在 `http://127.0.0.2:13510` 验证真实密码登录、1440×900 明色首页和暗色旧聊天。浏览器拦截非授权写操作，允许仅含会话标识/分页参数的 resume；不发模型回合。
+
+### 预期与回执
+
+- 主回执：`/root/.local/share/linux-codex-webui/deployments/13510-codex-01593-20261001/status.json`。阶段应从 `waiting-for-idle` 进入切换和验证，最后为 `complete`。
+- 只有 `complete` 才表示 WebUI `51df375`、实际 CLI 0.159.3、正式 home、全部静态资源和数据保留均已确认。`browser/report.json` 记录正式测试 URL、视口、明暗截图绝对路径及请求/时延统计。
+- 本轮当前只确认作业持续等待本次活动回合；正式端实际升级与浏览器结果仍未发生。启动部署作业不等于升级完成。
+- 初次启动因 daemon-reload 清空运行字段触发保护而退出；修正仅忽略这些临时字段，重新预检后进入等待。原始拒绝证据保留在 `preflight-daemon-reload-rejection.json`，没有修改正式进程。
+
+### 数据副本、失败与清理
+
+- 停稳后使用 SQLite backup API 为 `home/*.sqlite` 中非日志库创建私有副本，执行 quick_check 和 SHA-256；不硬链接，不仅复制可能存在 WAL 的主文件，不读取/输出凭据。恢复中断作业时重新验证已完成副本的哈希。
+- 合成 0.154 → 0.159.3 → 0.154 试验仅证明既有两类聊天可读；已观测到 `thread_artifacts` → `thread_attachments` 及记忆表迁移。证据为工作树 `output/codex-01593/upgrade-downgrade-probe.json`，不是正式库迁移验收。
+- 新覆盖可能安装前即持久化单调标记，防止主机重启后误以为新版从未运行。标记之后失败会写 `failed-preserving-upgraded-data` 和真实服务状态，不自动恢复旧 SQLite、旧 home 或降级运行时。需要检查失败原因和升级期间新增数据后决定恢复方案。
+- 只有新版尚未可能启动的前置失败可恢复原入口；此路径同样等待旧原生进程完全退出。计划文件只保留副本，不回灌覆盖。
+- 作业完成或失败后自动禁用，保留发布入口、私有副本、部署日志和浏览器证据供复查；不清理真实聊天、不重启 13511、不改动其他服务。
