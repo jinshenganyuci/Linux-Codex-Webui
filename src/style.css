@@ -4577,3 +4577,7 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
 .plan-card[data-compact-completed='true'] .plan-card-badge {
   white-space: nowrap;
 }
+
+:root.dark .thread-pending-request-inbox .thread-pending-request-submission-error {
+  color: #fda4af;
+}

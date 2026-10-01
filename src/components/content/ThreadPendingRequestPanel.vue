@@ -1173,10 +1173,6 @@ function onRejectUnknownRequest(request: UiServerRequest): void {
   line-height: 1.5;
 }
 
-:global(:root.dark) .thread-pending-request-submission-error {
-  color: #fda4af;
-}
-
 .thread-pending-request-question-options,
 .thread-pending-request-input-wrap {
   @apply mt-3 flex flex-col gap-1.5;

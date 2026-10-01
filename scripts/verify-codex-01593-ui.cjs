@@ -198,18 +198,22 @@ async function assertNoHorizontalOverflow(page) {
   return size
 }
 
-async function buttonContrast(button) {
-  const colors = await button.evaluate(element => ({ text: element.textContent.trim(), foreground: getComputedStyle(element).color, background: getComputedStyle(element).backgroundColor }))
+async function textContrast(locator, label) {
+  const colors = await locator.evaluate(element => {
+    let surface = element
+    while (surface.parentElement && ['rgba(0, 0, 0, 0)', 'transparent'].includes(getComputedStyle(surface).backgroundColor)) surface = surface.parentElement
+    return { text: element.textContent.trim(), foreground: getComputedStyle(element).color, background: getComputedStyle(surface).backgroundColor }
+  })
   const luminance = color => {
     const rgb = color.match(/[\d.]+/g)?.slice(0, 3).map(Number)
-    assert(rgb?.length === 3, 'Button colors must be resolved RGB values')
+    assert(rgb?.length === 3, `${label} colors must be resolved RGB values`)
     const linear = rgb.map(value => { const srgb = value / 255; return srgb <= 0.04045 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4 })
     return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722
   }
   const first = luminance(colors.foreground), second = luminance(colors.background)
   const ratio = (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
-  assert(colors.text.length > 0, 'Submission button must have visible label text')
-  assert(ratio >= 4.5, `Submission button contrast must be at least 4.5:1; got ${ratio.toFixed(2)}:1`)
+  assert(colors.text.length > 0, `${label} must have visible text`)
+  assert(ratio >= 4.5, `${label} contrast must be at least 4.5:1; got ${ratio.toFixed(2)}:1`)
   return { ...colors, contrastRatio: ratio }
 }
 
@@ -300,10 +304,10 @@ async function verifyScenario(browser, theme, viewport) {
     scenario.assertions.push('blocking-first and explicit selection', 'optional task-continues state', 'per-question draft restoration', 'no automatic submission')
     await capture(page, scenario, 'questions', inbox)
     const submitButton = inbox.locator('.thread-pending-request-primary')
-    scenario.submitButtonColors = { normal: await buttonContrast(submitButton) }
+    scenario.submitButtonColors = { normal: await textContrast(submitButton, 'Submission button') }
     await submitButton.hover()
     await pause(250)
-    scenario.submitButtonColors.hover = await buttonContrast(submitButton)
+    scenario.submitButtonColors.hover = await textContrast(submitButton, 'Submission button on hover')
     await capture(page, scenario, 'questions-hover', inbox)
     await page.mouse.move(0, 0)
     scenario.assertions.push('submission button normal and hover contrast at least 4.5:1')
@@ -333,7 +337,19 @@ async function verifyScenario(browser, theme, viewport) {
     await gotoThread(THREAD_A, true)
     await select(REQUEST_IDS.secret)
     await waitValue(input(), '')
-    scenario.assertions.push('secret field uses password input and is absent from localStorage/reload')
+    const legacySecret = state.pending.find(row => row.id === REQUEST_IDS.secret).params.questions[0]
+    delete legacySecret.isSecret
+    legacySecret.secret = true
+    await gotoThread(THREAD_A, true)
+    await select(REQUEST_IDS.secret)
+    assert.equal(await input().getAttribute('type'), 'password', 'Legacy secret=true must stay private')
+    await input().fill('FIXTURE_LEGACY_SECRET_MUST_NEVER_PERSIST_01593')
+    await pause(350)
+    assert.equal(await page.evaluate(() => Object.values(localStorage).some(value => value.includes('FIXTURE_LEGACY_SECRET_MUST_NEVER_PERSIST_01593'))), false)
+    await gotoThread(THREAD_A, true)
+    await select(REQUEST_IDS.secret)
+    await waitValue(input(), '')
+    scenario.assertions.push('both isSecret and legacy secret fields use password input and are absent from localStorage/reload')
 
     await select(REQUEST_IDS.optional)
     await waitValue(input(), 'OPTIONAL_DRAFT_01593')
@@ -348,9 +364,11 @@ async function verifyScenario(browser, theme, viewport) {
     await pause(150)
     const feedbackVisibleFraction = await visibleFraction(submissionError)
     assert(feedbackVisibleFraction > 0.95, `Submission failure feedback is clipped by its scroll container (${Math.round(feedbackVisibleFraction * 100)}% visible)`)
+    const contrast = await textContrast(submissionError, 'Submission failure text')
     scenario.submissionFailureFeedback = {
       attached: await failureFeedback.count() > 0, visible: await failureFeedback.isVisible(),
       localFeedbackVisible: await submissionError.isVisible(), localFeedbackText: await submissionError.innerText(), feedbackVisibleFraction,
+      contrast,
       feedbackText: await page.locator('[role="alert"], .visible-error-with-feedback, .sidebar-history-status, .pending-input-submit-error').allTextContents(),
     }
     await waitValue(input(), 'OPTIONAL_DRAFT_01593')
@@ -479,4 +497,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(error => { console.error(error.stack); process.exitCode = 1 })
-module.exports = { BASE, sampleRealRuntime, installFixtures, verifyScenario }
+module.exports = { BASE, sampleRealRuntime, installFixtures, verifyScenario, textContrast, visibleFraction }
