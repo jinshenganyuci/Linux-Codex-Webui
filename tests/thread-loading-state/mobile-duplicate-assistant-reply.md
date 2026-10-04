@@ -93,3 +93,5 @@ CODEX_01593_DOCKER_IMAGE=linux-codex-webui-mobile-duplicate:local node scripts/v
 - 报告和截图绝对根目录：`/root/.local/share/linux-codex-webui/worktrees/mobile-duplicate-reply-20261004/output/playwright/mobile-duplicate-reply/production/`；报告 `production-report.json`，暗色手机图 `production-missing-turn-start-completed-live-dark-375.png` 已目视确认单条、正确主题及无横向溢出。
 - 最终回执 `/root/.local/share/linux-codex-webui/deployments/13510-mobile-duplicate-20261004/status.json` 为 `complete`，`restartPerformed=false`。失败回滚只原子恢复保存的旧 index，保留两版依赖；后续人工回滚应先检查是否存在更新发布，避免覆盖更晚入口。不恢复或覆盖聊天数据库。
 - 本次只是发布脚本/验证工具新增，无应用热路径变化；实际静态切换约一秒内完成，资源核验有界、顺序执行一次。正式端不发送额外模型回合；功能性能沿用上文相同构建的请求数及 profiler 证据。
+
+- 正式夹具与 13511 的请求量不能作等量断言：常规场景限额读取多一次，768 两组各多 20 次摘要读取，重连案一致；两实例历史与侧栏条件不同，未将这项差异归因于本修复；详细计数见 `production-verification.json`。相同 13511 上的修复前后对照仍为每个方法增量 0。
