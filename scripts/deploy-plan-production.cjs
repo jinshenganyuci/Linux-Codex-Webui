@@ -468,8 +468,13 @@ async function deploy() {
   await save('preflight.json', snapshot)
   await switchAndVerify(snapshot, 'switch')
 }
-async function main() {
-  if (process.argv.includes('--self-test')) {
+function parseDeploymentMode(args) {
+  if (args.length === 0 || args.length === 1 && ['--help', '-h'].includes(args[0])) return 'help'
+  assert(args.length === 1 && ['--prepare', '--deploy', '--self-test'].includes(args[0]), 'Choose exactly one of --prepare, --deploy, --self-test, or --help')
+  return args[0].slice(2)
+}
+async function main(mode) {
+  if (mode === 'self-test') {
     const clean = { busy: false, activeThreadIds: [], pendingCount: 0, queuedCount: 0 }
     assert(idle(clean))
     for (const patch of [{ busy: true }, { activeThreadIds: ['active'] }, { pendingCount: 1 }, { queuedCount: 1 }]) assert(!idle({ ...clean, ...patch }))
@@ -495,8 +500,25 @@ async function main() {
     console.log('Idle, interrupted deployment and immutable rollback-copy guards passed; no API requests or service changes')
     return
   }
-  if (process.argv.includes('--prepare')) return prepare()
-  assert(process.argv.includes('--deploy'), 'Choose --prepare or --deploy explicitly')
+  if (mode === 'prepare') return prepare()
+  assert.equal(mode, 'deploy')
   try { await deploy() } finally { await run('/usr/bin/systemctl', ['disable', workerUnit]).catch(() => {}) }
 }
-main().catch(async error => { await record('failed', { error: error.message }); process.exitCode = 1 })
+async function runCli() {
+  const usage = 'Usage: node scripts/deploy-plan-production.cjs [--prepare | --deploy | --self-test | --help]'
+  let mode
+  // Usage errors are not deployment failures and must not write a receipt.
+  try { mode = parseDeploymentMode(process.argv.slice(2)) } catch (error) {
+    console.error(error.message)
+    console.error(usage)
+    process.exitCode = 1
+    return
+  }
+  if (mode === 'help') { console.log(usage); return }
+  try { await main(mode) } catch (error) {
+    process.exitCode = 1
+    if (mode === 'self-test') { console.error(error.message); return }
+    await record('failed', { error: error.message })
+  }
+}
+runCli()

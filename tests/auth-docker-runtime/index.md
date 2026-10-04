@@ -11,6 +11,7 @@ Return to the [manual test index](../../tests.md).
 | [GitHub dev 汇总发布与 13510 升级](dev-release-13510-20260907.md) |
 | [首批升级的打包隔离与错误持久化](codex-01534-packaged-isolation.md) |
 | [Codex 0.159.3 首批兼容与界面升级验收](codex-01593-packaged-isolation.md) |
+| [正式部署脚本的只读入口与失败退出码](production-deployment-entry-safety.md) |
 | [Feature: CLI no longer requires codex login on startup](cli-no-longer-requires-codex-login-on-startup.md) |
 | [Raw auth/provider error messages](raw-auth-provider-error-messages.md) |
 | [ChatGPT auth tokens refresh for external auth](chatgpt-auth-tokens-refresh-for-external-auth.md) |

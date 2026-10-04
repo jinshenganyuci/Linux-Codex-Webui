@@ -486,6 +486,7 @@ async function switchAndVerify(snapshot, mode) {
     await verify(snapshot)
   } catch (error) {
     if (snapshot.mayHaveStartedTarget || await exists(dropIn) && await fs.readFile(dropIn, 'utf8') === targetDropIn) {
+      process.exitCode = 1
       await record('failed-preserving-upgraded-data', { error: error.message, databaseBackup: snapshot.databaseBackup, service: await serviceState(), automaticDatabaseRestore: false })
       return
     }
@@ -552,8 +553,13 @@ async function deploy() {
   await save('preflight.json', snapshot)
   await switchAndVerify(snapshot, 'switch')
 }
-async function main() {
-  if (process.argv.includes('--self-test')) {
+function parseDeploymentMode(args) {
+  if (args.length === 0 || args.length === 1 && ['--help', '-h'].includes(args[0])) return 'help'
+  assert(args.length === 1 && ['--prepare', '--deploy', '--self-test'].includes(args[0]), 'Choose exactly one of --prepare, --deploy, --self-test, or --help')
+  return args[0].slice(2)
+}
+async function main(mode) {
+  if (mode === 'self-test') {
     const settingsA = 'ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node old.mjs ; ignore_errors=no ; start_time=[today] ; pid=666 ; code=(null) }\nEnvironment=CODEX_HOME=/test\nWorkingDirectory=/work'
     const settingsB = settingsA.replace('[today]', '[n/a]').replace('pid=666', 'pid=0')
     assert.equal(stableUnitSettings(settingsA), stableUnitSettings(settingsB))
@@ -585,18 +591,32 @@ async function main() {
     console.log('Idle, interrupted deployment and immutable rollback-copy guards passed; no API requests or service changes')
     return
   }
-  if (process.argv.includes('--prepare')) return prepare()
-  assert(process.argv.includes('--deploy'), 'Choose --prepare or --deploy explicitly')
+  if (mode === 'prepare') return prepare()
+  assert.equal(mode, 'deploy')
   try { await deploy() } finally { await run('/usr/bin/systemctl', ['disable', workerUnit]).catch(() => {}) }
 }
 async function serviceState() {
   return await run('/usr/bin/systemctl', ['show', unit, '-p', 'MainPID', '-p', 'ActiveState', '-p', 'SubState'])
 }
-main().catch(async error => {
-  if (process.argv.includes('--self-test')) { console.error(error.message); process.exitCode = 1; return }
-  const saved = await fs.readFile(path.join(directory, 'preflight.json'), 'utf8').then(JSON.parse).catch(() => ({}))
-  const installed = await fs.readFile(dropIn, 'utf8').catch(() => '')
-  const preserving = saved.mayHaveStartedTarget || installed === targetDropIn
-  await record(preserving ? 'failed-preserving-upgraded-data' : 'failed', { error: error.message, service: await serviceState(), automaticDatabaseRestore: false, databaseBackup: saved.databaseBackup })
-  process.exitCode = 1
-})
+async function runCli() {
+  const usage = 'Usage: node scripts/deploy-codex-01593-production.cjs [--prepare | --deploy | --self-test | --help]'
+  let mode
+  // Parse before entering deployment error handling: usage errors must never
+  // overwrite a completed receipt or query the production service.
+  try { mode = parseDeploymentMode(process.argv.slice(2)) } catch (error) {
+    console.error(error.message)
+    console.error(usage)
+    process.exitCode = 1
+    return
+  }
+  if (mode === 'help') { console.log(usage); return }
+  try { await main(mode) } catch (error) {
+    process.exitCode = 1
+    if (mode === 'self-test') { console.error(error.message); return }
+    const saved = await fs.readFile(path.join(directory, 'preflight.json'), 'utf8').then(JSON.parse).catch(() => ({}))
+    const installed = await fs.readFile(dropIn, 'utf8').catch(() => '')
+    const preserving = saved.mayHaveStartedTarget || installed === targetDropIn
+    await record(preserving ? 'failed-preserving-upgraded-data' : 'failed', { error: error.message, service: await serviceState(), automaticDatabaseRestore: false, databaseBackup: saved.databaseBackup })
+  }
+}
+runCli()
