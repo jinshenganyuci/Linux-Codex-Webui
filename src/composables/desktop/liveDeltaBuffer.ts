@@ -6,6 +6,7 @@ export const LIVE_REASONING_TEXT_MAX_BYTES = 128 * 1024
 type PendingLiveTextDelta = {
   threadId: string
   itemId: string
+  turnId: string
   chunks: string[]
 }
 
@@ -22,22 +23,23 @@ export type LiveDeltaBufferOptions = {
   commandOutputMaxBytes?: number
   reasoningTextMaxBytes?: number
   timer?: LiveDeltaTimer
-  getAgentText: (threadId: string, itemId: string) => string
-  setAgentText: (threadId: string, itemId: string, text: string) => void
+  getAgentText: (threadId: string, itemId: string, turnId: string) => string
+  setAgentText: (threadId: string, itemId: string, text: string, turnId: string) => void
   updateCommandOutput: (
     threadId: string,
     itemId: string,
     update: (currentOutput: string) => string,
+    turnId: string,
   ) => void
   getReasoningText: (threadId: string) => string
   setReasoningText: (threadId: string, text: string) => void
 }
 
 export type LiveDeltaBuffer = {
-  queueAgentText: (threadId: string, itemId: string, delta: string) => void
-  queueCommandOutput: (threadId: string, itemId: string, delta: string) => void
+  queueAgentText: (threadId: string, itemId: string, delta: string, turnId?: string) => void
+  queueCommandOutput: (threadId: string, itemId: string, delta: string, turnId?: string) => void
   queueReasoningText: (threadId: string, delta: string) => void
-  flush: (threadId?: string, itemId?: string) => void
+  flush: (threadId?: string, itemId?: string, turnId?: string) => void
   discardThread: (threadId: string) => void
   discardReasoningForThread: (threadId: string) => void
   reset: () => void
@@ -92,33 +94,36 @@ export function createLiveDeltaBuffer(options: LiveDeltaBufferOptions): LiveDelt
     threadId: string,
     itemId: string,
     delta: string,
+    turnId = '',
   ): void {
     if (!threadId || !itemId || !delta) return
     const pending = target.get(key)
     if (pending) pending.chunks.push(delta)
-    else target.set(key, { threadId, itemId, chunks: [delta] })
+    else target.set(key, { threadId, itemId, turnId, chunks: [delta] })
     scheduleFlush()
   }
 
-  function queueAgentText(threadId: string, itemId: string, delta: string): void {
-    queue(pendingAgentTextByKey, `${threadId}:${itemId}`, threadId, itemId, delta)
+  function queueAgentText(threadId: string, itemId: string, delta: string, turnId = ''): void {
+    queue(pendingAgentTextByKey, JSON.stringify([threadId, turnId, itemId]), threadId, itemId, delta, turnId)
   }
 
-  function queueCommandOutput(threadId: string, itemId: string, delta: string): void {
-    queue(pendingCommandOutputByKey, `${threadId}:${itemId}`, threadId, itemId, delta)
+  function queueCommandOutput(threadId: string, itemId: string, delta: string, turnId = ''): void {
+    queue(pendingCommandOutputByKey, JSON.stringify([threadId, turnId, itemId]), threadId, itemId, delta, turnId)
   }
 
   function queueReasoningText(threadId: string, delta: string): void {
     queue(pendingReasoningByThreadId, threadId, threadId, threadId, delta)
   }
 
-  function flush(threadId = '', itemId = ''): void {
+  function flush(threadId = '', itemId = '', turnId?: string): void {
     if (flushTimer !== null) {
       timer.cancel(flushTimer)
       flushTimer = null
     }
     const matches = (pending: PendingLiveTextDelta) => (
-      (!threadId || pending.threadId === threadId) && (!itemId || pending.itemId === itemId)
+      (!threadId || pending.threadId === threadId)
+      && (!itemId || pending.itemId === itemId)
+      && (turnId === undefined || pending.turnId === turnId)
     )
 
     for (const [key, pending] of pendingAgentTextByKey) {
@@ -128,9 +133,10 @@ export function createLiveDeltaBuffer(options: LiveDeltaBufferOptions): LiveDelt
         pending.threadId,
         pending.itemId,
         capUtf8Tail(
-          `${options.getAgentText(pending.threadId, pending.itemId)}${pending.chunks.join('')}`,
+          `${options.getAgentText(pending.threadId, pending.itemId, pending.turnId)}${pending.chunks.join('')}`,
           agentTextMaxBytes,
         ),
+        pending.turnId,
       )
     }
 
@@ -144,6 +150,7 @@ export function createLiveDeltaBuffer(options: LiveDeltaBufferOptions): LiveDelt
           `${currentOutput}${pending.chunks.join('')}`,
           commandOutputMaxBytes,
         ),
+        pending.turnId,
       )
     }
 

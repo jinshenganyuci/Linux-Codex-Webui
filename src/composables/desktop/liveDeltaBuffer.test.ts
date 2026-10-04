@@ -190,4 +190,37 @@ describe('createLiveDeltaBuffer', () => {
 
     expect(harness.writes).toEqual(['agent:thread-a:agent-a:answer'])
   })
+
+  it('batches reused item IDs by turn and flushes only the requested turn', () => {
+    const timer = createManualTimer()
+    const writes: Array<{ turnId: string; text: string }> = []
+    const buffer = createLiveDeltaBuffer({
+      timer: timer.timer,
+      getAgentText: () => '',
+      setAgentText: (_thread, _item, text, turnId) => { writes.push({ turnId, text }) },
+      updateCommandOutput: vi.fn(), getReasoningText: () => '', setReasoningText: vi.fn(),
+    })
+    buffer.queueAgentText('thread', 'same-item', 'old ', 'turn-a')
+    buffer.queueAgentText('thread', 'same-item', 'new', 'turn-b')
+    buffer.queueAgentText('thread', 'same-item', 'tail', 'turn-a')
+    expect(timer.activeTimers()).toHaveLength(1)
+    buffer.flush('thread', 'same-item', 'turn-a')
+    expect(writes).toEqual([{ turnId: 'turn-a', text: 'old tail' }])
+    timer.runNext()
+    expect(writes).toEqual([{ turnId: 'turn-a', text: 'old tail' }, { turnId: 'turn-b', text: 'new' }])
+  })
+
+  it('keeps command output ownership captured when each chunk was queued', () => {
+    const timer = createManualTimer()
+    const writes: Array<{ turnId: string; text: string }> = []
+    const buffer = createLiveDeltaBuffer({
+      timer: timer.timer, getAgentText: () => '', setAgentText: vi.fn(),
+      updateCommandOutput: (_thread, _item, update, turnId) => { writes.push({ turnId, text: update('') }) },
+      getReasoningText: () => '', setReasoningText: vi.fn(),
+    })
+    buffer.queueCommandOutput('thread', 'same-command', 'old output', 'turn-a')
+    buffer.queueCommandOutput('thread', 'same-command', 'new output', 'turn-b')
+    timer.runNext()
+    expect(writes).toEqual([{ turnId: 'turn-a', text: 'old output' }, { turnId: 'turn-b', text: 'new output' }])
+  })
 })

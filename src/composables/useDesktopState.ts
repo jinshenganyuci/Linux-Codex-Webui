@@ -4025,15 +4025,13 @@ export function useDesktopState() {
     agentTextMaxBytes: LIVE_AGENT_TEXT_MAX_BYTES,
     commandOutputMaxBytes: LIVE_COMMAND_OUTPUT_MAX_BYTES,
     reasoningTextMaxBytes: LIVE_REASONING_TEXT_MAX_BYTES,
-    getAgentText: (threadId, itemId) => {
-      const turnId = activeTurnIdByThreadId.value[threadId] ?? ''
+    getAgentText: (threadId, itemId, turnId) => {
       return (liveAgentMessagesByThreadId.value[threadId] ?? [])
-        .find((message) => message.id === itemId && (!turnId || message.turnId === turnId))?.text ?? ''
+        .find((message) => message.id === itemId && (message.turnId ?? '') === turnId)?.text ?? ''
     },
-    setAgentText: (threadId, itemId, text) => {
-      const turnId = activeTurnIdByThreadId.value[threadId] ?? ''
+    setAgentText: (threadId, itemId, text, turnId) => {
       const current = (liveAgentMessagesByThreadId.value[threadId] ?? [])
-        .find((message) => message.id === itemId && (!turnId || message.turnId === turnId))
+        .find((message) => message.id === itemId && (message.turnId ?? '') === turnId)
       upsertLiveAgentMessage(threadId, {
         id: itemId,
         role: 'assistant',
@@ -4043,10 +4041,9 @@ export function useDesktopState() {
         turnId: turnId || undefined,
       })
     },
-    updateCommandOutput: (threadId, itemId, update) => {
-      const turnId = activeTurnIdByThreadId.value[threadId] ?? ''
+    updateCommandOutput: (threadId, itemId, update, turnId) => {
       const current = (liveCommandsByThreadId.value[threadId] ?? [])
-        .find((message) => message.id === itemId && (!turnId || message.turnId === turnId))
+        .find((message) => message.id === itemId && (message.turnId ?? '') === turnId)
       if (!current?.commandExecution) return
       upsertLiveCommand(threadId, {
         ...current,
@@ -4293,8 +4290,20 @@ export function useDesktopState() {
     return changed ? next : persisted
   }
 
-  function upsertLiveAgentMessage(threadId: string, nextMessage: UiMessage): void {
-    const previous = liveAgentMessagesByThreadId.value[threadId] ?? []
+  function upsertLiveAgentMessage(threadId: string, nextMessage: UiMessage, rebindUnscoped = false): void {
+    let previous = liveAgentMessagesByThreadId.value[threadId] ?? []
+    if (rebindUnscoped && nextMessage.turnId && nextMessage.messageType === 'agentMessage.live') {
+      // Old notifications may omit a turn ID. Once a completed item supplies it,
+      // replace the one unscoped copy only if no other turn owns this item ID.
+      // Never use matching text to merge independent assistant messages.
+      const unscoped = previous.find(message => message.id === nextMessage.id && !message.turnId && message.messageType === 'agentMessage.live')
+      const conflicts = (message: UiMessage) => message.id === nextMessage.id && Boolean(message.turnId) && message.turnId !== nextMessage.turnId
+      const conflictingTurn = unscoped && (previous.some(conflicts) || (persistedMessagesByThreadId.value[threadId] ?? []).some(conflicts))
+      if (unscoped && !conflictingTurn) {
+        previous = previous.filter(message => message !== unscoped)
+        nextMessage = { ...nextMessage, renderKey: unscoped.renderKey, timelineOrder: unscoped.timelineOrder }
+      }
+    }
     const next = upsertMessage(previous, nextMessage)
     setLiveAgentMessagesForThread(threadId, next)
   }
@@ -5848,6 +5857,11 @@ export function useDesktopState() {
           durationMs,
         })
       }
+      if (completionEndsActiveRun) {
+        // Drain the completing turn before clearing its active identity/discarding
+        // pending buffers. Mobile reconnects can miss item/completed entirely.
+        liveDeltaBuffer.flush(completedTurn.threadId, '', completedTurn.turnId)
+      }
       if (completionEndsActiveRun && activeTurnId) {
         activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, completedTurn.threadId)
       }
@@ -5933,6 +5947,7 @@ export function useDesktopState() {
         notificationThreadId,
         liveAgentMessageDelta.messageId,
         liveAgentMessageDelta.delta,
+        notificationTurnId,
       )
     }
 
@@ -5943,8 +5958,9 @@ export function useDesktopState() {
 
     const completedAgentMessage = readAgentMessageCompleted(notification)
     if (completedAgentMessage) {
-      liveDeltaBuffer.flush(notificationThreadId, completedAgentMessage.id)
-      upsertLiveAgentMessage(notificationThreadId, bindNotificationTurn(completedAgentMessage))
+      liveDeltaBuffer.flush(notificationThreadId, completedAgentMessage.id, notificationTurnId)
+      if (notificationTurnId) liveDeltaBuffer.flush(notificationThreadId, completedAgentMessage.id, '')
+      upsertLiveAgentMessage(notificationThreadId, bindNotificationTurn(completedAgentMessage), true)
     }
 
     const completedImageView = readCompletedImageView(notification)
@@ -5991,12 +6007,13 @@ export function useDesktopState() {
         notificationThreadId,
         commandDelta.itemId,
         commandDelta.delta,
+        notificationTurnId,
       )
     }
 
     const commandCompleted = readCommandExecutionCompleted(notification)
     if (commandCompleted) {
-      liveDeltaBuffer.flush(notificationThreadId, commandCompleted.id)
+      liveDeltaBuffer.flush(notificationThreadId, commandCompleted.id, notificationTurnId)
       upsertLiveCommand(notificationThreadId, bindNotificationTurn(commandCompleted))
     }
 
@@ -6012,7 +6029,6 @@ export function useDesktopState() {
     }
 
     if (notification.method === 'turn/completed' && completionEndsActiveRun) {
-      liveDeltaBuffer.flush(notificationThreadId)
       activeReasoningItemIdByThreadId.delete(notificationThreadId)
       shouldAutoScrollOnNextAgentEvent = false
       clearLiveReasoningForThread(notificationThreadId)
