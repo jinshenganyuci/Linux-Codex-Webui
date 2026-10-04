@@ -80,3 +80,16 @@ CODEX_01593_DOCKER_IMAGE=linux-codex-webui-mobile-duplicate:local node scripts/v
 - 最终测试 release 为 `/root/.local/share/linux-codex-webui/releases/mobile-duplicate-reply-20261004-feb3319`，沿用隔离 home `/root/.local/share/linux-codex-webui/acceptance/codex-01593-ui-20261001`。实际原生子进程验证为 0.159.3，`dirty=false`。
 - 本次正式 13510 的进程/启动时间、后端/前端字节、保护配置和原有 904 个会话路径均保留，未部署此修复到正式端。回执为 `output/mobile-duplicate-reply/deployment.json`、`preservation.json`。
 - 回滚测试预览需等待回合/审批/队列为空，优雅停止后等待原生子进程退出，移除本轮单个 `zzzzzzzzz-mobile-duplicate-reply-20261004.conf` 覆盖，再 daemon-reload/start 并核对原入口；不删测试 home、不动正式覆盖。本次没有推送 GitHub。
+
+## 后续用户授权：13510 静态发布完成
+
+- 用户随后明确要求升级 13510 并提交最近更新到 GitHub。代码比较确认 `51df375..feb3319` 无服务端、CLI 或依赖变化，因此直接发布已验收前端，保留正在执行本次对话的正式服务。
+- 在共享部署锁内执行 `flock -n /root/.local/share/linux-codex-webui/deployments/13510-deploy.lock node scripts/deploy-mobile-duplicate-frontend.cjs --deploy`。新增 12 个带内容哈希的 JS，旧资源保留，依赖全部就位后才在同目录原子替换 `index.html`；不移动整个 dist，不重启 Node/CLI，不重新构建不同前端。
+- 新构建 33 个文件及 32 个保留旧资源的实际 HTTP 字节哈希均通过。旧 ETag 请求新入口得到 200，新 ETag 条件请求得到 304。Node fetch 的条件检查需显式 `cache: 'no-cache'`，否则默认行为会影响 304 断言。现有 SW 对页面/JS/CSS network-first，在线刷新一次会加载修复，无需清理浏览器存储。
+- 后端仍诚实报告 `51df375` / CLI 0.159.3，前端独立标记为 `feb3319`；以实际入口及 JS 哈希确认升级，不把 backend runtime-info 当成前端版本证据。
+- 正式 PID 639、原生 CLI PID 808、13511 PID 306263 及发布前建立的 WebSocket 均保留。配置、登录会话、模型偏好与后端入口哈希不变；905 个原有会话路径存在且长度未减少，允许正在进行的会话追加。这项检查不声称对全部原有会话内容做了逐字节散列。
+- 正式复验命令：`PROFILE_BASE_URL=http://127.0.0.1:13510 MOBILE_DUP_ALLOW_PRODUCTION=1 MODE=after node scripts/verify-mobile-duplicate-reply.cjs`。正式地址默认拒绝，显式启用后只允许 after 和完整五案；`--self-test` 验证地址门控和真实写操作隔离，13511 `MODE=after ... --smoke` 先行通过。
+- 测试 URL 为 `http://127.0.0.1:13510/#/thread/01593000-0000-4000-8000-000000000001`；375×812、768×1024 明暗与 375 暗色重连五案全程单条，页面错误和真实写入尝试均 0。实际 served index SHA-256 为 `ecc32a55f15f45e6d86b89591cff3e843289456a832dadeb347a442024ef0016`，与验收文件一致。正式夹具只在浏览器内，不创建或发送原生会话。
+- 报告和截图绝对根目录：`/root/.local/share/linux-codex-webui/worktrees/mobile-duplicate-reply-20261004/output/playwright/mobile-duplicate-reply/production/`；报告 `production-report.json`，暗色手机图 `production-missing-turn-start-completed-live-dark-375.png` 已目视确认单条、正确主题及无横向溢出。
+- 最终回执 `/root/.local/share/linux-codex-webui/deployments/13510-mobile-duplicate-20261004/status.json` 为 `complete`，`restartPerformed=false`。失败回滚只原子恢复保存的旧 index，保留两版依赖；后续人工回滚应先检查是否存在更新发布，避免覆盖更晚入口。不恢复或覆盖聊天数据库。
+- 本次只是发布脚本/验证工具新增，无应用热路径变化；实际静态切换约一秒内完成，资源核验有界、顺序执行一次。正式端不发送额外模型回合；功能性能沿用上文相同构建的请求数及 profiler 证据。

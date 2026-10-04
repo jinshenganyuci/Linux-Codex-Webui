@@ -71,7 +71,7 @@ async function sampleRealRuntime(browser) {
   } finally { await context.close() }
 }
 
-async function installFixtures(context, theme) {
+async function installFixtures(context, theme, base = BASE) {
   const state = {
     pending: createRequests(), replies: [], rpcCounts: {}, blockedWrites: [], diagnosticsCalls: [],
     diagnosticsMode: 'available', responseMode: 'failure', history: [],
@@ -106,9 +106,9 @@ async function installFixtures(context, theme) {
       }
       get onmessage() { return super.onmessage }
     }
-  }, { theme, base: BASE, threadId: THREAD_A, fixtureIds: [THREAD_A, THREAD_B] })
+  }, { theme, base, threadId: THREAD_A, fixtureIds: [THREAD_A, THREAD_B] })
 
-  await context.route(`${BASE}/codex-api/**`, async route => {
+  await context.route(`${base}/codex-api/**`, async route => {
     const request = route.request()
     const url = new URL(request.url())
     const method = request.method()
