@@ -957,6 +957,7 @@ describe('backend queue scheduling', () => {
             text: string
             imageUrls: string[]
             skills: Array<{ name: string; path: string }>
+            mentions?: Array<{ name: string; path: string }>
             fileAttachments: Array<{ label: string; path: string; fsPath: string }>
             collaborationMode: 'default' | 'plan'
             model?: string
@@ -996,6 +997,7 @@ describe('backend queue scheduling', () => {
           text: 'captured preference',
           imageUrls: [],
           skills: [],
+          mentions: [{ name: 'Architecture review', path: 'thread://thread-123?hostId=local' }],
           fileAttachments: [],
           collaborationMode: 'plan',
           model: 'gpt-5.5',
@@ -1014,6 +1016,11 @@ describe('backend queue scheduling', () => {
             developer_instructions: 'Ask material questions before planning.',
           },
         },
+      })
+      expect(capturedParams.input).toContainEqual({
+        type: 'mention',
+        name: 'Architecture review',
+        path: 'thread://thread-123?hostId=local',
       })
       expect(rpc).not.toHaveBeenCalled()
       processor.dispose()

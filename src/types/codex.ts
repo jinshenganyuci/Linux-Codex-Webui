@@ -107,9 +107,12 @@ export type ThreadTurnItemsPage = {
 export type UserInput = {
   type: string
   text?: string
+  name?: string
   path?: string
   url?: string
 }
+
+export type UiThreadMention = { name: string; path: string }
 
 export type UiThread = {
   id: string
@@ -316,6 +319,7 @@ export type UiMessage = {
   timestampIso?: string
   images?: string[]
   skills?: Array<{ name: string; path: string }>
+  mentions?: UiThreadMention[]
   fileAttachments?: UiFileAttachment[]
   fileChanges?: UiFileChange[]
   fileChangeStatus?: UiFileChangeStatus

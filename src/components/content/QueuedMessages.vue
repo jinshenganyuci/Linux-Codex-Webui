@@ -58,6 +58,7 @@ type QueuedMessageRow = {
   text: string
   imageUrls?: string[]
   skills?: Array<{ name: string; path: string }>
+  mentions?: Array<{ name: string; path: string }>
   fileAttachments?: Array<{ label: string; path: string; fsPath: string }>
   deliveryState?: 'claimed'
 }
@@ -117,6 +118,7 @@ function resetDragState(): void {
 function getMessagePreview(message: QueuedMessageRow): string {
   const text = message.text.trim()
   if (text) return text
+  if (message.mentions?.length) return message.mentions.map((mention) => `@${mention.name}`).join(', ')
 
   const parts: string[] = []
   const imageCount = message.imageUrls?.length ?? 0

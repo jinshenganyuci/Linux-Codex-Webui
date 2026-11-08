@@ -4261,6 +4261,24 @@ function scoreFileCandidate(path: string, query: string): number {
   return 10
 }
 
+export function normalizeComposerFileSearchMatches(payload: unknown, limit: number): Array<{ path: string }> {
+  const response = asRecord(payload)
+  if (!Array.isArray(response?.files)) {
+    throw new Error('fuzzyFileSearch returned no files array')
+  }
+  const paths = new Set<string>()
+  for (const value of response.files) {
+    const row = asRecord(value)
+    const path = typeof row?.path === 'string' ? row.path.trim() : ''
+    if (row?.match_type !== 'file' || !path) continue
+    const segments = path.replace(/\\/g, '/').split('/')
+    if (segments.includes('.git') || segments.includes('node_modules')) continue
+    paths.add(path)
+    if (paths.size >= limit) break
+  }
+  return Array.from(paths, (path) => ({ path }))
+}
+
 async function listFilesWithRipgrep(cwd: string): Promise<string[]> {
   return await new Promise<string[]>((resolve, reject) => {
     const ripgrepCommand = resolveRipgrepCommand()
@@ -5599,6 +5617,7 @@ type StoredQueuedMessage = {
   text: string
   imageUrls: string[]
   skills: Array<{ name: string; path: string }>
+  mentions?: Array<{ name: string; path: string }>
   fileAttachments: Array<{ label: string; path: string; fsPath: string }>
   collaborationMode: 'default' | 'plan'
   speedMode?: 'standard' | 'fast'
@@ -5675,11 +5694,13 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
     })
   }
 
+  const mentions = normalizeNamedPathItems(record.mentions).filter((mention) => mention.path.startsWith('thread://'))
   return {
     id,
     text: typeof record.text === 'string' ? record.text : '',
     imageUrls: normalizeStringArray(record.imageUrls),
     skills: normalizeNamedPathItems(record.skills),
+    ...(mentions.length > 0 ? { mentions } : {}),
     fileAttachments: normalizeFileAttachments(record.fileAttachments),
     collaborationMode: record.collaborationMode === 'plan' ? 'plan' : 'default',
     ...(record.speedMode === 'fast' || record.speedMode === 'standard' ? { speedMode: record.speedMode } : {}),
@@ -8141,6 +8162,9 @@ export class BackendQueueProcessor {
     for (const skill of turn.message.skills) {
       input.push({ type: 'skill', name: skill.name, path: skill.path })
     }
+    for (const mention of turn.message.mentions ?? []) {
+      input.push({ type: 'mention', name: mention.name, path: mention.path })
+    }
 
     const params: Record<string, unknown> = {
       threadId: turn.threadId,
@@ -10408,6 +10432,17 @@ export function createCodexBridgeMiddleware(options: { backgroundMaintenance?: b
         }
 
         try {
+          const nativeMatches = query
+            ? await appServer.rpc('fuzzyFileSearch', {
+                query,
+                roots: [cwd],
+                cancellationToken: null,
+              }).then((result) => normalizeComposerFileSearchMatches(result, limit)).catch(() => null)
+            : null
+          if (nativeMatches !== null) {
+            setJson(res, 200, { data: nativeMatches })
+            return
+          }
           const files = await listFilesWithRipgrep(cwd)
           const scored = files
             .map((path) => ({ path, score: scoreFileCandidate(path, query) }))

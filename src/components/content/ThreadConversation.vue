@@ -245,6 +245,19 @@
                 </a>
               </div>
 
+              <div v-if="message.mentions && message.mentions.length > 0" class="message-chat-attachments">
+                <a
+                  v-for="mention in message.mentions"
+                  :key="`${message.id}:${mention.path}`"
+                  class="message-chat-chip"
+                  :href="toLocalThreadUrl(mention.path) ?? undefined"
+                  :title="mention.path"
+                >
+                  <IconChatBubble class="message-chat-chip-prefix" />
+                  <span class="message-chat-chip-name">{{ mention.name }}</span>
+                </a>
+              </div>
+
               <article v-if="message.text.length > 0" class="message-card" :data-role="message.role">
                 <div v-if="message.isAutomationRun" class="automation-message-label">
                   <span>{{ t('Sent via automation') }}</span>
@@ -1083,6 +1096,7 @@ import { useUiLanguage } from '../../composables/useUiLanguage'
 import { copyTextToClipboard, copyTextWithSelectionFallback } from '../../utils/clipboard'
 
 import IconTablerArrowBackUp from '../icons/IconTablerArrowBackUp.vue'
+import IconChatBubble from '../icons/IconChatBubble.vue'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
@@ -1911,7 +1925,7 @@ type DiffViewerLine = {
 }
 
 function toLocalThreadUrl(value: string): string | null {
-  const match = value.trim().match(/^codex:\/\/threads\/([A-Za-z0-9-]+)$/u)
+  const match = value.trim().match(/^(?:codex:\/\/threads\/|thread:\/\/)([A-Za-z0-9-]+)(?:\?hostId=local)?$/u)
   if (!match) return null
   if (typeof window === 'undefined') return `/#/thread/${match[1]}`
   const basePath = window.location.pathname.replace(/\/?$/u, '/')
@@ -3926,6 +3940,22 @@ onBeforeUnmount(() => {
 
 .message-skill-attachments {
   @apply mb-2 flex flex-wrap justify-end gap-1.5;
+}
+
+.message-chat-attachments {
+  @apply mb-2 flex flex-wrap justify-end gap-1.5;
+}
+
+.message-chat-chip {
+  @apply inline-flex max-w-full items-center gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs text-sky-800 no-underline hover:bg-sky-100;
+}
+
+.message-chat-chip-prefix {
+  @apply h-3.5 w-3.5 shrink-0;
+}
+
+.message-chat-chip-name {
+  @apply min-w-0 max-w-48 truncate;
 }
 
 .message-file-chip {

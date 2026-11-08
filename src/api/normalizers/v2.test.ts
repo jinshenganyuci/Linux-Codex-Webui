@@ -83,6 +83,26 @@ describe('normalizeThreadMessagesV2', () => {
     expect(messages[0].isUnhandled).toBeUndefined()
   })
 
+  it('renders thread mentions as structured user content', () => {
+    const messages = normalizeThreadMessagesV2(threadReadResponseWithContent([{
+      type: 'userMessage',
+      id: 'user-mention',
+      content: [{
+        type: 'mention',
+        name: 'Architecture review',
+        path: 'thread://thread-123?hostId=local',
+      }],
+    }]))
+
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({
+      role: 'user',
+      text: '',
+      mentions: [{ name: 'Architecture review', path: 'thread://thread-123?hostId=local' }],
+    })
+    expect(messages[0].isUnhandled).toBeUndefined()
+  })
+
   it('decodes escaped heartbeat instructions without exposing raw XML', () => {
     const messages = normalizeThreadMessagesV2(threadReadResponseWithContent([{
       type: 'userMessage',
