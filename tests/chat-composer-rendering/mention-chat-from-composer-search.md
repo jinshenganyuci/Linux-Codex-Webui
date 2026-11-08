@@ -23,3 +23,9 @@
 
 #### Rollback/Cleanup
 - Remove unsent reference chips and clear the draft. Archive any temporary test chat created for this check.
+
+#### 2026-11-08 Isolated App-Server Acceptance
+- Run `node scripts/verify-core-chat-files-isolated.cjs` using a fresh temporary `CODEX_HOME`. A deterministic local provider drives real app-server turns without real account credentials or paid model calls; both WebUI ports are loopback-only.
+- The script sends a unique `PR5_TESTCHAT_*` marker through the WebUI. A real persisted assistant row renders `[README.md](README.md)` and an HTTPS link; `hrefOk`, `titleOk`, and `textOk` pass on desktop light and after refresh on phone dark, with no horizontal overflow. Screenshots include `testchat-core-chat-files-light-1440-cjs.png` and `testchat-core-chat-files-dark-375-cjs.png`.
+- From the plus-menu chat search, the script selects the TestChat reference and sends `PR5_MENTION_*`. The persisted native user item contains `{ type: "mention", path: "thread://<id>?hostId=local" }`; the rendered chip links to the local WebUI chat and retains the title and reference path. The `testchat-structured-mention-light-1440-cjs.png` screenshot and exact assertions are listed in `output/playwright/core-chat-files-isolated/report.json`.
+- This verifies the WebUI/app-server protocol and renderer against a synthetic provider, not ChatGPT authentication or a real model's generated wording. The script stops only its own test listeners and leaves the temporary home for inspection.
