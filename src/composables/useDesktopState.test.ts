@@ -4317,6 +4317,56 @@ describe('provider model selection', () => {
     expect(gatewayMocks.getThreadDetail).toHaveBeenCalledTimes(1)
     expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
   })
+
+  it('loads history without repeatedly claiming a thread owned by another writer', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadSummary.mockResolvedValue(thread('shared-thread', '/tmp/project', { historyMode: 'paginated' }))
+    gatewayMocks.getThreadHistoryDetail.mockImplementation(async (_threadId: string, mode: 'paginated' | 'legacy') => {
+      if (mode === 'paginated') {
+        throw new Error('RPC thread/resume failed with HTTP 502: thread shared-thread already has an active writer')
+      }
+      return {
+        ...paginatedDetail({
+          historyMode: 'legacy',
+          model: 'gpt-5.5',
+          modelProvider: 'openai',
+          messages: [{ id: 'user-1', role: 'user', text: 'existing history' }],
+        }),
+        resumed: false,
+        materialized: false,
+      }
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('shared-thread')
+    await state.loadMessages('shared-thread')
+
+    expect(state.messages.value).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'user-1', text: 'existing history' }),
+    ]))
+    expect(state.selectedLiveOverlay.value?.errorText).toBeFalsy()
+
+    await state.loadMessages('shared-thread', { force: true })
+    expect(gatewayMocks.getThreadHistoryDetail.mock.calls.map(([, mode]) => mode)).toEqual([
+      'paginated', 'legacy', 'legacy',
+    ])
+    expect(gatewayMocks.resumeThread).not.toHaveBeenCalled()
+  })
+
+  it('keeps a read failure visible when the active-writer fallback also fails', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadSummary.mockResolvedValue(thread('shared-thread', '/tmp/project', { historyMode: 'paginated' }))
+    gatewayMocks.getThreadHistoryDetail.mockImplementation(async (_threadId: string, mode: 'paginated' | 'legacy') => {
+      throw new Error(mode === 'paginated' ? 'thread already has an active writer' : 'thread/read failed')
+    })
+
+    const state = useDesktopState()
+    state.primeSelectedThread('shared-thread')
+
+    await expect(state.loadMessages('shared-thread')).rejects.toThrow('thread/read failed')
+    expect(state.selectedLiveOverlay.value?.errorText).toContain('thread/read failed')
+    expect(gatewayMocks.getThreadHistoryDetail.mock.calls.map(([, mode]) => mode)).toEqual(['paginated', 'legacy'])
+  })
 })
 
 describe('findAdjacentThreadId', () => {

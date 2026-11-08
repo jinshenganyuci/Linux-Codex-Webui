@@ -809,6 +809,11 @@ function arePlanDataEqual(first?: UiPlanData, second?: UiPlanData): boolean {
 
 
 
+function isActiveWriterConflictError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /already has an active writer/iu.test(message)
+}
+
 function areMessageFieldsEqual(first: UiMessage, second: UiMessage): boolean {
   if (first.renderKey !== second.renderKey || first.timelineOrder !== second.timelineOrder) return false
   return (
@@ -1704,6 +1709,7 @@ export function useDesktopState() {
   const hasMoreOlderMessagesByThreadId = ref<Record<string, boolean>>({})
   const loadingOlderMessagesByThreadId = ref<Record<string, boolean>>({})
   const resumedThreadById = ref<Record<string, boolean>>({})
+  const activeWriterReadOnlyThreadIds = new Set<string>()
   const turnIndexByTurnIdByThreadId = ref<Record<string, Record<string, number>>>({})
   const turnSummaryByThreadId = ref<Record<string, TurnSummaryState>>({})
   const turnActivityByThreadId = ref<Record<string, TurnActivityState>>({})
@@ -3215,6 +3221,9 @@ export function useDesktopState() {
     hasMoreOlderMessagesByThreadId.value = pruneThreadStateMap(hasMoreOlderMessagesByThreadId.value, activeThreadIds)
     loadingOlderMessagesByThreadId.value = pruneThreadStateMap(loadingOlderMessagesByThreadId.value, activeThreadIds)
     resumedThreadById.value = pruneThreadStateMap(resumedThreadById.value, activeThreadIds)
+    for (const threadId of activeWriterReadOnlyThreadIds) {
+      if (!activeThreadIds.has(threadId)) activeWriterReadOnlyThreadIds.delete(threadId)
+    }
     turnIndexByTurnIdByThreadId.value = pruneThreadStateMap(turnIndexByTurnIdByThreadId.value, activeThreadIds)
     persistedMessagesByThreadId.value = pruneThreadStateMap(persistedMessagesByThreadId.value, activeThreadIds)
     requestUserInputSummariesByThreadId.value = pruneThreadStateMap(
@@ -6443,8 +6452,9 @@ export function useDesktopState() {
       void loadRequestUserInputHistoryForThread(threadId)
       void loadPlanSummaryHistoryForThread(threadId)
       const historyMode = await resolveThreadHistoryMode(threadId)
+      const readHistoryMode = activeWriterReadOnlyThreadIds.has(threadId) ? 'legacy' : historyMode
       if (loadGeneration !== messageLoadGeneration || mutationRevision !== (historyMutationRevisionByThreadId.get(threadId) ?? 0) || isThreadDeleted(threadId)) return
-      invalidateThreadHistoryCache(threadId, historyMode)
+      invalidateThreadHistoryCache(threadId, readHistoryMode)
       const alreadyLoaded = loadedMessagesByThreadId.value[threadId] === true
       const version = currentThreadVersion(threadId)
       const loadedVersion = loadedVersionByThreadId.value[threadId] ?? ''
@@ -6468,18 +6478,26 @@ export function useDesktopState() {
       }
 
       const currentHistoryState = threadHistoryStateById.value[threadId]
-      const detail = historyMode === 'paginated' && currentHistoryState?.initialized === true
-        ? {
-            ...(await getOlderThreadHistoryPage(threadId, {
-              historyMode: 'paginated',
-              cursor: null,
-            })),
-            model: '',
-            modelProvider: '',
-            resumed: false,
-            materialized: currentHistoryState.materialized,
-          }
-        : await getThreadHistoryDetail(threadId, historyMode)
+      let detail: Awaited<ReturnType<typeof getThreadHistoryDetail>>
+      try {
+        detail = readHistoryMode === 'paginated' && currentHistoryState?.initialized === true
+          ? {
+              ...(await getOlderThreadHistoryPage(threadId, {
+                historyMode: 'paginated',
+                cursor: null,
+              })),
+              model: '',
+              modelProvider: '',
+              resumed: false,
+              materialized: currentHistoryState.materialized,
+            }
+          : await getThreadHistoryDetail(threadId, readHistoryMode)
+      } catch (unknownError) {
+        if (readHistoryMode !== 'paginated' || !isActiveWriterConflictError(unknownError)) throw unknownError
+        activeWriterReadOnlyThreadIds.add(threadId)
+        invalidateThreadHistoryCache(threadId, 'legacy')
+        detail = await getThreadHistoryDetail(threadId, 'legacy')
+      }
 
       if (loadGeneration !== messageLoadGeneration || mutationRevision !== (historyMutationRevisionByThreadId.get(threadId) ?? 0) || isThreadDeleted(threadId)) return
 
@@ -6506,6 +6524,7 @@ export function useDesktopState() {
         },
       }
       if (detail.materialized) {
+        activeWriterReadOnlyThreadIds.delete(threadId)
         resumedThreadById.value = {
           ...resumedThreadById.value,
           [threadId]: true,
@@ -7496,6 +7515,7 @@ export function useDesktopState() {
       }
       if (resumedThreadById.value[threadId] !== true) {
         const resumedThread = await resumeThread(threadId)
+        activeWriterReadOnlyThreadIds.delete(threadId)
         if (resumedThread.model && !readThreadModelPreference(threadId) && !hasCachedThreadModelSelection(threadId)) {
           setThreadModelId(threadId, resumedThread.model.trim())
         }
