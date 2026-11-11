@@ -89,6 +89,8 @@ if idx >= 0:
 3. Trace the component to find **hooks/composables**, **API calls**, and **event handlers**.
 4. Check the **main process** bundle for any server-side proxying or Electron IPC handling.
 
+Linux desktop builds may split the renderer into numeric files under `webview/assets/async/` rather than an `index-*.js` bundle. For sidebar work, search those chunks for `sidebarElectron.*` message IDs before tracing the component.
+
 ## Mandatory CDP Frontend Inspection
 
 For every feature UI or user-visible fix, inspect the live Codex.app frontend over Chrome DevTools Protocol before implementing. Bundle search is still useful, but it is not enough by itself when a visual/interaction surface exists.
@@ -802,3 +804,9 @@ After each feature implementation session that uses this skill:
 - In Codex desktop `26.1027.30824`, opening the composer plus menu and typing a chat title shows chat results alongside files and browser tabs. Selecting a chat keeps the draft in place and inserts a non-editable ProseMirror mention, rather than navigating to the chat.
 - The inserted node carries `agent-mention-path="thread://<thread-id>?hostId=local"` and the displayed chat title. The bundled app-server schema supports `UserInput.type = "mention"` with required `name` and `path`; render persisted mention blocks as user content instead of unknown/raw payloads.
 - The web composer uses a textarea rather than ProseMirror. A separate removable chip plus structured `mention` input preserves the reference semantics without attempting to emulate rich inline editing.
+
+## Findings: Linux Sidebar Recent Activity (2026-11-11)
+
+- Installed Linux desktop bundle `/opt/codex-desktop/resources/app.asar` was version `26.1103.32239`. Its numeric chunk `webview/assets/async/499225.36a7812ae9.js` contains `sidebarElectron.flatProjectSidebar.byProject`, `sidebarElectron.sortMenu.updated`, `sidebarElectron.sortMenu.manual`, and `sidebarElectron.priorityThreads.focusOnActiveChats` UI messages.
+- The live desktop sidebar preference snapshot used project grouping, `updated_at` sorting for chats and projects, and manual pinned order. This is evidence for recent-activity discoverability, not proof that every desktop installation has the same preference.
+- An isolated Linux CDP instance on port `3434` reached `app://-/index.html`, but its fresh profile showed only the sign-in screen. Capture that limitation rather than claiming a visual comparison of the authenticated sidebar or copying the user's credentials into a debug profile.

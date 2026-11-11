@@ -8,6 +8,7 @@ Return to the [manual test index](../../tests.md).
 
 | Section |
 | --- |
+| [最近与当前对话快捷入口](recent-and-current-chat-shortcuts.md) |
 | [Feature: Project recency sort, pins, and mobile move mode](project-recency-sort-pins-and-mobile-move-mode.md) |
 | [Feature: Projectless new chat folders](projectless-new-chat-folders.md) |
 | [Feature: Unified create project and GitHub clone modal](unified-create-project-and-github-clone-modal.md) |

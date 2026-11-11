@@ -93,6 +93,45 @@
       {{ sidebarLayoutActionError }}
     </p>
 
+    <section v-if="!isSearchActive && recentThreads.length > 0" class="recent-section">
+      <SidebarMenuRow as="div" class="recent-section-header">
+        <template #left>
+          <IconTablerClock class="thread-icon" />
+        </template>
+        <span class="thread-tree-header">{{ t('Recent chats') }}</span>
+      </SidebarMenuRow>
+
+      <ul class="thread-list recent-thread-list">
+        <li v-for="thread in recentThreads" :key="thread.id" class="thread-row-item">
+          <SidebarMenuRow
+            as="button"
+            class="recent-thread-row"
+            type="button"
+            :data-recent-thread-id="thread.id"
+            :data-current="thread.id === selectedThreadId"
+            :aria-current="thread.id === selectedThreadId ? 'page' : undefined"
+            :title="`${thread.title} · ${recentThreadProjectLabel(thread)}`"
+            @click="onSelect(thread.id)"
+          >
+            <template #left>
+              <span v-if="shouldShowThreadIndicator(thread)" class="thread-status-indicator" :data-state="getThreadState(thread)" />
+            </template>
+            <span class="recent-thread-copy">
+              <span class="thread-row-title-line">
+                <span class="thread-row-title">{{ thread.title }}</span>
+                <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" :title="t('Worktree thread')" />
+              </span>
+              <span class="recent-thread-project">{{ recentThreadProjectLabel(thread) }}</span>
+            </span>
+            <template #right>
+              <span v-if="thread.id === selectedThreadId" class="recent-current-label">{{ t('Current') }}</span>
+              <span v-else class="thread-row-time">{{ formatRelativeThread(thread) }}</span>
+            </template>
+          </SidebarMenuRow>
+        </li>
+      </ul>
+    </section>
+
     <section class="chats-section">
       <SidebarMenuRow
         as="button"
@@ -369,6 +408,7 @@
         class="project-group"
         :data-project-name="group.projectName"
         :data-expanded="!isCollapsed(group.projectName)"
+        :data-current="group.projectName === currentProjectName"
         :data-dragging="isDraggingProject(group.projectName)"
         :style="projectGroupStyle(group.projectName)"
       >
@@ -909,6 +949,7 @@ import {
 import type { UiProjectGroup, UiThread, UiThreadAutomation, UiThreadAutomationStatus } from '../../types/codex'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
+import IconTablerClock from '../icons/IconTablerClock.vue'
 import IconTablerDots from '../icons/IconTablerDots.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerFolder from '../icons/IconTablerFolder.vue'
@@ -921,6 +962,7 @@ import { getPathLeafName, getPathParent, isAbsoluteLikePath, isProjectlessChatPa
 import ComposerDropdown from '../content/ComposerDropdown.vue'
 import SidebarMenuRow from './SidebarMenuRow.vue'
 import { mapWithConcurrency, togglePinnedThreadId } from './pinnedThreadUtils'
+import { selectCurrentAndRecentThreads } from './recentThreadUtils'
 
 const props = defineProps<{
   groups: UiProjectGroup[]
@@ -1379,6 +1421,8 @@ const globalThreads = computed<UiThread[]>(() => {
   })
 })
 
+const recentThreads = computed(() => selectCurrentAndRecentThreads(globalThreads.value, props.selectedThreadId))
+
 const chatThreads = computed(() => {
   const rows = globalThreads.value.filter((thread) => isProjectlessChatPath(thread.cwd))
   const timestampKey = chatSortMode.value === 'created' ? 'createdAtIso' : 'updatedAtIso'
@@ -1492,6 +1536,7 @@ const threadProjectNameById = computed(() => {
   }
   return map
 })
+const currentProjectName = computed(() => threadProjectNameById.value.get(props.selectedThreadId) ?? '')
 const unpinnedThreadsByProjectName = computed(() => {
   const map = new Map<string, UiThread[]>()
   for (const group of props.groups) {
@@ -2327,6 +2372,13 @@ function getProjectVisibleName(group: UiProjectGroup): string {
   return parentLeafName ? `${leafName} ${parentLeafName}` : leafName
 }
 
+function recentThreadProjectLabel(thread: UiThread): string {
+  if (isProjectlessChatPath(thread.cwd)) return t('Chats')
+  const projectName = threadProjectNameById.value.get(thread.id) ?? thread.projectName
+  const group = props.groups.find((candidate) => candidate.projectName === projectName)
+  return group ? getProjectVisibleName(group) : getProjectDisplayName(projectName)
+}
+
 function isProjectMenuOpen(projectName: string): boolean {
   return openProjectMenuId.value === projectName
 }
@@ -3138,16 +3190,20 @@ onBeforeUnmount(() => {
   @apply flex flex-col;
 }
 
+.recent-section {
+  @apply order-2 mb-2;
+}
+
 .pinned-section {
   @apply order-1 mb-2;
 }
 
 .projects-section {
-  @apply order-3;
+  @apply order-4;
 }
 
 .chats-section {
-  @apply order-2 mb-2;
+  @apply order-3 mb-2;
 }
 
 .thread-tree-header-row {
@@ -3338,6 +3394,18 @@ onBeforeUnmount(() => {
 .thread-row-item[data-menu-open='true'] {
   @apply relative;
   z-index: var(--ui-z-popover);
+}
+
+.recent-thread-copy {
+  @apply flex min-w-0 flex-col gap-0.5;
+}
+
+.recent-thread-project {
+  @apply block w-full truncate text-[11px] leading-4;
+}
+
+.recent-current-label {
+  @apply text-[11px] font-semibold;
 }
 
 .thread-row {

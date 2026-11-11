@@ -3911,6 +3911,15 @@ html.dark .runtime-item a { color: rgb(165 180 252); }
 :root .sidebar-root .sidebar-automations-link-icon { background: linear-gradient(145deg, #ffbf60, #f79728); }
 :root:is(.dark, :not(.dark)) .thread-row[data-active='true'] { background: var(--mac-selected); box-shadow: inset 0 1px 0 var(--mac-highlight); }
 :root .sidebar-root .thread-row[data-active='true'] .thread-row-title { color: var(--mac-accent); font-weight: 550; }
+:root .sidebar-root .recent-thread-row { border-radius: 12px; cursor: pointer; }
+:root .sidebar-root .recent-thread-row:hover { background: var(--mac-hover); }
+:root .sidebar-root .recent-thread-row:focus-visible { outline: 2px solid var(--mac-accent); outline-offset: -2px; }
+:root:is(.dark, :not(.dark)) .sidebar-root .recent-thread-row[data-current='true'] { background: var(--mac-selected); }
+:root .sidebar-root .recent-thread-row[data-current='true'] .thread-row-title,
+:root .sidebar-root .recent-current-label { color: var(--mac-accent); font-weight: 600; }
+:root .sidebar-root .recent-thread-project { color: var(--mac-muted); }
+:root:is(.dark, :not(.dark)) .sidebar-root .project-group[data-current='true'] .project-header-row { background: var(--mac-accent-soft); }
+:root .sidebar-root .project-group[data-current='true'] .project-title { color: var(--mac-accent); font-weight: 600; }
 :root .sidebar-root .thread-row { border-radius: 12px; }
 :root:is(.dark, :not(.dark)) .content-grid-home { background: radial-gradient(ellipse at 50% 33%, var(--mac-accent-soft), transparent 62%); }
 :root .new-thread-hero-mark { display: grid; place-items: center; width: 60px; height: 60px; margin-bottom: 12px; border: 1px solid var(--mac-highlight); border-radius: 20px; background: linear-gradient(145deg, var(--mac-surface), var(--mac-accent-soft)); box-shadow: var(--mac-shadow-card); color: var(--mac-accent); }

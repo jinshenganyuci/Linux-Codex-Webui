@@ -71,6 +71,8 @@ const zhCN: Record<string, string> = {
   'Projects': '项目',
   'Pinned': '已固定',
   'Pinned chats': '已置顶',
+  'Recent chats': '最近对话',
+  'Current': '当前',
   'Archived': '已归档',
   'Archive chat': '归档聊天',
   'Conversation history': '历史对话',
