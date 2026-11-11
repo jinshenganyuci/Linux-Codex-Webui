@@ -746,6 +746,18 @@ body:has(.native-extension-backdrop) > .composer-dropdown-menu-wrap { z-index: 1
   @apply text-zinc-400;
 }
 
+:root.dark .model-reasoning-advanced button {
+  border-color: var(--mac-border-strong);
+  background: var(--mac-surface);
+  color: var(--mac-text);
+}
+
+:root.dark .model-reasoning-advanced button[aria-pressed='true'] {
+  border-color: var(--mac-accent);
+  background: var(--mac-accent-soft);
+  color: var(--mac-accent);
+}
+
 :root.dark .thread-composer-file-mention-row {
   @apply text-zinc-300 hover:bg-zinc-700;
 }

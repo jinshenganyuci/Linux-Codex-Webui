@@ -3670,6 +3670,7 @@ describe('provider model selection', () => {
       includeProviderModels: true,
       requireProviderModels: true,
       providerId: 'myproxy',
+      fallbackModelIds: ['proxy-default'],
     })
     expect(state.availableModelIds.value).toEqual([
       'proxy-default',
@@ -3680,6 +3681,39 @@ describe('provider model selection', () => {
     expect(state.readModelIdForThread('').trim()).toBe('proxy-default')
     expect(JSON.parse(window.localStorage.getItem('codex-web-local.selected-model-by-context.v1') ?? '{}')).toEqual({})
     expect(window.localStorage.getItem('codex-web-local.selected-model-id.v1')).toBe(null)
+  })
+
+  it('keeps the configured model effort range when custom provider discovery has no models', async () => {
+    installTestWindow()
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({ groups: [], nextCursor: null })
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([{ value: 'default', label: 'Default' }])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.getAccountRateLimits.mockResolvedValue(null)
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-6.1-sol',
+      providerId: 'custom',
+      reasoningEffort: 'ultra',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAvailableModels.mockResolvedValue(modelCapabilities({
+      id: 'gpt-6.1-sol',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      defaultReasoningEffort: 'low',
+    }))
+
+    const state = useDesktopState()
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+
+    expect(gatewayMocks.getAvailableModels).toHaveBeenCalledWith({
+      includeProviderModels: true,
+      requireProviderModels: true,
+      providerId: 'custom',
+      fallbackModelIds: ['gpt-6.1-sol'],
+    })
+    expect(state.availableModelIds.value).toEqual(['gpt-6.1-sol'])
+    expect(state.availableModelCapabilities.value['gpt-6.1-sol']?.supportedReasoningEfforts)
+      .toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+    expect(state.selectedReasoningEffort.value).toBe('ultra')
   })
 
   it('uses the CLI default instead of a stale provider-scoped new-thread model', async () => {

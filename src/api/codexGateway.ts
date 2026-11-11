@@ -2936,24 +2936,45 @@ async function fetchCodexModelCapabilities(): Promise<UiModelCapability[]> {
   return models
 }
 
-export async function getAvailableModels(options: { includeProviderModels?: boolean; requireProviderModels?: boolean; providerId?: string } = {}): Promise<UiModelCapability[]> {
+type AvailableModelsOptions = {
+  includeProviderModels?: boolean
+  requireProviderModels?: boolean
+  providerId?: string
+  fallbackModelIds?: string[]
+}
+
+export async function getAvailableModels(options: AvailableModelsOptions = {}): Promise<UiModelCapability[]> {
   const shouldIncludeProviderModels = options.includeProviderModels !== false
   const providerModels = shouldIncludeProviderModels ? await fetchProviderModelIds(options.providerId) : null
   const restrictToProviderModels = providerModels?.exclusive === true || options.requireProviderModels === true
+  const fallbackModelIds = [...new Set((options.fallbackModelIds ?? []).map((id) => id.trim()).filter(Boolean))]
 
-  if (restrictToProviderModels && !providerModels) return []
+  if (restrictToProviderModels && !providerModels && fallbackModelIds.length === 0) return []
 
   let codexModels: UiModelCapability[]
   try {
     codexModels = await fetchCodexModelCapabilities()
   } catch (error) {
-    if (!restrictToProviderModels || !providerModels) throw error
-    return providerModels.ids.map(id => providerModelCapability(id, providerModels.capabilities))
+    if (!restrictToProviderModels) throw error
+    return providerModels?.ids.map(id => providerModelCapability(id, providerModels.capabilities)) ?? []
   }
 
-  if (restrictToProviderModels && providerModels) {
+  if (restrictToProviderModels) {
     const codexModelById = new Map(codexModels.map((model) => [model.id, model]))
-    return providerModels.ids.map((id) => codexModelById.get(id) ?? providerModelCapability(id, providerModels.capabilities))
+    const models = providerModels?.ids.map((id) => codexModelById.get(id) ?? providerModelCapability(id, providerModels.capabilities)) ?? []
+    for (const id of fallbackModelIds) {
+      const model = codexModelById.get(id)
+      if (!model || models.some((candidate) => candidate.id === id)) continue
+      models.push({
+        ...model,
+        metadataSource: 'bundled',
+        supportsFastMode: false,
+        fastModeSupport: 'unknown',
+        fastServiceTier: null,
+        fastDescription: null,
+      })
+    }
+    return models
   }
 
   if (!shouldIncludeProviderModels || !providerModels) return codexModels
@@ -2964,7 +2985,7 @@ export async function getAvailableModels(options: { includeProviderModels?: bool
   return codexModels
 }
 
-export async function getAvailableModelIds(options: { includeProviderModels?: boolean; requireProviderModels?: boolean; providerId?: string } = {}): Promise<string[]> {
+export async function getAvailableModelIds(options: AvailableModelsOptions = {}): Promise<string[]> {
   return (await getAvailableModels(options)).map((model) => model.id)
 }
 

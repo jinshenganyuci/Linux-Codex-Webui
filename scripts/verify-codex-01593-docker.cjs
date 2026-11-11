@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-// Run against a prebuilt image containing the packed WebUI and @openai/codex@0.159.3.
-// Deliberately uses only localhost:13511, sequentially. Never stops an existing listener.
-// Playwright is needed for deterministic localStorage/theme setup and network observation.
 const assert = require('node:assert/strict')
 const { execFileSync } = require('node:child_process')
 const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs')
@@ -9,10 +6,10 @@ const { createServer } = require('node:net')
 const { tmpdir } = require('node:os')
 const { resolve } = require('node:path')
 
-const PORT = 13511
+const PORT = Number.parseInt(process.env.CODEX_DOCKER_TEST_PORT || '13511', 10)
 const BASE_URL = `http://127.0.0.1:${PORT}`
-const VERSION = '0.159.3'
-const PREFIX = 'codex-01593-docker'
+const VERSION = process.env.CODEX_DOCKER_TEST_VERSION || '0.159.3'
+const PREFIX = process.env.CODEX_DOCKER_TEST_PREFIX || 'codex-01593-docker'
 const image = process.env.CODEX_01593_DOCKER_IMAGE || 'linux-codex-webui-codex-01593:local'
 const output = resolve(__dirname, '../output/playwright')
 const nativeHistory = process.env.CODEX_01593_NATIVE_HISTORY !== '0'
@@ -303,10 +300,10 @@ async function verifyNativeHistory(thread) {
 
 async function main() {
   if (process.argv.includes('--help')) {
-    console.log(`CODEX_01593_DOCKER_IMAGE=<prebuilt-image> node scripts/verify-codex-01593-docker.cjs\nOnly ${BASE_URL}; it must be idle before running. No image build, service stop, or other port is performed.\nCODEX_01593_NATIVE_HISTORY=0 disables the extra real-CLI two-turn fork/revert test.\nReports: ${output}/${PREFIX}-report.json`)
+    console.log(`CODEX_01593_DOCKER_IMAGE=<prebuilt-image> CODEX_DOCKER_TEST_PORT=${PORT} CODEX_DOCKER_TEST_VERSION=${VERSION} node scripts/verify-codex-01593-docker.cjs\nOnly ${BASE_URL}; it must be idle before running. No image build, service stop, or other port is performed.\nCODEX_01593_NATIVE_HISTORY=0 disables the extra real-CLI two-turn fork/revert test.\nReports: ${output}/${PREFIX}-report.json`)
     return
   }
-  assert.equal(process.argv.length, 2, 'Only --help is accepted; port overrides are intentionally unsupported')
+  assert.equal(process.argv.length, 2, 'Only --help is accepted; use environment variables for port and version overrides')
   await assertPortFree()
   report.imageId = docker('image', 'inspect', image, '--format', '{{.Id}}')
   root = mkdtempSync(resolve(tmpdir(), 'codexui-01593-docker-'))
@@ -358,8 +355,13 @@ async function main() {
     await browser?.close()
     browser = undefined
     if (activeContainer) { docker('rm', '-f', activeContainer); activeContainer = undefined }
-    rmSync(root, { recursive: true, force: true })
-    root = undefined
+    try {
+      rmSync(root, { recursive: true, force: true })
+      root = undefined
+    } catch (error) {
+      report.retainedTempRoot = root
+      report.cleanupWarning = error.message
+    }
     saveReport()
   }
 }
@@ -367,7 +369,10 @@ async function main() {
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
   process.once(signal, () => {
     if (activeContainer) { try { docker('rm', '-f', activeContainer) } catch {} }
-    if (root) rmSync(root, { recursive: true, force: true })
+    if (root) {
+      try { rmSync(root, { recursive: true, force: true }) }
+      catch (error) { report.retainedTempRoot = root; report.cleanupWarning = error.message }
+    }
     report.status = 'interrupted'
     saveReport()
     process.exit(code)

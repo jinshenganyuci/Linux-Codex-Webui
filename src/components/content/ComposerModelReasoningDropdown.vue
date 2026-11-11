@@ -22,7 +22,12 @@
           </div>
           <ReasoningEffortSlider v-if="reasoningOptions.length" :key="selectedModel" :model-value="effectiveEffort" :options="reasoningOptions" :disabled="disabled"
             @preview="previewEffort = $event" @update:model-value="selectReasoning" />
-          <p v-else class="model-reasoning-empty">当前模型未提供可调强度</p>
+          <p v-else class="model-reasoning-empty">{{ t('Reasoning options unavailable') }}</p>
+          <div v-if="advancedReasoningOptions.length" class="model-reasoning-advanced" role="group" :aria-label="t('More reasoning')">
+            <span class="model-reasoning-advanced-label">{{ t('More reasoning') }}</span>
+            <button v-for="option in advancedReasoningOptions" :key="option.value" type="button"
+              :aria-pressed="effectiveEffort === option.value" :disabled="disabled" @click="selectReasoning(option.value)">{{ option.label }}</button>
+          </div>
         </div>
         <div v-else class="model-reasoning-model-menu">
           <div class="model-config-grabber" aria-hidden="true" />
@@ -65,7 +70,13 @@ const compactModelLabel = (label: string) => label.trim().replace(/^gpt[-\s]?/i,
 const compactSelectedModelLabel = computed(() => compactModelLabel(props.modelOptions.find(o => o.value === props.selectedModel)?.label || props.selectedModel || t('Model')))
 const resetEffort = computed(() => props.reasoningOptions.find(o => o.value === props.defaultReasoningEffort)?.value || '')
 const effectiveEffort = computed(() => props.reasoningOptions.find(o => o.value === props.selectedReasoningEffort)?.value || resetEffort.value || props.reasoningOptions[0]?.value || '')
-const selectedReasoningLabel = computed(() => props.reasoningOptions.find(o => o.value === effectiveEffort.value)?.label || t('Thinking'))
+const advancedReasoningOptions = computed(() => props.reasoningOptions.filter(o => o.value === 'max' || o.value === 'ultra'))
+const selectedReasoningLabel = computed(() => {
+  const catalogLabel = props.reasoningOptions.find(o => o.value === effectiveEffort.value)?.label
+  if (catalogLabel) return catalogLabel
+  const effort = props.selectedReasoningEffort
+  return effort ? t(effort === 'xhigh' ? 'Extra high' : `${effort[0].toUpperCase()}${effort.slice(1)}`) : t('Thinking')
+})
 const previewLabel = computed(() => props.reasoningOptions.find(o => o.value === previewEffort.value)?.label || selectedReasoningLabel.value)
 const isFastModeSelected = computed(() => props.selectedSpeedMode === 'fast' && props.isFastModeSupported)
 const triggerAccessibleLabel = computed(() => `${t('Model')}: ${compactSelectedModelLabel.value}, ${t('Reasoning')}: ${selectedReasoningLabel.value}`)
@@ -147,6 +158,12 @@ onBeforeUnmount(() => { listeners(false); observer?.disconnect(); cancelAnimatio
 .model-config-backdrop { position:fixed; inset:0; background:rgb(0 0 0 / 15%); }
 .model-config-grabber { display:none; }
 .model-reasoning-empty { font-size:13px; color:var(--mac-muted); text-align:center; }
+.model-reasoning-advanced { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:10px; }
+.model-reasoning-advanced-label { margin-right:auto; color:var(--mac-muted); font-size:11px; }
+.model-reasoning-advanced button { min-height:32px; padding:4px 10px; border:1px solid var(--mac-border-strong); border-radius:999px; background:var(--mac-surface); color:var(--mac-text); font-size:12px; cursor:pointer; }
+.model-reasoning-advanced button:hover { background:var(--mac-hover); }
+.model-reasoning-advanced button[aria-pressed='true'] { border-color:var(--mac-accent); background:var(--mac-accent-soft); color:var(--mac-accent); }
+.model-reasoning-advanced button:disabled { opacity:.5; cursor:default; }
 @media (max-width:767px) {
   .model-reasoning-trigger { min-height:44px; padding-inline:4px; font-size:14px; }
   .model-reasoning-trigger-model { color:var(--mac-text); font-weight:600; }
@@ -166,5 +183,6 @@ onBeforeUnmount(() => { listeners(false); observer?.disconnect(); cancelAnimatio
   .model-reasoning-option { padding:14px 16px; min-height:54px; font-size:17px; border-radius:0; background:var(--mac-hover); border-bottom:2px solid var(--mac-solid); }
   .model-reasoning-check { font-size:24px; }
   .model-config-done { min-height:50px; margin-top:20px; font-size:18px; }
+  .model-reasoning-advanced button { min-height:44px; padding-inline:14px; font-size:14px; }
 }
 </style>

@@ -640,6 +640,91 @@ describe('getAvailableModelIds', () => {
     expect(requests).toEqual(['/codex-api/provider-models', '/codex-api/rpc'])
   })
 
+  it('keeps only the configured model when provider discovery is empty and uses its CLI effort range', async () => {
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(String(input))
+      if (String(input) === '/codex-api/provider-models?provider=custom') {
+        return new Response(JSON.stringify({ data: [], exclusive: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      const body = typeof init?.body === 'string'
+        ? JSON.parse(init.body) as { method: string }
+        : { method: '' }
+      expect(body.method).toBe('model/list')
+      return new Response(JSON.stringify({
+        result: {
+          data: [
+            {
+              id: 'gpt-6.1-sol',
+              supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map((reasoningEffort) => ({ reasoningEffort })),
+              defaultReasoningEffort: 'low',
+              serviceTiers: [{ id: 'priority', name: 'Fast' }],
+            },
+            { id: 'gpt-6-luna', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] },
+          ],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    const models = await getAvailableModels({
+      includeProviderModels: true,
+      requireProviderModels: true,
+      providerId: 'custom',
+      fallbackModelIds: ['gpt-6.1-sol'],
+    })
+
+    expect(models).toHaveLength(1)
+    expect(models[0]).toMatchObject({
+      id: 'gpt-6.1-sol',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      metadataSource: 'bundled',
+      reasoningSupport: 'supported',
+      supportsFastMode: false,
+      fastModeSupport: 'unknown',
+    })
+    expect(requests).toEqual(['/codex-api/provider-models?provider=custom', '/codex-api/rpc'])
+  })
+
+  it('uses only CLI-supported Luna efforts if provider discovery is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/codex-api/provider-models?provider=custom') {
+        return new Response(JSON.stringify({ error: 'provider discovery unavailable' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({
+        result: {
+          data: [{
+            id: 'gpt-6-luna',
+            supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'].map((reasoningEffort) => ({ reasoningEffort })),
+            defaultReasoningEffort: 'medium',
+          }],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    const models = await getAvailableModels({
+      includeProviderModels: true,
+      requireProviderModels: true,
+      providerId: 'custom',
+      fallbackModelIds: ['gpt-6-luna'],
+    })
+
+    expect(models).toHaveLength(1)
+    expect(models[0]?.supportedReasoningEfforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+    expect(models[0]?.supportedReasoningEfforts).not.toContain('ultra')
+  })
+
   it('keeps explicit provider models when capability lookup fails', async () => {
     const requests: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

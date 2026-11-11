@@ -992,22 +992,20 @@ const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.
 const DRAFT_STORAGE_PREFIX = 'codex-web-local.thread-draft.v1.'
 let lastActiveThreadId = ''
 
-const fallbackReasoningEfforts: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
 const reasoningEffortLabels: Record<ReasoningEffort, string> = {
   none: 'None',
   minimal: 'Minimal',
   low: 'Low',
   medium: 'Medium',
   high: 'High',
-  xhigh: 'XHigh',
+  xhigh: 'Extra high',
   max: 'Max',
   ultra: 'Ultra',
 }
 const reasoningOptions = computed<Array<{ value: ReasoningEffort; label: string }>>(() => {
-  const supported = props.modelCapabilities?.[props.selectedModel]?.supportedReasoningEfforts ?? []
   const capability = props.modelCapabilities?.[props.selectedModel]
-  const efforts = capability?.reasoningSupport === 'unsupported' ? [] : supported.length > 0 ? supported : fallbackReasoningEfforts
-  const chinese: Record<ReasoningEffort, string> = { none: '关闭', minimal: '最小', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: '最高', ultra: 'Ultra' }
+  const efforts = capability?.supportedReasoningEfforts ?? []
+  const chinese: Record<ReasoningEffort, string> = { none: '关闭', minimal: '最小', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: 'Max', ultra: 'Ultra' }
   return [...new Set(efforts)].sort((a, b) => Object.keys(reasoningEffortLabels).indexOf(a) - Object.keys(reasoningEffortLabels).indexOf(b)).map((value) => ({ value, label: uiLanguage.value === 'zh-CN' ? chinese[value] : reasoningEffortLabels[value] }))
 })
 function formatModelLabel(modelId: string): string {

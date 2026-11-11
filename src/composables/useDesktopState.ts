@@ -2718,11 +2718,13 @@ export function useDesktopState() {
     includeProviderModels: boolean
     requireProviderModels: boolean
     providerId?: string
+    fallbackModelIds?: string[]
   }): Promise<UiModelCapability[]> {
     const key = JSON.stringify([
       options.includeProviderModels,
       options.requireProviderModels,
       options.providerId?.trim() ?? '',
+      options.fallbackModelIds ?? [],
     ])
     if (
       key === lastModelCatalogKey
@@ -2911,6 +2913,14 @@ export function useDesktopState() {
       const targetProviderId = readProviderIdForThread(selectedThreadId.value)
       const isProviderBacked = targetProviderId !== 'codex'
       const isNewThreadContext = selectedThreadId.value.trim().length === 0
+      const fallbackModelIds = isProviderBacked && targetProviderId === normalizedProviderId
+        ? [...new Set([
+            isNewThreadContext
+              ? newChatDefaultModelId.value
+              : readThreadModelPreference(selectedThreadId.value)?.model || readModelIdForThread(selectedThreadId.value),
+            normalizedConfiguredModelId,
+          ].map((modelId) => modelId.trim()).filter(Boolean))]
+        : []
       if (isNewThreadContext && options?.providerChanged) {
         newThreadSelectionInitialized = false
         newThreadDraftModelId.value = ''
@@ -2921,6 +2931,7 @@ export function useDesktopState() {
         includeProviderModels: isProviderBacked || options?.includeProviderModels !== false,
         requireProviderModels: isProviderBacked,
         providerId: isProviderBacked ? targetProviderId : undefined,
+        ...(fallbackModelIds.length > 0 ? { fallbackModelIds } : {}),
       })
       if (selectedThreadId.value !== selectedThreadAtRequest || selectionRevision !== selectionAtRequest) return
       // Catalog loading can finish after a manual selection; read the current preference now.

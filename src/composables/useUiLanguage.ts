@@ -1002,6 +1002,8 @@ const zhCN: Record<string, string> = {
   'Faster service tier; availability and usage depend on your provider.': '更快的服务档位；可用性和用量由服务商决定。',
   'CLI bundled metadata; provider support is not verified.': '能力来自当前 CLI 随附目录；尚未验证服务商是否支持。',
   'Model capabilities are unknown; settings require provider support.': '模型能力未知；所选参数仍需服务商支持。',
+  'Reasoning options unavailable': '尚未获取当前模型的可选推理强度',
+  'More reasoning': '更多推理强度',
   'Capabilities reported by the running Codex CLI; account restrictions may apply.': '能力由当前 Codex CLI 提供；仍受账号权限限制。',
   'Waiting': '等待',
   'Optional input · task continues': '可稍后回答 · 任务继续运行',

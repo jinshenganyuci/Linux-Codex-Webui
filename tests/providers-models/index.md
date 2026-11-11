@@ -11,6 +11,7 @@ Return to the [manual test index](../../tests.md).
 | [Codex 0.159.3 运行时诊断与临时能力开关](codex-01593-runtime-diagnostics.md) |
 | [Codex 0.153.4 运行身份与 Astra 能力来源](codex-01534-runtime-and-astra.md) |
 | [Feature: Persistent per-thread model and reasoning selection](per-thread-model-selection.md) |
+| [自定义提供商的推理强度遵循 CLI 模型目录](custom-provider-reasoning-efforts-match-cli.md) |
 | [Feature: Codex.app Thread Provider Filter Patch (fix-codex-thread-filter.sh)](codex-app-thread-provider-filter-patch-fix-codex-thread-filter-sh.md) |
 | [Default send mode, chat width, and Codex-only provider](default-send-chat-width-and-codex-only-provider.md) |
 | [Model List Search / Filter](model-list-search-filter.md) |

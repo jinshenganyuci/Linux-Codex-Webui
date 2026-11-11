@@ -1134,7 +1134,7 @@ import {
   switchAccount,
 } from './api/codexGateway'
 import { getThreadIndexStatus, type ThreadIndexStatus, type ThreadSearchResult } from './api/projectGateway'
-import { REASONING_EFFORT_VALUES, type CodexPermissionMode, type ReasoningEffort, type SpeedMode, type UiAccountEntry, type UiRateLimitWindow, type UiServerRequest, type UiServerRequestReply, type UiThreadAutomation } from './types/codex'
+import type { CodexPermissionMode, ReasoningEffort, SpeedMode, UiAccountEntry, UiRateLimitWindow, UiServerRequest, UiServerRequestReply, UiThreadAutomation } from './types/codex'
 import type { ComposerDraftPayload, SubmitPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
 import type { GitCommitFileChange, GitCommitOption, LocalDirectoryEntry, TelegramStatus, ThreadTerminalQuickCommand, WorktreeBranchOption } from './api/codexGateway'
 import { getPathLeafName, getPathParent, isProjectlessChatPath, normalizePathForUi } from './pathUtils.js'
@@ -1639,8 +1639,12 @@ const newChatDefaultReasoningModelId = computed(() => {
   return availableModelIds.value[0] ?? ''
 })
 const newChatDefaultReasoningOptions = computed(() => {
-  const supported = availableModelCapabilities.value[newChatDefaultReasoningModelId.value]?.supportedReasoningEfforts ?? []
-  const efforts = supported.length > 0 ? supported : [...REASONING_EFFORT_VALUES]
+  const capability = availableModelCapabilities.value[newChatDefaultReasoningModelId.value]
+  const supported = capability?.supportedReasoningEfforts ?? []
+  const savedEffort = newChatDefaultReasoningEffort.value
+  const efforts = supported.length === 0 && (!capability || capability.reasoningSupport === 'unknown') && savedEffort
+    ? [savedEffort]
+    : supported
   const labels: Record<ReasoningEffort, string> = {
     none: t('None'),
     minimal: t('Minimal'),
