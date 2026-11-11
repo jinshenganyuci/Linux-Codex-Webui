@@ -890,6 +890,7 @@
                 />
                 <ThreadComposer ref="homeThreadComposerRef" :active-thread-id="composerThreadContextId"
                   :cwd="composerCwd"
+                  :chat-search-groups="projectGroups"
                   :collaboration-modes="availableCollaborationModes"
                   :selected-collaboration-mode="selectedCollaborationMode"
                   :models="availableModelIds" :model-capabilities="availableModelCapabilities" :selected-model="composerSelectedModelId"
@@ -993,6 +994,7 @@
                     @open-native-extensions="nativeExtensionsOpen = true"
                     :active-thread-id="composerThreadContextId"
                     :cwd="composerCwd"
+                    :chat-search-groups="projectGroups"
                     :collaboration-modes="availableCollaborationModes"
                     :selected-collaboration-mode="selectedCollaborationMode"
                     :models="availableModelIds"
@@ -1019,6 +1021,7 @@
                     @update:selected-reasoning-effort="onSelectReasoningEffort"
                     @update:selected-speed-mode="onSelectSpeedMode"
                     @update:selected-codex-permission-mode="onSelectCodexPermissionMode"
+                    @copy-last-response="onCopyLastResponse"
                     @interrupt="onInterruptTurn">
                     <template #session-controls>
                       <NativeThreadControls ref="nativeControlsRef"
@@ -1073,6 +1076,7 @@ import ProjectZipExportModal from './components/app/ProjectZipExportModal.vue'
 import SidebarThreadTree from './components/sidebar/SidebarThreadTree.vue'
 import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
+import { lastCompletedResponseText } from './components/content/lastCompletedResponse'
 import ThreadPendingRequestPanel from './components/content/ThreadPendingRequestPanel.vue'
 import QueuedMessages from './components/content/QueuedMessages.vue'
 import NativeThreadControls from './components/content/NativeThreadControls.vue'
@@ -2355,6 +2359,16 @@ async function onCopyThreadChat(threadId: string): Promise<void> {
   await copySelectedThreadChat()
 }
 
+async function onCopyLastResponse(): Promise<void> {
+  const responseText = lastCompletedResponseText(filteredMessages.value)
+  if (!responseText) return
+  try {
+    await copyTextToClipboard(responseText)
+  } catch {
+    desktopError.value = t('Could not copy the last response')
+  }
+}
+
 function shortAccountId(accountId: string): string {
   return accountId.length > 8 ? accountId.slice(-8) : accountId
 }
@@ -3258,6 +3272,7 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
       payload.collaborationModeOverride,
       payload.collaborationModeDeveloperInstructions,
       payload.persistCollaborationMode,
+      payload.mentions,
     )
     return
   }
@@ -3271,6 +3286,7 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
     payload.collaborationModeOverride,
     undefined,
     payload.collaborationModeDeveloperInstructions,
+    payload.mentions,
   ).then(() => payload.acknowledge?.(true)).catch((error: unknown) => {
     desktopError.value = error instanceof Error ? error.message : '消息未确认接收，请检查后重试。'
     if (nativeThreadControls.state.threadId === submittedThreadId) nativeThreadControls.state.error = desktopError.value
@@ -3297,6 +3313,7 @@ function onEditQueuedMessage(messageId: string): void {
     imageUrls: [...message.imageUrls],
     fileAttachments: message.fileAttachments.map((attachment) => ({ ...attachment })),
     skills: message.skills.map((skill) => ({ ...skill })),
+    mentions: message.mentions?.map((mention) => ({ ...mention })) ?? [],
   }
   composer.hydrateDraft(payload)
   removeQueuedMessage(messageId)
@@ -4413,6 +4430,7 @@ async function submitFirstMessageForNewThread(
   collaborationModeOverride?: 'default' | 'plan',
   collaborationModeDeveloperInstructions?: string,
   persistCollaborationModeOverride?: boolean,
+  mentions: Array<{ name: string; path: string }> = [],
 ): Promise<void> {
   let didStartThreadRequest = false
   beginPendingNewThreadPreview(text, imageUrls, skills, fileAttachments)
@@ -4454,6 +4472,7 @@ async function submitFirstMessageForNewThread(
       collaborationModeOverride,
       collaborationModeDeveloperInstructions,
       persistCollaborationModeOverride,
+      mentions,
     )
     if (!threadId) return
     await router.replace({ name: 'thread', params: { threadId } })

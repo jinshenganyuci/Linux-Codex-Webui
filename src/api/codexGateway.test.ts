@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getArchivedThreadsPage, getAvailableModelIds, getAvailableModels, getFullThreadCommandOutput, getNewChatDefaults, getOlderThreadMessages, getPinnedThreadState, getSidebarLayoutPreferences, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, listThreadItems, patchNewChatDefaults, patchSidebarLayoutPreferences, permanentlyDeleteThread, persistPinnedThreadIds, persistThreadModelPreference, persistThreadSpeedMode, resumeThread, startThread, startThreadTurn, startThreadWithTurn, unarchiveThread } from './codexGateway'
+import { buildNativeTurnInput, getArchivedThreadsPage, getAvailableModelIds, getAvailableModels, getFullThreadCommandOutput, getNewChatDefaults, getOlderThreadMessages, getPinnedThreadState, getSidebarLayoutPreferences, getThreadDetail, getThreadModelPreferences, listDirectoryComposioConnectors, listThreadItems, patchNewChatDefaults, patchSidebarLayoutPreferences, permanentlyDeleteThread, persistPinnedThreadIds, persistThreadModelPreference, persistThreadSpeedMode, resumeThread, startThread, startThreadTurn, startThreadWithTurn, unarchiveThread } from './codexGateway'
 
 function mockRpcFetch(): { requests: Array<{ method: string, params: Record<string, unknown> }> } {
   const requests: Array<{ method: string, params: Record<string, unknown> }> = []
@@ -140,6 +140,40 @@ describe('startThreadTurn collaboration mode payloads', () => {
     })
   })
 
+  it('sends chat references as structured mention inputs', async () => {
+    const { requests } = mockRpcFetch()
+
+    await startThreadTurn(
+      'thread-1',
+      'Compare with the previous chat',
+      [],
+      'gpt-5.5',
+      'medium',
+      undefined,
+      [],
+      'default',
+      null,
+      undefined,
+      [{ name: 'Architecture review', path: 'thread://thread-123?hostId=local' }],
+    )
+
+    expect(requests[0].params.input).toEqual([
+      { type: 'text', text: 'Compare with the previous chat' },
+      { type: 'mention', name: 'Architecture review', path: 'thread://thread-123?hostId=local' },
+    ])
+  })
+
+  it('keeps chat references in native steer and queue inputs', async () => {
+    const input = await buildNativeTurnInput('Compare', [], [], [], [
+      { name: 'Architecture review', path: 'thread://thread-123?hostId=local' },
+    ])
+
+    expect(input).toEqual([
+      { type: 'text', text: 'Compare' },
+      { type: 'mention', name: 'Architecture review', path: 'thread://thread-123?hostId=local' },
+    ])
+  })
+
   it('starts a new thread and first turn through one backend request', async () => {
     const requests: Array<{ url: string, body: Record<string, unknown> }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -160,7 +194,9 @@ describe('startThreadTurn collaboration mode payloads', () => {
       })
     }))
 
-    const started = await startThreadWithTurn('/repo', 'hello', [], 'gpt-5.5', 'medium', undefined, [], 'default', 'fast')
+    const started = await startThreadWithTurn('/repo', 'hello', [], 'gpt-5.5', 'medium', undefined, [], 'default', 'fast', undefined, [
+      { name: 'Architecture review', path: 'thread://thread-123?hostId=local' },
+    ])
 
     expect(started).toEqual({
       threadId: 'thread-atomic',
@@ -189,6 +225,11 @@ describe('startThreadTurn collaboration mode payloads', () => {
           },
         },
       },
+    })
+    expect((requests[0].body.turn as { input: unknown[] }).input).toContainEqual({
+      type: 'mention',
+      name: 'Architecture review',
+      path: 'thread://thread-123?hostId=local',
     })
   })
 })

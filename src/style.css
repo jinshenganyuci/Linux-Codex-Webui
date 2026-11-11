@@ -598,6 +598,44 @@ body:has(.native-extension-backdrop) > .composer-dropdown-menu-wrap { z-index: 1
   @apply text-zinc-300 hover:bg-zinc-700;
 }
 
+:root.dark .thread-composer-attach-search-header {
+  @apply border-zinc-600 bg-zinc-900;
+}
+
+:root.dark .thread-composer-attach-search-back {
+  @apply text-zinc-300 hover:bg-zinc-700;
+}
+
+:root.dark .thread-composer-attach-search-input {
+  @apply text-zinc-100 placeholder:text-zinc-500;
+}
+
+:root.dark .thread-composer-attach-search-result {
+  @apply text-zinc-200 hover:bg-zinc-700;
+}
+
+:root.dark .thread-composer-attach-search-result.is-active {
+  @apply bg-zinc-700;
+}
+
+:root.dark .thread-composer-attach-search-result-icon,
+:root.dark .thread-composer-attach-search-result-dir,
+:root.dark .thread-composer-attach-search-status {
+  @apply text-zinc-400;
+}
+
+:root.dark .thread-composer-attach-search-chat-icon {
+  @apply text-sky-300;
+}
+
+:root.dark .thread-composer-chat-chip {
+  @apply border-sky-700 bg-sky-900/40 text-sky-200;
+}
+
+:root.dark .thread-composer-chat-chip-remove {
+  @apply text-sky-300 hover:text-white;
+}
+
 :root.dark .thread-composer-attach-separator {
   @apply bg-zinc-700;
 }
@@ -686,6 +724,26 @@ body:has(.native-extension-backdrop) > .composer-dropdown-menu-wrap { z-index: 1
 
 :root.dark .thread-composer-autocomplete-footer {
   @apply border-zinc-700 text-zinc-500;
+}
+
+:root.dark .thread-composer-prompt-history {
+  @apply border-zinc-600 bg-zinc-800;
+}
+
+:root.dark .thread-composer-prompt-history-input {
+  @apply border-zinc-600 bg-zinc-900 text-zinc-100 placeholder:text-zinc-500 focus:border-sky-400;
+}
+
+:root.dark .thread-composer-prompt-history-row {
+  @apply text-zinc-200 hover:bg-zinc-700;
+}
+
+:root.dark .thread-composer-prompt-history-row.is-active {
+  @apply bg-zinc-700;
+}
+
+:root.dark .thread-composer-prompt-history-empty {
+  @apply text-zinc-400;
 }
 
 :root.dark .thread-composer-file-mention-row {
@@ -942,6 +1000,10 @@ body:has(.native-extension-backdrop) > .composer-dropdown-menu-wrap { z-index: 1
 
 :root.dark .message-file-chip {
   @apply border-zinc-600 bg-zinc-700 text-zinc-300;
+}
+
+:root.dark .message-chat-chip {
+  @apply border-sky-700 bg-sky-900/40 text-sky-200 hover:bg-sky-900/60;
 }
 
 :root.dark .conversation-loading,

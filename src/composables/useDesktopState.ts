@@ -103,6 +103,7 @@ import type {
   UiThreadTokenUsage,
   UiTokenUsageBreakdown,
   UiThread,
+  UiThreadMention,
   UiTurnProgress,
   ThreadHistoryMode,
 } from '../types/codex'
@@ -809,6 +810,11 @@ function arePlanDataEqual(first?: UiPlanData, second?: UiPlanData): boolean {
 
 
 
+function isActiveWriterConflictError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /already has an active writer/iu.test(message)
+}
+
 function areMessageFieldsEqual(first: UiMessage, second: UiMessage): boolean {
   if (first.renderKey !== second.renderKey || first.timelineOrder !== second.timelineOrder) return false
   return (
@@ -817,6 +823,7 @@ function areMessageFieldsEqual(first: UiMessage, second: UiMessage): boolean {
     first.text === second.text &&
     first.timestampIso === second.timestampIso &&
     areStringArraysEqual(first.images, second.images) &&
+    areThreadMentionsEqual(first.mentions, second.mentions) &&
     areUiFileChangesEqual(first.fileChanges, second.fileChanges) &&
     first.fileChangeStatus === second.fileChangeStatus &&
     first.messageType === second.messageType &&
@@ -829,6 +836,14 @@ function areMessageFieldsEqual(first: UiMessage, second: UiMessage): boolean {
     first.isAutomationRun === second.isAutomationRun &&
     first.automationDisplayName === second.automationDisplayName
   )
+}
+
+function areThreadMentionsEqual(first?: UiThreadMention[], second?: UiThreadMention[]): boolean {
+  const left = first ?? []
+  const right = second ?? []
+  return left.length === right.length && left.every((mention, index) => (
+    mention.name === right[index]?.name && mention.path === right[index]?.path
+  ))
 }
 
 function areMessageArraysEqual(first: UiMessage[], second: UiMessage[]): boolean {
@@ -1624,6 +1639,7 @@ export function useDesktopState() {
     text: string
     imageUrls: string[]
     skills: Array<{ name: string; path: string }>
+    mentions?: UiThreadMention[]
     fileAttachments: FileAttachment[]
     collaborationMode: CollaborationModeKind
     speedMode?: SpeedMode
@@ -1704,6 +1720,7 @@ export function useDesktopState() {
   const hasMoreOlderMessagesByThreadId = ref<Record<string, boolean>>({})
   const loadingOlderMessagesByThreadId = ref<Record<string, boolean>>({})
   const resumedThreadById = ref<Record<string, boolean>>({})
+  const activeWriterReadOnlyThreadIds = new Set<string>()
   const turnIndexByTurnIdByThreadId = ref<Record<string, Record<string, number>>>({})
   const turnSummaryByThreadId = ref<Record<string, TurnSummaryState>>({})
   const turnActivityByThreadId = ref<Record<string, TurnActivityState>>({})
@@ -3215,6 +3232,9 @@ export function useDesktopState() {
     hasMoreOlderMessagesByThreadId.value = pruneThreadStateMap(hasMoreOlderMessagesByThreadId.value, activeThreadIds)
     loadingOlderMessagesByThreadId.value = pruneThreadStateMap(loadingOlderMessagesByThreadId.value, activeThreadIds)
     resumedThreadById.value = pruneThreadStateMap(resumedThreadById.value, activeThreadIds)
+    for (const threadId of activeWriterReadOnlyThreadIds) {
+      if (!activeThreadIds.has(threadId)) activeWriterReadOnlyThreadIds.delete(threadId)
+    }
     turnIndexByTurnIdByThreadId.value = pruneThreadStateMap(turnIndexByTurnIdByThreadId.value, activeThreadIds)
     persistedMessagesByThreadId.value = pruneThreadStateMap(persistedMessagesByThreadId.value, activeThreadIds)
     requestUserInputSummariesByThreadId.value = pruneThreadStateMap(
@@ -4064,6 +4084,7 @@ export function useDesktopState() {
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
     turnId?: string,
+    mentions: UiThreadMention[] = [],
   ): string {
     const existing = persistedMessagesByThreadId.value[threadId] ?? []
     const nextMessage: UiMessage = {
@@ -4075,6 +4096,7 @@ export function useDesktopState() {
       timestampIso: new Date().toISOString(),
       images: imageUrls.length > 0 ? [...imageUrls] : undefined,
       skills: skills.length > 0 ? skills.map((skill) => ({ name: skill.name, path: skill.path })) : undefined,
+      mentions: mentions.length > 0 ? mentions.map((mention) => ({ ...mention })) : undefined,
       fileAttachments: fileAttachments.length > 0 ? fileAttachments.map((file) => ({ ...file })) : undefined,
       messageType: 'userMessage.optimistic',
     }
@@ -6302,6 +6324,7 @@ export function useDesktopState() {
         text: message.text,
         imageUrls: [...message.imageUrls],
         skills: message.skills.map((skill) => ({ name: skill.name, path: skill.path })),
+        ...(message.mentions?.length ? { mentions: message.mentions.map((mention) => ({ ...mention })) } : {}),
         fileAttachments: message.fileAttachments.map((attachment) => ({
           label: attachment.label,
           path: attachment.path,
@@ -6443,8 +6466,9 @@ export function useDesktopState() {
       void loadRequestUserInputHistoryForThread(threadId)
       void loadPlanSummaryHistoryForThread(threadId)
       const historyMode = await resolveThreadHistoryMode(threadId)
+      const readHistoryMode = activeWriterReadOnlyThreadIds.has(threadId) ? 'legacy' : historyMode
       if (loadGeneration !== messageLoadGeneration || mutationRevision !== (historyMutationRevisionByThreadId.get(threadId) ?? 0) || isThreadDeleted(threadId)) return
-      invalidateThreadHistoryCache(threadId, historyMode)
+      invalidateThreadHistoryCache(threadId, readHistoryMode)
       const alreadyLoaded = loadedMessagesByThreadId.value[threadId] === true
       const version = currentThreadVersion(threadId)
       const loadedVersion = loadedVersionByThreadId.value[threadId] ?? ''
@@ -6468,18 +6492,26 @@ export function useDesktopState() {
       }
 
       const currentHistoryState = threadHistoryStateById.value[threadId]
-      const detail = historyMode === 'paginated' && currentHistoryState?.initialized === true
-        ? {
-            ...(await getOlderThreadHistoryPage(threadId, {
-              historyMode: 'paginated',
-              cursor: null,
-            })),
-            model: '',
-            modelProvider: '',
-            resumed: false,
-            materialized: currentHistoryState.materialized,
-          }
-        : await getThreadHistoryDetail(threadId, historyMode)
+      let detail: Awaited<ReturnType<typeof getThreadHistoryDetail>>
+      try {
+        detail = readHistoryMode === 'paginated' && currentHistoryState?.initialized === true
+          ? {
+              ...(await getOlderThreadHistoryPage(threadId, {
+                historyMode: 'paginated',
+                cursor: null,
+              })),
+              model: '',
+              modelProvider: '',
+              resumed: false,
+              materialized: currentHistoryState.materialized,
+            }
+          : await getThreadHistoryDetail(threadId, readHistoryMode)
+      } catch (unknownError) {
+        if (readHistoryMode !== 'paginated' || !isActiveWriterConflictError(unknownError)) throw unknownError
+        activeWriterReadOnlyThreadIds.add(threadId)
+        invalidateThreadHistoryCache(threadId, 'legacy')
+        detail = await getThreadHistoryDetail(threadId, 'legacy')
+      }
 
       if (loadGeneration !== messageLoadGeneration || mutationRevision !== (historyMutationRevisionByThreadId.get(threadId) ?? 0) || isThreadDeleted(threadId)) return
 
@@ -6506,6 +6538,7 @@ export function useDesktopState() {
         },
       }
       if (detail.materialized) {
+        activeWriterReadOnlyThreadIds.delete(threadId)
         resumedThreadById.value = {
           ...resumedThreadById.value,
           [threadId]: true,
@@ -7118,9 +7151,10 @@ export function useDesktopState() {
     imageUrls: string[] = [],
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
+    mentions: UiThreadMention[] = [],
   ): Promise<boolean> {
     if (!threadId || !text.trim()) return false
-    if (imageUrls.length > 0 || skills.length > 0 || fileAttachments.length > 0) return false
+    if (imageUrls.length > 0 || skills.length > 0 || fileAttachments.length > 0 || mentions.length > 0) return false
 
     const requests = pendingServerRequestsByThreadId.value[threadId] ?? []
     const userInputRequests = requests.filter((request) => request.method === 'item/tool/requestUserInput' && isBlockingServerRequest(request))
@@ -7153,17 +7187,19 @@ export function useDesktopState() {
     collaborationModeOverride?: CollaborationModeKind,
     speedModeOverride?: SpeedMode,
     collaborationModeDeveloperInstructions?: string,
+    mentions: UiThreadMention[] = [],
   ): Promise<void> {
     if (isUpdatingSpeedMode.value) return
 
     const threadId = selectedThreadId.value
     const nextText = text.trim()
-    if (!threadId || (!nextText && imageUrls.length === 0 && fileAttachments.length === 0)) return
+    if (!threadId || (!nextText && imageUrls.length === 0 && fileAttachments.length === 0 && mentions.length === 0)) return
     await ensureComposerReady()
     if (selectedThreadId.value !== threadId || isThreadDeleted(threadId)) return
     const speedMode = speedModeOverride ?? selectedSpeedMode.value
+    const mentionArgs: [UiThreadMention[]] | [] = mentions.length > 0 ? [mentions] : []
 
-    if (await maybeReplyToPendingUserInputRequest(threadId, nextText, imageUrls, skills, fileAttachments)) {
+    if (await maybeReplyToPendingUserInputRequest(threadId, nextText, imageUrls, skills, fileAttachments, mentions)) {
       return
     }
 
@@ -7176,7 +7212,7 @@ export function useDesktopState() {
       if (nativeState.mode === 'native') {
         if (!capabilities.queue) throw new Error('当前 CLI 不支持已启用的原生队列，不会转交旧队列或自动重发。')
         if (collaborationModeDeveloperInstructions?.trim()) throw new Error('原生队列不保存一次性规划指令，请等待当前回合结束后发送。')
-        const input = await buildNativeTurnInput(nextText, imageUrls, skills, fileAttachments)
+        const input = await buildNativeTurnInput(nextText, imageUrls, skills, fileAttachments, ...mentionArgs)
         await nativeThreadControls.enqueue(input, threadId)
         return
       }
@@ -7191,6 +7227,7 @@ export function useDesktopState() {
         text: nextText,
         imageUrls,
         skills,
+        mentions,
         fileAttachments,
         collaborationMode: collaborationModeOverride === 'plan'
           ? 'plan'
@@ -7224,8 +7261,8 @@ export function useDesktopState() {
           expectedTurnId = runtime.find(row => row.threadId === threadId && row.isRunning)?.turnId ?? ''
         }
         if (!expectedTurnId) throw new Error('当前回合尚未确认或已经结束，请等待状态更新后重新发送。')
-        optimisticId = appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments, expectedTurnId)
-        await steerThreadTurn(threadId, expectedTurnId, nextText, imageUrls, skills, fileAttachments)
+        optimisticId = appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments, expectedTurnId, mentions)
+        await steerThreadTurn(threadId, expectedTurnId, nextText, imageUrls, skills, fileAttachments, ...mentionArgs)
         shouldAutoScrollOnNextAgentEvent = selectedThreadId.value === threadId
         pendingThreadMessageRefresh.add(threadId)
         if (eventSyncTimer === null && typeof window !== 'undefined') {
@@ -7248,7 +7285,7 @@ export function useDesktopState() {
 
     visibleMessageLoadOwnerThreadId = ''
     isLoadingMessages.value = false
-    appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments)
+    appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments, undefined, mentions)
 
     if (isInProgress) {
       shouldAutoScrollOnNextAgentEvent = true
@@ -7262,6 +7299,7 @@ export function useDesktopState() {
         collaborationModeOverride,
         speedMode,
         collaborationModeDeveloperInstructions,
+        mentions,
       ).catch((unknownError) => {
         optimisticTurnStartedAtByThreadId.delete(threadId)
         const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
@@ -7308,6 +7346,7 @@ export function useDesktopState() {
         collaborationModeOverride,
         speedMode,
         collaborationModeDeveloperInstructions,
+        mentions,
       )
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false
@@ -7330,16 +7369,18 @@ export function useDesktopState() {
     collaborationModeOverride?: CollaborationModeKind,
     collaborationModeDeveloperInstructions?: string,
     persistCollaborationModeOverride?: boolean,
+    mentions: UiThreadMention[] = [],
   ): Promise<string> {
     if (isUpdatingSpeedMode.value) return ''
 
     const nextText = text.trim()
     const targetCwd = cwd.trim()
+    const mentionArgs: [UiThreadMention[]] | [] = mentions.length > 0 ? [mentions] : []
     const selectedContextAtSend = selectedThreadId.value
     const selectionAtSend = selectionRevision
-    if (!nextText && imageUrls.length === 0 && fileAttachments.length === 0) return ''
+    if (!nextText && imageUrls.length === 0 && fileAttachments.length === 0 && mentions.length === 0) return ''
 
-    beginPendingNewThreadPreview(nextText, imageUrls, skills, fileAttachments)
+    beginPendingNewThreadPreview(nextText || mentions[0]?.name || '', imageUrls, skills, fileAttachments)
     isSendingMessage.value = true
     error.value = ''
     let threadId = ''
@@ -7370,6 +7411,7 @@ export function useDesktopState() {
         selectedMode,
         serviceTierForSpeedMode(speedMode, selectedModel),
         collaborationModeDeveloperInstructions,
+        ...mentionArgs,
       )
       threadId = startedThread.threadId
       const startedTurnId = startedThread.turnId
@@ -7391,8 +7433,8 @@ export function useDesktopState() {
       )
       if (!threadId) return ''
 
-      insertOptimisticThread(threadId, targetCwd, nextText || '[Image]')
-      appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments)
+      insertOptimisticThread(threadId, targetCwd, nextText || mentions[0]?.name || '[Image]')
+      appendOptimisticUserMessage(threadId, nextText, imageUrls, skills, fileAttachments, undefined, mentions)
       setPendingTurnRequest(threadId, { effort: selectedEffort, collaborationMode: selectedMode, speedMode })
       blockInterruptUntilThreadIsPersisted(threadId)
       resumedThreadById.value = {
@@ -7463,8 +7505,10 @@ export function useDesktopState() {
     collaborationModeOverride?: CollaborationModeKind,
     speedModeOverride?: SpeedMode,
     collaborationModeDeveloperInstructions?: string,
+    mentions: UiThreadMention[] = [],
   ): Promise<void> {
     const reasoningEffort = selectedReasoningEffort.value
+    const mentionArgs: [UiThreadMention[]] | [] = mentions.length > 0 ? [mentions] : []
     const speedMode = speedModeOverride ?? readSpeedModeForThread(threadId)
     const collaborationMode = collaborationModeOverride === 'plan' ? 'plan' : collaborationModeOverride === 'default'
       ? 'default'
@@ -7496,6 +7540,7 @@ export function useDesktopState() {
       }
       if (resumedThreadById.value[threadId] !== true) {
         const resumedThread = await resumeThread(threadId)
+        activeWriterReadOnlyThreadIds.delete(threadId)
         if (resumedThread.model && !readThreadModelPreference(threadId) && !hasCachedThreadModelSelection(threadId)) {
           setThreadModelId(threadId, resumedThread.model.trim())
         }
@@ -7520,6 +7565,7 @@ export function useDesktopState() {
         collaborationMode,
         serviceTierForSpeedMode(speedMode, modelId),
         collaborationModeDeveloperInstructions,
+        ...mentionArgs,
       )
 
       if (startedTurnId) {
@@ -8765,6 +8811,7 @@ export function useDesktopState() {
       msg.collaborationMode,
       msg.speedMode,
       msg.collaborationModeDeveloperInstructions,
+      msg.mentions ?? [],
     )
   }
 

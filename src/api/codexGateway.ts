@@ -70,6 +70,7 @@ import type {
   UiModelCapability,
   UiProjectGroup,
   UiThread,
+  UiThreadMention,
   UiReviewAction,
   UiReviewActionLevel,
   UiReviewFile,
@@ -348,6 +349,7 @@ export type StoredQueuedMessage = {
   text: string
   imageUrls: string[]
   skills: Array<{ name: string; path: string }>
+  mentions?: UiThreadMention[]
   fileAttachments: Array<{ label: string; path: string; fsPath: string }>
   collaborationMode: CollaborationModeKind
   speedMode?: SpeedMode
@@ -2651,6 +2653,7 @@ async function buildTurnStartParams(
   collaborationMode?: CollaborationModeKind,
   serviceTier?: string | null,
   collaborationModeDeveloperInstructions?: string,
+  mentions: UiThreadMention[] = [],
 ): Promise<Record<string, unknown>> {
   const normalizedModel = model?.trim() ?? ''
   const localImageAttachments: FileAttachmentParam[] = []
@@ -2688,6 +2691,13 @@ async function buildTurnStartParams(
   if (skills) {
     for (const skill of skills) {
       input.push({ type: 'skill', name: skill.name, path: skill.path })
+    }
+  }
+  for (const mention of mentions) {
+    const name = mention.name.trim()
+    const path = mention.path.trim()
+    if (name && path.startsWith('thread://')) {
+      input.push({ type: 'mention', name, path })
     }
   }
   const attachments = dedupedFileAttachments.map((f) => ({ label: f.label, path: f.path, fsPath: f.fsPath }))
@@ -2728,8 +2738,9 @@ export async function buildNativeTurnInput(
   imageUrls: string[] = [],
   skills: Array<{ name: string; path: string }> = [],
   fileAttachments: FileAttachmentParam[] = [],
+  mentions: UiThreadMention[] = [],
 ): Promise<Array<Record<string, unknown>>> {
-  const params = await buildTurnStartParams(undefined, text, imageUrls, undefined, undefined, skills, fileAttachments)
+  const params = await buildTurnStartParams(undefined, text, imageUrls, undefined, undefined, skills, fileAttachments, undefined, undefined, undefined, mentions)
   return (params.input as Array<Record<string, unknown>>).map(item => item.type === 'image' ? { type: 'image', url: item.url } : item)
 }
 
@@ -2740,9 +2751,10 @@ export async function steerThreadTurn(
   imageUrls: string[] = [],
   skills: Array<{ name: string; path: string }> = [],
   fileAttachments: FileAttachmentParam[] = [],
+  mentions: UiThreadMention[] = [],
 ): Promise<string> {
   if (!threadId.trim() || !expectedTurnId.trim()) throw new Error('当前回合尚未确认或已经结束，请等待状态更新后重新发送。')
-  const input = await buildNativeTurnInput(text, imageUrls, skills, fileAttachments)
+  const input = await buildNativeTurnInput(text, imageUrls, skills, fileAttachments, mentions)
   const result = await callRpc<{ turnId?: string }>('turn/steer', { threadId, expectedTurnId, input })
   if (result.turnId !== expectedTurnId) throw new Error('插话返回的回合不匹配，请检查对话；不会自动重发。')
   return result.turnId
@@ -2759,6 +2771,7 @@ export async function startThreadTurn(
   collaborationMode?: CollaborationModeKind,
   serviceTier?: string | null,
   collaborationModeDeveloperInstructions?: string,
+  mentions: UiThreadMention[] = [],
 ): Promise<string> {
   try {
     const params = await buildTurnStartParams(
@@ -2772,6 +2785,7 @@ export async function startThreadTurn(
       collaborationMode,
       serviceTier,
       collaborationModeDeveloperInstructions,
+      mentions,
     )
     const payload = await callRpc<{ turn?: Turn }>('turn/start', params)
     return typeof payload?.turn?.id === 'string' ? payload.turn.id.trim() : ''
@@ -2791,6 +2805,7 @@ export async function startThreadWithTurn(
   collaborationMode?: CollaborationModeKind,
   serviceTier?: string | null,
   collaborationModeDeveloperInstructions?: string,
+  mentions: UiThreadMention[] = [],
 ): Promise<StartedThreadTurn> {
   try {
     const thread = buildThreadStartParams(cwd, model, serviceTier)
@@ -2805,6 +2820,7 @@ export async function startThreadWithTurn(
       collaborationMode,
       serviceTier,
       collaborationModeDeveloperInstructions,
+      mentions,
     )
     const response = await fetchWithTimeout('/codex-api/thread/start-turn', {
       method: 'POST',
@@ -3588,6 +3604,15 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
       return name && path ? [{ name, path }] : []
     })
     : []
+  const mentions = Array.isArray(record.mentions)
+    ? record.mentions.flatMap((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+      const mention = item as Record<string, unknown>
+      const name = typeof mention.name === 'string' ? mention.name.trim() : ''
+      const path = typeof mention.path === 'string' ? mention.path.trim() : ''
+      return name && path.startsWith('thread://') ? [{ name, path }] : []
+    })
+    : []
   const fileAttachments = Array.isArray(record.fileAttachments)
     ? record.fileAttachments.flatMap((item) => {
       if (!item || typeof item !== 'object' || Array.isArray(item)) return []
@@ -3620,6 +3645,7 @@ function normalizeStoredQueuedMessage(value: unknown): StoredQueuedMessage | nul
     text: typeof record.text === 'string' ? record.text : '',
     imageUrls,
     skills,
+    ...(mentions.length > 0 ? { mentions } : {}),
     fileAttachments,
     collaborationMode: record.collaborationMode === 'plan' ? 'plan' : 'default',
     ...(speedMode ? { speedMode } : {}),

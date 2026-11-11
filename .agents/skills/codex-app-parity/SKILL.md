@@ -43,6 +43,8 @@ mkdir -p /tmp/codex-app-extracted
 npx asar extract "/Applications/Codex.app/Contents/Resources/app.asar" /tmp/codex-app-extracted
 ```
 
+On Linux, the installed desktop bundle may instead be `/opt/codex-desktop/resources/app.asar`; extract it to a versioned directory under `/tmp` with the system `asar` command. The `asar extract-file` CLI writes the extracted basename into the current working directory rather than stdout, so run it only from a temporary directory (or use the `@electron/asar` API) to avoid overwriting project files such as `package.json`.
+
 ### Key Directories
 
 | Directory | Contents |
@@ -258,6 +260,7 @@ Important caveats:
 - **Renderer → Main Process**: The renderer uses a `Uu` HTTP client class that sends `fetch-request` IPC messages to the main process. The main process class `tle` handles these, adds auth tokens, and uses `electron.net.fetch` to make actual HTTP calls.
 - **Auth**: Auth tokens come from the app-server's `getAuthStatus` RPC method (ChatGPT backend auth).
 - **App-server**: A `codex app-server` child process communicating via JSON-RPC over stdin/stdout. Our bridge middleware proxies RPC calls to it.
+- **Chat references**: Composer chat selections persist as `thread://<id>?hostId=local` mention paths and reach app-server turns as structured `UserInput.type = "mention"` blocks, not navigation events or plain file attachments.
 - **Config constants**: `R7` = prodApiBaseUrl (`https://chatgpt.com/backend-api`), `I7` = devApiBaseUrl (`http://localhost:8000/api`), `C7` = originator (`Codex Desktop`).
 
 ## Required Workflow (Feature Work)
@@ -786,3 +789,16 @@ After each feature implementation session that uses this skill:
   - workspace-root/project filtering must preserve projectless thread groups from `thread/list`, otherwise they disappear after the optimistic row is replaced by server state
   - the rendered Projects section must still hide those projectless groups, while the Chats section lists them
 - A projectless thread cwd under `~/Documents/Codex/YYYY-MM-DD/<slug>` should remain in the sidebar Chats section after title generation and thread-list refreshes.
+
+## Findings: Linux Desktop Composer File Search (2026-11-04)
+
+- The installed Linux desktop bundle at `/opt/codex-desktop/resources/app.asar` reported version `26.1027.30824`; its bundled CLI reported `codex-cli 0.166.0-alpha.5.1`.
+- A separate Linux debug instance can be started with `/opt/codex-desktop/start.sh --remote-debugging-port=3434 --user-data-dir=/tmp/codex-parity-profile --no-first-run`. Disable the community launcher's daily usage report and point its state/cache directories to `/tmp` when running parity checks. The main CDP target is `app://-/index.html`; `app://-/index.html?initialRoute=%2Fspotlight` is a separate spotlight window and is not the main UI.
+- In the live Chinese desktop composer, the plus button opens an add menu with file/folder actions and a file/chat search group. Typing a filename while this menu is open shows workspace file matches above the composer; the file-search path uses app-server `fuzzyFileSearch` with `{ query, roots, cancellationToken }`.
+- The live `fuzzyFileSearch` response includes `files` rows with project-relative `path`, `root`, `file_name`, `match_type`, `score`, and `indices`. Filter `match_type: "file"` for composer attachments. The web composer currently uses a plain textarea rather than the desktop's ProseMirror editor, so a menu-local search input is a conservative interaction deviation from desktop inline typeahead.
+
+## Findings: Desktop Chat References From Composer Search (2026-11-04)
+
+- In Codex desktop `26.1027.30824`, opening the composer plus menu and typing a chat title shows chat results alongside files and browser tabs. Selecting a chat keeps the draft in place and inserts a non-editable ProseMirror mention, rather than navigating to the chat.
+- The inserted node carries `agent-mention-path="thread://<thread-id>?hostId=local"` and the displayed chat title. The bundled app-server schema supports `UserInput.type = "mention"` with required `name` and `path`; render persisted mention blocks as user content instead of unknown/raw payloads.
+- The web composer uses a textarea rather than ProseMirror. A separate removable chip plus structured `mention` input preserves the reference semantics without attempting to emulate rich inline editing.

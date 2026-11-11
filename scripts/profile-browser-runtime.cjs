@@ -337,7 +337,12 @@ async function main() {
   mkdirSync(outputDir, { recursive: true })
 
   const targetUrl = toTargetUrl()
-  const browser = await chromium.launch({ headless })
+  const browser = await chromium.launch({
+    headless,
+    ...(process.env.PROFILE_BROWSER_EXECUTABLE_PATH
+      ? { executablePath: process.env.PROFILE_BROWSER_EXECUTABLE_PATH }
+      : {}),
+  })
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
   await context.addInitScript(({ realChatMessageSelector }) => {
     const runtimeProfile = {
@@ -494,7 +499,7 @@ async function main() {
     (phase) => { profilePhase = phase },
   )
   const screenshotPath = resolve(outputDir, `${artifactPrefix}.png`)
-  await page.screenshot({ path: screenshotPath, fullPage: true })
+  await page.screenshot({ path: screenshotPath, fullPage: process.env.PROFILE_SCREENSHOT_FULL_PAGE !== 'false' })
   await context.tracing.stop({ path: tracePath })
   await browser.close()
 

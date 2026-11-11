@@ -18,6 +18,7 @@ import type {
   UiProjectGroup,
   UiThread,
   ThreadHistoryMode,
+  UiThreadMention,
 } from '../../types/codex'
 import { normalizePathForComparison, normalizePathForUi, toProjectName } from '../../pathUtils.js'
 
@@ -190,18 +191,20 @@ function parseUserMessageContent(
   text: string
   images: string[]
   skills: Array<{ name: string; path: string }>
+  mentions: UiThreadMention[]
   fileAttachments: UiFileAttachment[]
   rawBlocks: UiMessage[]
   isAutomationRun: boolean
   automationDisplayName: string | null
 } {
   if (!Array.isArray(content)) {
-    return { text: '', images: [], skills: [], fileAttachments: [], rawBlocks: [], isAutomationRun: false, automationDisplayName: null }
+    return { text: '', images: [], skills: [], mentions: [], fileAttachments: [], rawBlocks: [], isAutomationRun: false, automationDisplayName: null }
   }
 
   const textChunks: string[] = []
   const images: string[] = []
   const skills: Array<{ name: string; path: string }> = []
+  const mentions: UiThreadMention[] = []
   const rawBlocks: UiMessage[] = []
 
   for (const [index, block] of content.entries()) {
@@ -221,13 +224,21 @@ function parseUserMessageContent(
         skills.push({ name, path })
       }
     }
+    if (block.type === 'mention') {
+      const name = typeof block.name === 'string' ? block.name.trim() : ''
+      const path = typeof block.path === 'string' ? block.path.trim() : ''
+      if (name && path.startsWith('thread://')) {
+        mentions.push({ name, path })
+      }
+    }
 
-    if (block.type !== 'text' && block.type !== 'image' && block.type !== 'localImage' && block.type !== 'skill') {
+    const blockType = (block as { type: string }).type
+    if (blockType !== 'text' && blockType !== 'image' && blockType !== 'localImage' && blockType !== 'skill' && blockType !== 'mention') {
       rawBlocks.push({
         id: `${itemId}:user-content:${index}`,
         role: 'user',
         text: '',
-        messageType: `userContent.${block.type}`,
+        messageType: `userContent.${blockType}`,
         rawPayload: toRawPayload(block),
         isUnhandled: true,
       })
@@ -242,6 +253,7 @@ function parseUserMessageContent(
     text: heartbeat?.instructions ?? extractCodexUserRequestText(fullText),
     images,
     skills,
+    mentions,
     fileAttachments,
     rawBlocks,
     isAutomationRun: heartbeat !== null,
@@ -480,7 +492,7 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
   if (item.type === 'userMessage') {
     const parsed = parseUserMessageContent(item.id, item.content as UserInput[] | undefined)
     const messages: UiMessage[] = []
-    const hasRenderableUserContent = parsed.text.length > 0 || parsed.images.length > 0 || parsed.fileAttachments.length > 0 || parsed.skills.length > 0
+    const hasRenderableUserContent = parsed.text.length > 0 || parsed.images.length > 0 || parsed.fileAttachments.length > 0 || parsed.skills.length > 0 || parsed.mentions.length > 0
 
     if (hasRenderableUserContent) {
       messages.push({
@@ -489,6 +501,7 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
         text: parsed.text,
         images: parsed.images,
         skills: parsed.skills.length > 0 ? parsed.skills : undefined,
+        mentions: parsed.mentions.length > 0 ? parsed.mentions : undefined,
         fileAttachments: parsed.fileAttachments.length > 0 ? parsed.fileAttachments : undefined,
         messageType: item.type,
         isAutomationRun: parsed.isAutomationRun,

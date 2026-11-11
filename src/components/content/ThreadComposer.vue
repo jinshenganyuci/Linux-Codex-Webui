@@ -69,6 +69,20 @@
         </span>
       </div>
 
+      <div v-if="selectedMentions.length > 0" class="thread-composer-chat-chips">
+        <span v-for="mention in selectedMentions" :key="mention.path" class="thread-composer-chat-chip">
+          <IconChatBubble class="thread-composer-chat-chip-icon" />
+          <span class="thread-composer-chat-chip-name" :title="mention.path">{{ mention.name }}</span>
+          <button
+            class="thread-composer-chat-chip-remove"
+            type="button"
+            :aria-label="t('Remove chat reference {name}', { name: mention.name })"
+            :disabled="isInteractionDisabled"
+            @click="removeChatMention(mention.path)"
+          >×</button>
+        </span>
+      </div>
+
       <div v-if="selectedSkills.length > 0" class="thread-composer-skill-chips">
         <span v-for="skill in selectedSkills" :key="skill.path" class="thread-composer-skill-chip">
           <button
@@ -104,7 +118,38 @@
           <span class="thread-composer-drop-overlay-copy">{{ t('Drop images or files') }}</span>
         </div>
         <div
-          v-if="isComposerAutocompleteOpen"
+          v-if="isPromptHistorySearchOpen"
+          ref="promptHistorySearchRootRef"
+          class="thread-composer-prompt-history"
+          role="dialog"
+          :aria-label="t('Prompt history')"
+        >
+          <input
+            ref="promptHistorySearchInputRef"
+            v-model="promptHistoryQuery"
+            class="thread-composer-prompt-history-input"
+            type="search"
+            :aria-label="t('Search previous prompts...')"
+            :placeholder="t('Search previous prompts...')"
+            @keydown.stop="onPromptHistorySearchKeydown"
+          />
+          <div v-if="promptHistoryResults.length > 0" class="thread-composer-prompt-history-list" role="listbox">
+            <button
+              v-for="(prompt, index) in promptHistoryResults"
+              :key="prompt"
+              class="thread-composer-prompt-history-row"
+              :class="{ 'is-active': index === promptHistoryHighlightedIndex }"
+              type="button"
+              role="option"
+              :aria-selected="index === promptHistoryHighlightedIndex"
+              @pointerenter="promptHistoryHighlightedIndex = index"
+              @click="selectPromptHistoryResult(prompt)"
+            >{{ promptHistoryPreview(prompt) }}</button>
+          </div>
+          <p v-else class="thread-composer-prompt-history-empty">{{ t('No previous prompts') }}</p>
+        </div>
+        <div
+          v-else-if="isComposerAutocompleteOpen"
           ref="composerAutocompleteRootRef"
           class="thread-composer-autocomplete"
           role="listbox"
@@ -208,9 +253,78 @@
           </button>
 
           <Teleport to="body">
-          <div v-if="isAttachMenuOpen" :id="attachMenuId" ref="attachMenuRef" class="thread-composer-attach-menu" :style="attachMenuStyle" role="dialog" aria-label="添加与输入设置">
+          <div
+            v-if="isAttachMenuOpen"
+            :id="attachMenuId"
+            ref="attachMenuRef"
+            class="thread-composer-attach-menu"
+            :class="{ 'is-file-search': isAttachFileSearchOpen }"
+            :style="attachMenuStyle"
+            role="dialog"
+            aria-label="添加与输入设置"
+          >
+            <div v-if="isAttachFileSearchOpen" class="thread-composer-attach-search">
+              <div class="thread-composer-attach-search-header">
+                <button
+                  class="thread-composer-attach-search-back"
+                  type="button"
+                  :aria-label="t('Back to attachments')"
+                  @click="closeAttachFileSearch"
+                >
+                  ‹
+                </button>
+                <input
+                  ref="attachFileSearchInputRef"
+                  v-model="attachFileSearchQuery"
+                  class="thread-composer-attach-search-input"
+                  type="search"
+                  :aria-label="t('Search files and chats')"
+                  :placeholder="t('Search files and chats...')"
+                  @keydown.stop="onAttachFileSearchKeydown"
+                />
+              </div>
+              <div
+                v-if="attachFileSearchQuery.trim()"
+                class="thread-composer-attach-search-results"
+                role="listbox"
+                :aria-label="t('Search files and chats')"
+              >
+                <template v-if="attachSearchResults.length > 0">
+                  <button
+                    v-for="(result, index) in attachSearchResults"
+                    :key="result.path"
+                    class="thread-composer-attach-search-result"
+                    :class="{ 'is-active': index === attachFileSearchHighlightedIndex }"
+                    type="button"
+                    role="option"
+                    :aria-selected="index === attachFileSearchHighlightedIndex"
+                    @click="selectAttachSearchResult(result)"
+                  >
+                    <IconChatBubble v-if="result.kind === 'chat'" class="thread-composer-attach-search-chat-icon" />
+                    <IconTablerFilePencil v-else class="thread-composer-attach-search-result-icon" />
+                    <span class="thread-composer-attach-search-result-text">
+                      <span class="thread-composer-attach-search-result-name">{{ result.name }}</span>
+                      <span v-if="result.subtitle" class="thread-composer-attach-search-result-dir">{{ result.subtitle }}</span>
+                    </span>
+                  </button>
+                </template>
+                <p v-if="isAttachFileSearchLoading" class="thread-composer-attach-search-status">{{ t('Searching files...') }}</p>
+                <p v-else-if="attachFileSearchError" class="thread-composer-attach-search-status">{{ t('Could not search files') }}</p>
+                <p v-else-if="attachSearchResults.length === 0" class="thread-composer-attach-search-status">{{ t('No matching files or chats') }}</p>
+              </div>
+              <p v-else class="thread-composer-attach-search-status">{{ t('Type to search files and chats') }}</p>
+            </div>
+            <template v-else>
             <div class="thread-composer-menu-label">添加</div>
-            <button v-if="!isMobile && isDictationSupported" class="thread-composer-attach-item" type="button" :disabled="isInteractionDisabled" @click="isAttachMenuOpen = false; onDictationToggle()">语音输入</button>
+            <button
+              class="thread-composer-attach-item"
+              type="button"
+              :disabled="isInteractionDisabled"
+              @click="openAttachFileSearch"
+            >
+              {{ t('Search files and chats') }}
+            </button>
+            <button v-if="!isMobile && isDictationSupported" class="thread-composer-attach-item" type="button" :disabled="isInteractionDisabled" @click="closeAttachMenu(); onDictationToggle()">语音输入</button>
             <ComposerPermissionDropdown v-if="isMobile" class="thread-composer-mobile-permission"
               :native="nativePermissionsAvailable" :native-profile="nativePermissionProfile" :profiles="nativePermissionProfiles || []"
               :model-value="selectedCodexPermissionMode" :disabled="isPermissionModeDisabled || nativePermissionBusy" :error="nativePermissionError" :loading="nativePermissionLoading"
@@ -233,9 +347,9 @@
               @remove="onRemovePrompt"
             />
             <template v-if="$slots['session-controls']">
-              <button type="button" class="thread-composer-attach-item" @click="isAttachMenuOpen = false; emit('open-native-permissions')">会话控制 <span class="thread-composer-menu-description">运行、权限与队列</span></button>
-              <button type="button" class="thread-composer-attach-item" @click="isAttachMenuOpen = false; emit('open-native-goal')">目标 <span class="thread-composer-menu-description">设置持续完成的任务</span></button>
-              <button type="button" class="thread-composer-attach-item" @click="isAttachMenuOpen = false; emit('open-native-extensions')">扩展 <span class="thread-composer-menu-description">插件、语音与远控</span></button>
+              <button type="button" class="thread-composer-attach-item" @click="closeAttachMenu(); emit('open-native-permissions')">会话控制 <span class="thread-composer-menu-description">运行、权限与队列</span></button>
+              <button type="button" class="thread-composer-attach-item" @click="closeAttachMenu(); emit('open-native-goal')">目标 <span class="thread-composer-menu-description">设置持续完成的任务</span></button>
+              <button type="button" class="thread-composer-attach-item" @click="closeAttachMenu(); emit('open-native-extensions')">扩展 <span class="thread-composer-menu-description">插件、语音与远控</span></button>
             </template>
             <button
               class="thread-composer-attach-item"
@@ -346,6 +460,7 @@
                 :class="{ 'is-on': clarifyBeforePlanning }"
               />
             </button>
+            </template>
             </div>
           </Teleport>
           </div>
@@ -563,7 +678,9 @@ import type {
   ReasoningEffort,
   SpeedMode,
   UiModelCapability,
+  UiProjectGroup,
   UiRateLimitSnapshot,
+  UiThreadMention,
   UiRateLimitWindow,
   UiThreadTokenUsage,
   UiTokenUsageBreakdown,
@@ -572,6 +689,13 @@ import { useDictation } from '../../composables/useDictation'
 import { useMobile } from '../../composables/useMobile'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 import { sortModelIdsByStrength } from '../../modelSort'
+import { searchComposerChats } from './composerChatSearch'
+import {
+  appendPromptHistory,
+  readPromptHistory,
+  searchPromptHistory,
+  writePromptHistory,
+} from './composerPromptHistory'
 import {
   createComposerPrompt,
   getComposerPrompts,
@@ -585,6 +709,7 @@ import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 import IconTablerChevronLeft from '../icons/IconTablerChevronLeft.vue'
 import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
+import IconChatBubble from '../icons/IconChatBubble.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerFolder from '../icons/IconTablerFolder.vue'
 import IconTablerMaximize from '../icons/IconTablerMaximize.vue'
@@ -630,6 +755,7 @@ type ComposerAutocompleteOption = {
 const props = defineProps<{
   activeThreadId: string
   cwd?: string
+  chatSearchGroups?: UiProjectGroup[]
   collaborationModes?: CollaborationModeOption[]
   selectedCollaborationMode: CollaborationModeKind
   models: string[]
@@ -665,11 +791,19 @@ const props = defineProps<{
 
 export type FileAttachment = { label: string; path: string; fsPath: string }
 
+type AttachSearchResult = {
+  kind: 'chat' | 'file'
+  name: string
+  path: string
+  subtitle: string
+}
+
 export type ComposerDraftPayload = {
   text: string
   imageUrls: string[]
   fileAttachments: FileAttachment[]
   skills: Array<{ name: string; path: string }>
+  mentions?: UiThreadMention[]
 }
 
 export type SubmitPayload = {
@@ -677,6 +811,7 @@ export type SubmitPayload = {
   imageUrls: string[]
   fileAttachments: FileAttachment[]
   skills: Array<{ name: string; path: string }>
+  mentions: UiThreadMention[]
   mode: 'steer' | 'queue'
   collaborationModeOverride?: CollaborationModeKind
   persistCollaborationMode?: boolean
@@ -693,6 +828,7 @@ export type ThreadComposerExposed = {
 const emit = defineEmits<{
   submit: [payload: SubmitPayload]
   interrupt: []
+  'copy-last-response': []
   'update:selected-collaboration-mode': [mode: CollaborationModeKind]
   'update:selected-model': [modelId: string]
   'update:selected-reasoning-effort': [effort: ReasoningEffort | '']
@@ -737,10 +873,18 @@ const PASTED_TEXT_FILE_THRESHOLD = 2000
 const PROMPT_OPTION_PREFIX = 'prompt:'
 
 const draft = ref('')
+const promptHistory = ref<string[]>(readPromptHistory(getPromptHistoryStorage()))
+const promptHistoryCursor = ref<number | null>(null)
+const isPromptHistorySearchOpen = ref(false)
+const promptHistoryQuery = ref('')
+const promptHistoryHighlightedIndex = ref(0)
+const promptHistoryResults = computed(() => searchPromptHistory(promptHistory.value, promptHistoryQuery.value))
+let draftBeforePromptHistory = ''
 const awaitingSubmissionThreads = ref(new Set<string>())
 const clarifyBeforePlanning = ref(false)
 const selectedImages = ref<SelectedImage[]>([])
 const selectedSkills = ref<SkillItem[]>([])
+const selectedMentions = ref<UiThreadMention[]>([])
 const savedPrompts = ref<ComposerPromptInfo[]>([])
 const fileAttachments = ref<FileAttachment[]>([])
 const folderUploadGroups = ref<FolderUploadGroup[]>([])
@@ -790,14 +934,41 @@ const attachMenuId = `composer-add-${useId()}`
 const attachMenuStyle = ref<Record<string, string>>({})
 let attachMenuObserver: ResizeObserver | null = null
 let attachMenuFrame = 0
+const attachFileSearchInputRef = ref<HTMLInputElement | null>(null)
 const contextUsageRootRef = ref<HTMLElement | null>(null)
 const composerAutocompleteRootRef = ref<HTMLElement | null>(null)
+const promptHistorySearchRootRef = ref<HTMLElement | null>(null)
+const promptHistorySearchInputRef = ref<HTMLInputElement | null>(null)
 const photoLibraryInputRef = ref<HTMLInputElement | null>(null)
 const cameraCaptureInputRef = ref<HTMLInputElement | null>(null)
 const folderPickerInputRef = ref<HTMLInputElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const { isMobile } = useMobile()
 const isAttachMenuOpen = ref(false)
+const isAttachFileSearchOpen = ref(false)
+const attachFileSearchQuery = ref('')
+const attachFileSearchSuggestions = ref<ComposerFileSuggestion[]>([])
+const isAttachFileSearchLoading = ref(false)
+const attachFileSearchError = ref(false)
+const attachFileSearchHighlightedIndex = ref(0)
+const attachSearchResults = computed<AttachSearchResult[]>(() => {
+  const query = attachFileSearchQuery.value.trim()
+  if (!query) return []
+  const chats = searchComposerChats(props.chatSearchGroups ?? [], query, 8)
+    .map((chat): AttachSearchResult => ({
+      kind: 'chat',
+      name: chat.title,
+      path: `thread://${chat.id}?hostId=local`,
+      subtitle: chat.projectName,
+    }))
+  const files = attachFileSearchSuggestions.value.map((file): AttachSearchResult => ({
+    kind: 'file',
+    name: getMentionFileName(file.path),
+    path: file.path,
+    subtitle: getMentionDirName(file.path),
+  }))
+  return [...chats, ...files].slice(0, 20)
+})
 const isContextDetailsOpen = ref(false)
 const mentionStartIndex = ref<number | null>(null)
 const mentionQuery = ref('')
@@ -812,6 +983,8 @@ let composerOverflowMeasurementQueued = false
 const draftGeneration = ref(0)
 let fileMentionSearchToken = 0
 let fileMentionDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let attachFileSearchToken = 0
+let attachFileSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let isHoldPressActive = false
 let dragDepth = 0
 let attachmentSessionToken = 0
@@ -920,12 +1093,13 @@ const canSubmit = computed(() => {
   if (!props.activeThreadId) return false
   if (isPlanModeWaitingForModel.value) return false
   if (pendingAttachmentCount.value > 0) return false
-  return draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0
+  return draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0 || selectedMentions.value.length > 0
 })
 const hasUnsavedDraft = computed(() =>
   draft.value.trim().length > 0
   || selectedImages.value.length > 0
   || selectedSkills.value.length > 0
+  || selectedMentions.value.length > 0
   || fileAttachments.value.length > 0
   || folderUploadGroups.value.length > 0,
 )
@@ -1260,6 +1434,7 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
     return
   }
 
+  if (text) rememberPromptHistory(text)
   const submitText = planCommand?.prompt ?? text
   const shouldClarifyBeforePlanning = clarifyBeforePlanning.value
   const shouldUsePlanOverride = Boolean(planCommand) || shouldClarifyBeforePlanning
@@ -1273,6 +1448,7 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
     imageUrls: selectedImages.value.map((image) => image.url),
     fileAttachments: [...fileAttachments.value],
     skills: selectedSkills.value.map((s) => ({ name: s.name, path: s.path })),
+    mentions: selectedMentions.value.map((mention) => ({ ...mention })),
     mode: shouldUsePlanOverride && props.isTurnInProgress ? 'queue' : mode,
     ...(awaitAcknowledgement ? { acknowledge: (accepted: boolean) => {
       if (acknowledged) return
@@ -1321,6 +1497,8 @@ function setActiveInProgressMode(mode: 'steer' | 'queue'): void {
 
 function replaceDraftState(payload: ComposerDraftPayload): void {
   draftGeneration.value += 1
+  promptHistoryCursor.value = null
+  isPromptHistorySearchOpen.value = false
   draft.value = payload.text
   selectedImages.value = payload.imageUrls.map((url, index) => ({
     id: `queued-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
@@ -1331,6 +1509,7 @@ function replaceDraftState(payload: ComposerDraftPayload): void {
     (props.skills ?? []).find((item) => item.path === skill.path)
     ?? { name: skill.name, displayName: undefined, description: '', path: skill.path }
   ))
+  selectedMentions.value = (payload.mentions ?? []).map((mention) => ({ ...mention }))
   fileAttachments.value = payload.fileAttachments.map((attachment) => ({ ...attachment }))
   folderUploadGroups.value = []
   dictationFeedback.value = ''
@@ -1392,6 +1571,14 @@ function loadPersistedDraftForThread(threadId: string): ComposerDraftPayload | n
           && typeof skill.path === 'string'
         ))
         : [],
+      mentions: Array.isArray(parsed.mentions)
+        ? parsed.mentions.filter((mention): mention is UiThreadMention => (
+          Boolean(mention)
+          && typeof mention.name === 'string'
+          && typeof mention.path === 'string'
+          && mention.path.startsWith('thread://')
+        ))
+        : [],
     }
   } catch {
     return null
@@ -1407,6 +1594,7 @@ function persistDraftForThread(threadId: string, payload: ComposerDraftPayload):
       || payload.imageUrls.length > 0
       || payload.fileAttachments.length > 0
       || payload.skills.length > 0
+      || (payload.mentions?.length ?? 0) > 0
     if (hasContent) {
       window.localStorage.setItem(getDraftStorageKey(normalizedThreadId), JSON.stringify(payload))
       return
@@ -1432,6 +1620,7 @@ function getCurrentDraftPayload(): ComposerDraftPayload {
     imageUrls: selectedImages.value.map((image) => image.url),
     fileAttachments: fileAttachments.value.map((attachment) => ({ ...attachment })),
     skills: selectedSkills.value.map((skill) => ({ name: skill.name, path: skill.path })),
+    mentions: selectedMentions.value.map((mention) => ({ ...mention })),
   }
 }
 
@@ -1568,7 +1757,8 @@ function positionAttachMenu(): void {
   const mobile = width < 768, padding = 16, gap = 8
   const anchor = (mobile ? root.closest('.thread-composer-shell') : root)?.getBoundingClientRect()
   if (!anchor) return
-  const menuWidth = Math.max(0, Math.min(mobile ? 420 : 360, width - padding * 2))
+  const preferredWidth = isAttachFileSearchOpen.value ? (mobile ? 320 : 704) : (mobile ? 420 : 360)
+  const menuWidth = Math.max(0, Math.min(preferredWidth, width - padding * 2))
   const aboveComposer = Math.min(anchor.top - gap, topEdge + height - padding)
   // When a keyboard leaves too little room above the composer, keep the menu usable in the visible viewport.
   const bottom = aboveComposer - topEdge - padding >= 160 ? aboveComposer : topEdge + height - padding
@@ -1592,7 +1782,7 @@ function onAttachMenuEscape(event: KeyboardEvent): void {
   // A teleported child picker owns Escape until it closes.
   if (attachMenuRef.value?.querySelector('[aria-expanded="true"]')) return
   event.preventDefault()
-  isAttachMenuOpen.value = false
+  closeAttachMenu()
   attachMenuRootRef.value?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
 }
 
@@ -1610,7 +1800,10 @@ function removeAttachMenuLayout(): void {
 
 watch(isAttachMenuOpen, async (open) => {
   removeAttachMenuLayout()
-  if (!open) return
+  if (!open) {
+    resetAttachFileSearch()
+    return
+  }
   await nextTick()
   if (!isAttachMenuOpen.value || !attachMenuRef.value) return
   positionAttachMenu()
@@ -1625,9 +1818,121 @@ watch(isAttachMenuOpen, async (open) => {
   window.visualViewport?.addEventListener('scroll', scheduleAttachMenuPosition)
 })
 
+watch(isAttachFileSearchOpen, scheduleAttachMenuPosition)
+
 function toggleAttachMenu(): void {
   if (isInteractionDisabled.value) return
-  isAttachMenuOpen.value = !isAttachMenuOpen.value
+  if (isAttachMenuOpen.value) {
+    closeAttachMenu()
+  } else {
+    isAttachMenuOpen.value = true
+  }
+}
+
+function resetAttachFileSearch(): void {
+  attachFileSearchToken += 1
+  if (attachFileSearchDebounceTimer) {
+    clearTimeout(attachFileSearchDebounceTimer)
+    attachFileSearchDebounceTimer = null
+  }
+  isAttachFileSearchOpen.value = false
+  attachFileSearchQuery.value = ''
+  attachFileSearchSuggestions.value = []
+  isAttachFileSearchLoading.value = false
+  attachFileSearchError.value = false
+  attachFileSearchHighlightedIndex.value = 0
+}
+
+function closeAttachMenu(): void {
+  isAttachMenuOpen.value = false
+  resetAttachFileSearch()
+}
+
+function openAttachFileSearch(): void {
+  if (isInteractionDisabled.value) return
+  closeFileMention()
+  isAttachFileSearchOpen.value = true
+  void nextTick(() => attachFileSearchInputRef.value?.focus())
+}
+
+function closeAttachFileSearch(): void {
+  resetAttachFileSearch()
+  void nextTick(() => attachMenuRef.value?.querySelector<HTMLButtonElement>('.thread-composer-attach-item')?.focus())
+}
+
+function queueAttachFileSearch(): void {
+  const token = ++attachFileSearchToken
+  if (attachFileSearchDebounceTimer) {
+    clearTimeout(attachFileSearchDebounceTimer)
+    attachFileSearchDebounceTimer = null
+  }
+  const cwd = props.cwd?.trim() ?? ''
+  const query = attachFileSearchQuery.value.trim()
+  attachFileSearchSuggestions.value = []
+  attachFileSearchHighlightedIndex.value = 0
+  attachFileSearchError.value = false
+  if (!isAttachFileSearchOpen.value || !cwd || !query) {
+    isAttachFileSearchLoading.value = false
+    return
+  }
+  isAttachFileSearchLoading.value = true
+  attachFileSearchDebounceTimer = setTimeout(() => {
+    void searchComposerFiles(cwd, query, 20)
+      .then((rows) => {
+        if (!isAttachFileSearchOpen.value || token !== attachFileSearchToken) return
+        attachFileSearchSuggestions.value = rows
+      })
+      .catch(() => {
+        if (!isAttachFileSearchOpen.value || token !== attachFileSearchToken) return
+        attachFileSearchError.value = true
+      })
+      .finally(() => {
+        if (token === attachFileSearchToken) isAttachFileSearchLoading.value = false
+      })
+  }, 180)
+}
+
+function onAttachFileSearchKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeAttachFileSearch()
+    return
+  }
+  const size = attachSearchResults.value.length
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    if (size > 0) {
+      const direction = event.key === 'ArrowDown' ? 1 : -1
+      attachFileSearchHighlightedIndex.value = (attachFileSearchHighlightedIndex.value + direction + size) % size
+      void nextTick(() => {
+        attachMenuRef.value
+          ?.querySelector<HTMLElement>('.thread-composer-attach-search-result.is-active')
+          ?.scrollIntoView({ block: 'nearest' })
+      })
+    }
+    return
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    const selected = attachSearchResults.value[attachFileSearchHighlightedIndex.value]
+    if (selected) selectAttachSearchResult(selected)
+  }
+}
+
+function selectAttachSearchResult(result: AttachSearchResult): void {
+  if (result.kind === 'chat') {
+    if (!selectedMentions.value.some((mention) => mention.path === result.path)) {
+      selectedMentions.value = [...selectedMentions.value, { name: result.name, path: result.path }]
+    }
+  } else {
+    addFileAttachment(result.path)
+  }
+  closeAttachMenu()
+  void nextTick(() => inputRef.value?.focus())
+}
+
+function removeChatMention(path: string): void {
+  selectedMentions.value = selectedMentions.value.filter((mention) => mention.path !== path)
 }
 
 function triggerPhotoLibrary(): void {
@@ -1998,7 +2303,112 @@ function onInputPaste(event: ClipboardEvent): void {
   attachIncomingFiles(imageFiles)
 }
 
+function getPromptHistoryStorage(): Storage | null {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage
+  } catch {
+    return null
+  }
+}
+
+function rememberPromptHistory(prompt: string): void {
+  const next = appendPromptHistory(promptHistory.value, prompt)
+  promptHistory.value = next
+  writePromptHistory(getPromptHistoryStorage(), next)
+  promptHistoryCursor.value = null
+}
+
+function promptHistoryPreview(prompt: string): string {
+  const normalized = prompt.replace(/\s+/gu, ' ').trim()
+  return normalized.length > 240 ? `${normalized.slice(0, 240)}…` : normalized
+}
+
+function closePromptHistorySearch(): void {
+  isPromptHistorySearchOpen.value = false
+  promptHistoryQuery.value = ''
+  promptHistoryHighlightedIndex.value = 0
+}
+
+function openPromptHistorySearch(): void {
+  if (isInteractionDisabled.value) return
+  const storage = getPromptHistoryStorage()
+  if (storage) promptHistory.value = readPromptHistory(storage)
+  closeComposerAutocomplete()
+  closeFileMention()
+  promptHistoryCursor.value = null
+  promptHistoryQuery.value = ''
+  promptHistoryHighlightedIndex.value = 0
+  isPromptHistorySearchOpen.value = true
+  void nextTick(() => promptHistorySearchInputRef.value?.focus())
+}
+
+function selectPromptHistoryResult(prompt: string): void {
+  draft.value = prompt
+  promptHistoryCursor.value = null
+  closePromptHistorySearch()
+  queueComposerOverflowMeasurement()
+  void nextTick(() => {
+    const input = inputRef.value
+    input?.focus()
+    input?.setSelectionRange(prompt.length, prompt.length)
+  })
+}
+
+function onPromptHistorySearchKeydown(event: KeyboardEvent): void {
+  if (event.ctrlKey && !event.metaKey && event.key.toLowerCase() === 'r') {
+    event.preventDefault()
+    return
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closePromptHistorySearch()
+    void nextTick(() => inputRef.value?.focus())
+    return
+  }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    const size = promptHistoryResults.value.length
+    if (size === 0) return
+    const direction = event.key === 'ArrowDown' ? 1 : -1
+    promptHistoryHighlightedIndex.value = (promptHistoryHighlightedIndex.value + direction + size) % size
+    void nextTick(() => promptHistorySearchInputRef.value?.parentElement
+      ?.querySelector<HTMLElement>('.thread-composer-prompt-history-row.is-active')
+      ?.scrollIntoView({ block: 'nearest' }))
+    return
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    const prompt = promptHistoryResults.value[promptHistoryHighlightedIndex.value]
+    if (prompt) selectPromptHistoryResult(prompt)
+  }
+}
+
+function navigatePromptHistory(direction: -1 | 1): boolean {
+  const history = promptHistory.value
+  if (history.length === 0) return false
+  if (promptHistoryCursor.value === null) {
+    if (direction > 0) return false
+    const input = inputRef.value
+    if (!input || input.selectionStart !== input.selectionEnd) return false
+    if (draft.value.slice(0, input.selectionStart).includes('\n')) return false
+    draftBeforePromptHistory = draft.value
+    promptHistoryCursor.value = history.length - 1
+  } else if (direction < 0) {
+    promptHistoryCursor.value = Math.max(0, promptHistoryCursor.value - 1)
+  } else if (promptHistoryCursor.value < history.length - 1) {
+    promptHistoryCursor.value += 1
+  } else {
+    promptHistoryCursor.value = null
+  }
+  draft.value = promptHistoryCursor.value === null ? draftBeforePromptHistory : history[promptHistoryCursor.value] ?? ''
+  queueComposerOverflowMeasurement()
+  void nextTick(() => inputRef.value?.setSelectionRange(draft.value.length, draft.value.length))
+  return true
+}
+
 function onInputChange(): void {
+  promptHistoryCursor.value = null
+  if (isPromptHistorySearchOpen.value) closePromptHistorySearch()
   if (dictationFeedback.value) {
     dictationFeedback.value = ''
   }
@@ -2012,6 +2422,16 @@ function onInputChange(): void {
 }
 
 function onInputKeydown(event: KeyboardEvent): void {
+  if (!isInteractionDisabled.value && props.activeThreadId !== '__new-thread__' && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'o') {
+    event.preventDefault()
+    emit('copy-last-response')
+    return
+  }
+  if (!isInteractionDisabled.value && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'r') {
+    event.preventDefault()
+    openPromptHistorySearch()
+    return
+  }
   if (isComposerAutocompleteOpen.value) {
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -2067,6 +2487,13 @@ function onInputKeydown(event: KeyboardEvent): void {
       } else {
         closeFileMention()
       }
+      return
+    }
+  }
+
+  if (!event.ctrlKey && !event.metaKey && !event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+    if (navigatePromptHistory(event.key === 'ArrowUp' ? -1 : 1)) {
+      event.preventDefault()
       return
     }
   }
@@ -2352,13 +2779,19 @@ function onDocumentClick(event: MouseEvent): void {
   if (!target) return
 
   const attachRoot = attachMenuRootRef.value
-  if (isAttachMenuOpen.value && attachRoot && !attachRoot.contains(target) && !attachMenuRef.value?.contains(target) && !(target instanceof Element && target.closest('.search-dropdown-menu-wrap, .composer-dropdown-menu-wrap'))) {
-    isAttachMenuOpen.value = false
+  const attachMenu = attachMenuRef.value
+  const clickPath = event.composedPath()
+  if (isAttachMenuOpen.value && attachRoot && !clickPath.includes(attachRoot) && (!attachMenu || !clickPath.includes(attachMenu)) && !(target instanceof Element && target.closest('.search-dropdown-menu-wrap, .composer-dropdown-menu-wrap'))) {
+    closeAttachMenu()
   }
 
   const contextRoot = contextUsageRootRef.value
   if (isContextDetailsOpen.value && contextRoot && !contextRoot.contains(target)) {
     isContextDetailsOpen.value = false
+  }
+
+  if (isPromptHistorySearchOpen.value && !promptHistorySearchRootRef.value?.contains(target)) {
+    closePromptHistorySearch()
   }
 
   const autocompleteRoot = composerAutocompleteRootRef.value
@@ -2397,6 +2830,7 @@ defineExpose<ThreadComposerExposed>({
 
 onBeforeUnmount(() => {
   removeAttachMenuLayout()
+  resetAttachFileSearch()
   document.removeEventListener('click', onDocumentClick)
   window.removeEventListener('drop', onWindowDragCleanup)
   window.removeEventListener('dragend', onWindowDragCleanup)
@@ -2413,7 +2847,7 @@ watch(
   () => props.activeThreadId,
   (nextThreadId) => {
     cancelDictation()
-    isAttachMenuOpen.value = false
+    closeAttachMenu()
     if (lastActiveThreadId) {
       persistDraftForThread(lastActiveThreadId, getCurrentDraftPayload())
     }
@@ -2428,7 +2862,7 @@ watch(
   { immediate: true },
 )
 
-watch([draft, selectedImages, fileAttachments, selectedSkills], () => {
+watch([draft, selectedImages, fileAttachments, selectedSkills, selectedMentions], () => {
   if (!lastActiveThreadId) return
   persistDraftForThread(lastActiveThreadId, getCurrentDraftPayload())
 }, { deep: true })
@@ -2437,12 +2871,16 @@ watch(draft, () => {
   queueComposerOverflowMeasurement()
 })
 
+watch(attachFileSearchQuery, queueAttachFileSearch)
+watch(promptHistoryQuery, () => { promptHistoryHighlightedIndex.value = 0 })
+
 watch(
   () => props.cwd,
   () => {
     if (isFileMentionOpen.value) {
       void queueFileMentionSearch()
     }
+    if (isAttachFileSearchOpen.value) closeAttachMenu()
   },
 )
 
@@ -2597,6 +3035,26 @@ watch(
   @apply ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border-0 bg-transparent text-zinc-400 transition hover:bg-zinc-200 hover:text-zinc-700 text-xs leading-none p-0;
 }
 
+.thread-composer-chat-chips {
+  @apply mb-2 flex flex-wrap gap-1.5;
+}
+
+.thread-composer-chat-chip {
+  @apply inline-flex max-w-full items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs text-sky-700;
+}
+
+.thread-composer-chat-chip-icon {
+  @apply h-3.5 w-3.5 shrink-0;
+}
+
+.thread-composer-chat-chip-name {
+  @apply min-w-0 max-w-48 truncate;
+}
+
+.thread-composer-chat-chip-remove {
+  @apply ml-0.5 border-0 bg-transparent p-0 text-sm leading-none text-sky-500 hover:text-sky-800;
+}
+
 .thread-composer-skill-chips {
   @apply mb-2 flex flex-wrap gap-1.5;
 }
@@ -2697,6 +3155,35 @@ watch(
 
 .thread-composer-autocomplete-footer {
   @apply border-t border-zinc-100 px-3 py-2 text-[11px] text-zinc-400;
+}
+
+.thread-composer-prompt-history {
+  @apply absolute left-0 right-0 bottom-[calc(100%+8px)] overflow-hidden border p-1;
+  z-index: var(--ui-z-popover);
+  border-radius: var(--ui-radius-card);
+  border-color: var(--mac-border-strong);
+  background: var(--mac-solid);
+  box-shadow: var(--mac-shadow-menu);
+}
+
+.thread-composer-prompt-history-input {
+  @apply w-full rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 outline-none placeholder:text-zinc-500 focus:border-sky-500;
+}
+
+.thread-composer-prompt-history-list {
+  @apply mt-1 max-h-64 overflow-y-auto;
+}
+
+.thread-composer-prompt-history-row {
+  @apply block w-full truncate rounded-lg border-0 bg-transparent px-3 py-2 text-left text-sm text-zinc-800 hover:bg-zinc-100;
+}
+
+.thread-composer-prompt-history-row.is-active {
+  @apply bg-zinc-100;
+}
+
+.thread-composer-prompt-history-empty {
+  @apply px-3 py-3 text-sm text-zinc-500;
 }
 
 .thread-composer-file-mention-row {
@@ -2800,6 +3287,64 @@ watch(
   box-shadow: var(--mac-shadow-menu);
   -webkit-backdrop-filter: blur(var(--ui-blur-float)) saturate(145%);
   backdrop-filter: blur(var(--ui-blur-float)) saturate(145%);
+}
+
+.thread-composer-attach-menu.is-file-search {
+  width: 44rem;
+}
+
+@media (max-width: 900px) {
+  .thread-composer-attach-menu.is-file-search {
+    width: 20rem;
+  }
+}
+
+.thread-composer-attach-search-header {
+  @apply flex items-center gap-1 rounded-lg border border-zinc-200 bg-zinc-50 px-1;
+}
+
+.thread-composer-attach-search-back {
+  @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-md border-0 bg-transparent text-xl text-zinc-600 hover:bg-zinc-200;
+}
+
+.thread-composer-attach-search-input {
+  @apply min-w-0 flex-1 border-0 bg-transparent py-2 pr-2 text-sm text-zinc-900 outline-none placeholder:text-zinc-500;
+}
+
+.thread-composer-attach-search-results {
+  @apply mt-1 max-h-52 overflow-y-auto;
+}
+
+.thread-composer-attach-search-result {
+  @apply flex w-full items-center gap-2 rounded-lg border-0 bg-transparent px-2 py-1.5 text-left text-sm text-zinc-800 hover:bg-zinc-100;
+}
+
+.thread-composer-attach-search-result.is-active {
+  @apply bg-zinc-100;
+}
+
+.thread-composer-attach-search-result-icon {
+  @apply h-4 w-4 shrink-0 text-zinc-500;
+}
+
+.thread-composer-attach-search-chat-icon {
+  @apply h-4 w-4 shrink-0 text-sky-600;
+}
+
+.thread-composer-attach-search-result-text {
+  @apply flex min-w-0 flex-1 items-baseline gap-2;
+}
+
+.thread-composer-attach-search-result-name {
+  @apply max-w-1/2 shrink-0 truncate;
+}
+
+.thread-composer-attach-search-result-dir {
+  @apply min-w-0 flex-1 truncate text-xs text-zinc-500;
+}
+
+.thread-composer-attach-search-status {
+  @apply px-2 py-2 text-xs text-zinc-500;
 }
 
 .thread-composer-attach-item {

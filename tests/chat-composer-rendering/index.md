@@ -13,6 +13,7 @@ Return to the [manual test index](../../tests.md).
 | [第二批原生插话、设置、Goal、队列与权限](native-thread-controls.md) |
 | [原生请求关闭、非阻塞澄清与新运行消息](codex-01534-native-events.md) |
 | [Composer slash-command and dollar-skill autocomplete](composer-slash-command-and-skill-autocomplete.md) |
+| [TUI-style prompt history shortcuts and search](tui-prompt-history-shortcuts-and-search.md) |
 | [Planning clarification summaries persist after answering](planning-clarification-summary-persistence.md) |
 | [Codex thread deep links render as local web thread URLs](codex-thread-deep-links-render-as-local-web-thread-urls.md) |
 | [Bold-wrapped Markdown links render without literal markers](bold-wrapped-markdown-links-render-without-literal-markers.md) |
@@ -21,6 +22,8 @@ Return to the [manual test index](../../tests.md).
 | [Model-specific reasoning and compact composer](model-specific-reasoning-and-compact-composer.md) |
 | [Desktop permissions dropdown opens inside the viewport](desktop-permissions-dropdown-opens-in-viewport.md) |
 | [Composer controls stay editable during responses](composer-controls-stay-editable-during-responses.md) |
+| [Search project files from the attachment menu](search-project-files-from-attachment-menu.md) |
+| [Mention an existing chat from composer search](mention-chat-from-composer-search.md) |
 | [Feature: Markdown file links with backticked filename labels render correctly](markdown-file-links-with-backticked-filename-labels-render-correctly.md) |
 | [Feature: Sandbox approval requests recognize newer Codex payloads](sandbox-approval-requests-recognize-newer-codex-payloads.md) |
 | [Feature: MCP elicitation requests and thread status labels](mcp-elicitation-requests-and-thread-status-labels.md) |
